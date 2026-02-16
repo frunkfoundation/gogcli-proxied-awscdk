@@ -26,7 +26,7 @@ func TestNewTasks(t *testing.T) {
 	}
 	openSecretsStore = func() (secrets.Store, error) {
 		t.Fatalf("openSecretsStore should not be called")
-		return nil, nil
+		panic("unreachable")
 	}
 
 	svc, err := NewTasks(context.Background(), "a@b.com")

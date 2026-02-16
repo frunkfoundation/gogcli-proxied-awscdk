@@ -1,3 +1,4 @@
+//nolint:wsl_v5 // keep signing/canonicalization logic compact and readable.
 package googleapi
 
 import (
@@ -18,12 +19,22 @@ import (
 
 const (
 	envProxyBaseURL = "GOG_PROXY_BASE_URL"
-	envProxyAPIKey  = "GOG_PROXY_API_KEY"
+	envProxyAPIKey  = "GOG_PROXY_API_KEY" //nolint:gosec // env var name, not credential material
 
 	awsServiceExecuteAPI = "execute-api"
 )
 
 var errProxyConfig = errors.New("proxy config error")
+
+var (
+	errMissingAWSCredentials = errors.New("missing AWS credentials (set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN for STS creds)")
+	errNilRequest            = errors.New("nil request")
+	errNilBaseTransport      = errors.New("nil base transport")
+	errMissingRequestURL     = errors.New("missing request url")
+	errMissingAccessKeys     = errors.New("missing access key/secret key")
+	errMissingRegionService  = errors.New("missing region/service")
+	errMissingPayloadHash    = errors.New("missing payload hash")
+)
 
 // ProxyConfigError indicates gogcli is missing required proxy configuration.
 // This is treated as a config error (stable exit code) by the CLI.
@@ -151,7 +162,8 @@ func loadAWSCredentials() (awsCredentials, error) {
 	if creds, ok := loadAWSCredentialsFromSharedCredentialsFile(); ok {
 		return creds, nil
 	}
-	return awsCredentials{}, fmt.Errorf("missing AWS credentials (set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN for STS creds)")
+
+	return awsCredentials{}, errMissingAWSCredentials
 }
 
 func loadAWSCredentialsFromEnv() (awsCredentials, bool) {
@@ -285,10 +297,10 @@ type apiGatewayProxyTransport struct {
 
 func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil {
-		return nil, errors.New("nil request")
+		return nil, errNilRequest
 	}
 	if t.Base == nil {
-		return nil, errors.New("nil base transport")
+		return nil, errNilBaseTransport
 	}
 
 	now := time.Now
@@ -342,7 +354,12 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 	}
 	r.Header.Set("Authorization", authz)
 
-	return t.Base.RoundTrip(r)
+	resp, err := t.Base.RoundTrip(r)
+	if err != nil {
+		return nil, fmt.Errorf("proxy roundtrip: %w", err)
+	}
+
+	return resp, nil
 }
 
 // payloadSHA256Hex returns the SHA256 of the request body without consuming it.
@@ -398,16 +415,16 @@ type sigV4Input struct {
 
 func sigV4Authorization(in sigV4Input) (string, error) {
 	if in.Request == nil || in.Request.URL == nil {
-		return "", errors.New("missing request url")
+		return "", errMissingRequestURL
 	}
 	if strings.TrimSpace(in.AccessKey) == "" || strings.TrimSpace(in.SecretKey) == "" {
-		return "", errors.New("missing access key/secret key")
+		return "", errMissingAccessKeys
 	}
 	if strings.TrimSpace(in.Region) == "" || strings.TrimSpace(in.Service) == "" {
-		return "", errors.New("missing region/service")
+		return "", errMissingRegionService
 	}
 	if strings.TrimSpace(in.PayloadHash) == "" {
-		return "", errors.New("missing payload hash")
+		return "", errMissingPayloadHash
 	}
 
 	amzDate := in.SigningTime.UTC().Format("20060102T150405Z")

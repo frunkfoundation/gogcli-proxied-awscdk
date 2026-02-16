@@ -92,8 +92,8 @@ func optionsForAccount(ctx context.Context, service googleauth.Service, email st
 	return optionsForAccountScopes(ctx, string(service), email, scopes)
 }
 
-func optionsForAccountScopes(ctx context.Context, serviceLabel string, email string, scopes []string) ([]option.ClientOption, error) {
-	slog.Debug("creating client options with custom scopes", "serviceLabel", serviceLabel, "email", email)
+func optionsForAccountScopes(_ context.Context, serviceLabel string, email string, scopes []string) ([]option.ClientOption, error) {
+	slog.Debug("creating client options with custom scopes", "serviceLabel", serviceLabel, "email", email, "scopeCount", len(scopes))
 
 	proxyCfg, err := loadProxyConfig()
 	if err != nil {
@@ -135,6 +135,7 @@ func newBaseTransport() *http.Transport {
 
 	// Clone() deep-copies TLSClientConfig, so no additional clone needed.
 	transport := defaultTransport.Clone()
+
 	transport.DisableCompression = true
 	if transport.TLSClientConfig == nil {
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}

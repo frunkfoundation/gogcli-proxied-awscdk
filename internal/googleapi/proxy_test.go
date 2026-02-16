@@ -1,3 +1,4 @@
+//nolint:wsl_v5 // tests prioritize compact scenario setup over whitespace-style rules.
 package googleapi
 
 import (
