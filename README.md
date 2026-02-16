@@ -69,6 +69,38 @@ Help:
 
 ## Quick Start
 
+### Proxy Mode (API Gateway)
+
+This build proxies all Google API calls through an API Gateway. The CLI sends the requested Google account (`--account` / `GOG_ACCOUNT`) to the proxy, and the proxy injects the correct Google credentials.
+
+Required:
+
+```bash
+export GOG_PROXY_BASE_URL='https://abc123.execute-api.us-east-1.amazonaws.com/prod'
+export GOG_PROXY_API_KEY='...'
+```
+
+SigV4 signing uses your AWS credentials (for example STS credentials issued for a Cognito identity). Provide credentials via environment variables or `~/.aws/credentials`:
+
+```bash
+export AWS_ACCESS_KEY_ID='...'
+export AWS_SECRET_ACCESS_KEY='...'
+export AWS_SESSION_TOKEN='...' # if using STS
+```
+
+If the gateway hostname isn’t `*.execute-api.<region>.amazonaws.com` (custom domains), also set:
+
+```bash
+export AWS_REGION='us-east-1'
+```
+
+Account selection is explicit (no auto-selection):
+
+```bash
+export GOG_ACCOUNT='you@gmail.com'
+gog gmail labels list
+```
+
 ### 1. Get OAuth2 Credentials
 
 Before adding an account, create OAuth2 credentials from Google Cloud Console:
@@ -276,9 +308,6 @@ gog gmail search 'newer_than:7d' --account work
 # Via environment
 export GOG_ACCOUNT=you@gmail.com
 gog gmail search 'newer_than:7d'
-
-# Auto-select (default account or the single stored token)
-gog gmail labels list --account auto
 ```
 
 List configured accounts:
@@ -410,13 +439,16 @@ gog keep get <noteId> --account you@yourdomain.com
 
 ### Environment Variables
 
-- `GOG_ACCOUNT` - Default account email or alias to use (avoids repeating `--account`; otherwise uses keyring default or a single stored token)
+- `GOG_ACCOUNT` - Default account email or alias to use (avoids repeating `--account`; required for API commands if `--account` is not set)
 - `GOG_CLIENT` - OAuth client name (selects stored credentials + token bucket)
 - `GOG_JSON` - Default JSON output
 - `GOG_PLAIN` - Default plain output
 - `GOG_COLOR` - Color mode: `auto` (default), `always`, or `never`
 - `GOG_TIMEZONE` - Default output timezone for Calendar/Gmail (IANA name, `UTC`, or `local`)
 - `GOG_ENABLE_COMMANDS` - Comma-separated allowlist of top-level commands (e.g., `calendar,tasks`)
+- `GOG_PROXY_BASE_URL` - API Gateway base URL for proxying Google API calls (example: `https://abc123.execute-api.us-east-1.amazonaws.com/prod`)
+- `GOG_PROXY_API_KEY` - API Gateway API key (secret; keep in env, not config)
+- `AWS_REGION` / `AWS_DEFAULT_REGION` - Used for SigV4 signing when the region can’t be inferred from the gateway hostname (common with custom domains)
 
 ### Config File (JSON5)
 
@@ -1426,8 +1458,18 @@ Pinned tools (installed into `.tools/`):
 - Format: `make fmt` (goimports + gofumpt)
 - Lint: `make lint` (golangci-lint)
 - Test: `make test`
+- Secrets: `make secrets` (full history) and `make secrets-staged` (staged diff)
+
+Enable local git hooks:
+
+```bash
+lefthook install
+```
+
+`pre-commit` runs secret scanning (`gitleaks`) in addition to format/lint/test checks.
 
 CI runs format checks, tests, and lint on push/PR.
+Secret scanning runs in GitHub Actions on pull requests (PR commit range) and nightly (full history).
 
 ### Integration Tests (Live Google APIs)
 
