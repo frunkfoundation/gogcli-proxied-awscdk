@@ -31,6 +31,46 @@ func TestRequireAccount_UsesEnv(t *testing.T) {
 	}
 }
 
+func TestRequireAccount_UsesConfigDefaultAccount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("GOG_ACCOUNT", "")
+	if err := config.WriteConfig(config.File{
+		DefaultAccount: "config@example.com",
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, err := requireAccount(&RootFlags{})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "config@example.com" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRequireAccount_ConfigBeforeEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("GOG_ACCOUNT", "env@example.com")
+	if err := config.WriteConfig(config.File{
+		DefaultAccount: "config@example.com",
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, err := requireAccount(&RootFlags{})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got != "config@example.com" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestRequireAccount_ResolvesAliasFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

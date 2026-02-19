@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/steipete/gogcli/internal/config"
 )
 
 const (
@@ -71,8 +72,18 @@ type proxyConfig struct {
 }
 
 func loadProxyConfig() (proxyConfig, error) {
-	base := strings.TrimSpace(os.Getenv(envProxyBaseURL))
-	apiKey := strings.TrimSpace(os.Getenv(envProxyAPIKey))
+	cfg, err := config.ReadConfig()
+	if err != nil {
+		return proxyConfig{}, err
+	}
+	base := strings.TrimSpace(cfg.ProxyBaseURL)
+	apiKey := strings.TrimSpace(cfg.ProxyAPIKey)
+	if base == "" {
+		base = strings.TrimSpace(os.Getenv(envProxyBaseURL))
+	}
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv(envProxyAPIKey))
+	}
 
 	var missing []string
 	if base == "" {

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/steipete/gogcli/internal/config"
 )
 
 type captureRT struct {
@@ -75,6 +77,34 @@ func TestLoadProxyConfig_MissingEnv(t *testing.T) {
 	}
 	if len(pce.Missing) != 2 {
 		t.Fatalf("unexpected missing: %#v", pce.Missing)
+	}
+}
+
+func TestLoadProxyConfig_UsesConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv(envProxyBaseURL, "")
+	t.Setenv(envProxyAPIKey, "")
+	if err := config.WriteConfig(config.File{
+		ProxyBaseURL: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
+		ProxyAPIKey:  "cfg-key",
+	}); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, err := loadProxyConfig()
+	if err != nil {
+		t.Fatalf("loadProxyConfig: %v", err)
+	}
+	if got.APIKey != "cfg-key" {
+		t.Fatalf("api key = %q", got.APIKey)
+	}
+	if got.Region != "us-east-1" {
+		t.Fatalf("region = %q", got.Region)
+	}
+	if got.Endpoint != "https://abc123.execute-api.us-east-1.amazonaws.com/prod/" {
+		t.Fatalf("endpoint = %q", got.Endpoint)
 	}
 }
 

@@ -23,6 +23,23 @@ func requireAccount(flags *RootFlags) (string, error) {
 			}
 		}
 	}
+	cfg, err := config.ReadConfig()
+	if err != nil {
+		return "", err
+	}
+	if v := strings.TrimSpace(cfg.DefaultAccount); v != "" {
+		if resolved, ok, err := resolveAccountAlias(v); err != nil {
+			return "", err
+		} else if ok {
+			return resolved, nil
+		}
+		if shouldAutoSelectAccount(v) {
+			v = ""
+		}
+		if v != "" {
+			return v, nil
+		}
+	}
 	if v := strings.TrimSpace(os.Getenv("GOG_ACCOUNT")); v != "" {
 		if resolved, ok, err := resolveAccountAlias(v); err != nil {
 			return "", err
@@ -36,7 +53,7 @@ func requireAccount(flags *RootFlags) (string, error) {
 			return v, nil
 		}
 	}
-	return "", usage("missing --account (or set GOG_ACCOUNT)")
+	return "", usage("missing --account (or set default_account in config.json or GOG_ACCOUNT)")
 }
 
 func resolveAccountAlias(value string) (string, bool, error) {
