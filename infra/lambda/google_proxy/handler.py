@@ -33,11 +33,12 @@ except Exception:  # pragma: no cover - local test fallback
 
 try:
     from google.auth.transport.requests import Request as GoogleAuthRequest
-    from google.oauth2 import credentials as oauth_credentials
-    from google.oauth2 import service_account
 except Exception:  # pragma: no cover - local test fallback
     GoogleAuthRequest = None
-    oauth_credentials = None
+
+try:
+    from google.oauth2 import service_account
+except Exception:  # pragma: no cover - local test fallback
     service_account = None
 
 _SSM = boto3.client("ssm") if boto3 is not None else None
@@ -241,14 +242,13 @@ def _default_scopes() -> List[str]:
 
 
 def _mint_access_token(account_email: str, cfg: Mapping[str, Any]) -> str:
-    if GoogleAuthRequest is None or oauth_credentials is None or service_account is None:
-        raise ProxyError(500, "google auth dependencies unavailable in runtime")
-
     typ = str(cfg.get("type") or "").strip().lower()
     if typ == "":
         raise ProxyError(500, "google credential config missing required field: type")
 
     if typ == "service_account":
+        if GoogleAuthRequest is None or service_account is None:
+            raise ProxyError(500, "google service_account dependencies unavailable in runtime")
         info = cfg.get("service_account") or cfg.get("serviceAccount") or cfg.get("service_account_info") or cfg.get("serviceAccountInfo")
         if not isinstance(info, dict):
             raise ProxyError(500, "service_account config missing service_account object")
@@ -274,6 +274,16 @@ def _mint_access_token(account_email: str, cfg: Mapping[str, Any]) -> str:
         else:
             creds = service_account.Credentials.from_service_account_info(info, scopes=scope_list)
 
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except Exception as e:
+            raise ProxyError(502, "failed to mint Google access token") from e
+
+        token = str(getattr(creds, "token", "") or "").strip()
+        if not token:
+            raise ProxyError(502, "Google access token missing after refresh")
+        return token
+
     elif typ == "oauth_refresh":
         client_id = str(cfg.get("client_id") or "").strip()
         client_secret = str(cfg.get("client_secret") or "").strip()
@@ -285,33 +295,41 @@ def _mint_access_token(account_email: str, cfg: Mapping[str, Any]) -> str:
 
         scopes = cfg.get("scopes")
         if scopes is None:
-            scope_list = None
+            scope_str = ""
         elif isinstance(scopes, list):
-            scope_list = [str(s).strip() for s in scopes if str(s).strip()]
+            scope_str = " ".join(str(s).strip() for s in scopes if str(s).strip())
         else:
             raise ProxyError(500, "oauth_refresh scopes must be a JSON array of strings")
 
-        creds = oauth_credentials.Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri=token_uri,
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=scope_list,
-        )
+        form_data = {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        }
+        if scope_str:
+            form_data["scope"] = scope_str
+
+        try:
+            token_resp = _HTTP.post(token_uri, data=form_data, timeout=20)
+        except Exception as e:
+            raise ProxyError(502, "failed to mint Google access token") from e
+
+        if int(getattr(token_resp, "status_code", 0) or 0) != 200:
+            raise ProxyError(502, "failed to mint Google access token")
+
+        try:
+            token_json = token_resp.json()
+        except Exception as e:
+            raise ProxyError(502, "failed to parse Google token response") from e
+
+        token = str(token_json.get("access_token") or "").strip()
+        if not token:
+            raise ProxyError(502, "Google access token missing after refresh")
+        return token
 
     else:
         raise ProxyError(500, f"unsupported google credential type: {typ}")
-
-    try:
-        creds.refresh(GoogleAuthRequest())
-    except Exception as e:
-        raise ProxyError(502, "failed to mint Google access token") from e
-
-    token = str(getattr(creds, "token", "") or "").strip()
-    if not token:
-        raise ProxyError(502, "Google access token missing after refresh")
-    return token
 
 
 def _resolve_google_host_and_path(proxy_path: str) -> Tuple[str, str]:
