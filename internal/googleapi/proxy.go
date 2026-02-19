@@ -1,9 +1,8 @@
-//nolint:wsl_v5 // keep signing/canonicalization logic compact and readable.
 package googleapi
 
 import (
 	"bytes"
-	"crypto/hmac"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,9 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 )
 
 const (
@@ -27,13 +29,9 @@ const (
 var errProxyConfig = errors.New("proxy config error")
 
 var (
-	errMissingAWSCredentials = errors.New("missing AWS credentials (set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN for STS creds)")
+	errMissingAWSCredentials = errors.New("missing AWS credentials (configure the AWS SDK default credential chain)")
 	errNilRequest            = errors.New("nil request")
 	errNilBaseTransport      = errors.New("nil base transport")
-	errMissingRequestURL     = errors.New("missing request url")
-	errMissingAccessKeys     = errors.New("missing access key/secret key")
-	errMissingRegionService  = errors.New("missing region/service")
-	errMissingPayloadHash    = errors.New("missing payload hash")
 )
 
 // ProxyConfigError indicates gogcli is missing required proxy configuration.
@@ -149,137 +147,25 @@ func inferRegionFromExecuteAPIHost(host string) string {
 	return region
 }
 
-type awsCredentials struct {
-	AccessKeyID     string
-	SecretAccessKey string
-	SessionToken    string
+type credentialProvider interface {
+	Retrieve(context.Context) (aws.Credentials, error)
 }
 
-func loadAWSCredentials() (awsCredentials, error) {
-	if creds, ok := loadAWSCredentialsFromEnv(); ok {
-		return creds, nil
-	}
-	if creds, ok := loadAWSCredentialsFromSharedCredentialsFile(); ok {
-		return creds, nil
-	}
+type signerOptions = v4.SignerOptions
 
-	return awsCredentials{}, errMissingAWSCredentials
+type sigV4HTTPSigner interface {
+	SignHTTP(ctx context.Context, credentials aws.Credentials, r *http.Request, payloadHash string, service string, region string, signingTime time.Time, optFns ...func(*signerOptions)) error
 }
 
-func loadAWSCredentialsFromEnv() (awsCredentials, bool) {
-	akid := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
-	if akid == "" {
-		// Alternative name occasionally used by tooling.
-		akid = strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY"))
-	}
-	secret := strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY"))
-	if secret == "" {
-		secret = strings.TrimSpace(os.Getenv("AWS_SECRET_KEY"))
-	}
-	token := strings.TrimSpace(os.Getenv("AWS_SESSION_TOKEN"))
-	if token == "" {
-		token = strings.TrimSpace(os.Getenv("AWS_SECURITY_TOKEN"))
-	}
-
-	if akid == "" || secret == "" {
-		return awsCredentials{}, false
-	}
-	return awsCredentials{
-		AccessKeyID:     akid,
-		SecretAccessKey: secret,
-		SessionToken:    token,
-	}, true
-}
-
-func loadAWSCredentialsFromSharedCredentialsFile() (awsCredentials, bool) {
-	profile := strings.TrimSpace(os.Getenv("AWS_PROFILE"))
-	if profile == "" {
-		profile = strings.TrimSpace(os.Getenv("AWS_DEFAULT_PROFILE"))
-	}
-	if profile == "" {
-		profile = "default"
-	}
-
-	path := strings.TrimSpace(os.Getenv("AWS_SHARED_CREDENTIALS_FILE"))
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || strings.TrimSpace(home) == "" {
-			return awsCredentials{}, false
-		}
-		path = home + "/.aws/credentials"
-	}
-
-	b, err := os.ReadFile(path) //nolint:gosec // user config path; contains secrets
+func loadAWSCredentialsProvider(ctx context.Context, region string) (credentialProvider, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
-		return awsCredentials{}, false
+		return nil, fmt.Errorf("load aws default config: %w", err)
 	}
-
-	sections := parseINI(string(b))
-	kv, ok := sections[profile]
-	if !ok {
-		return awsCredentials{}, false
+	if cfg.Credentials == nil {
+		return nil, errMissingAWSCredentials
 	}
-
-	akid := strings.TrimSpace(kv["aws_access_key_id"])
-	secret := strings.TrimSpace(kv["aws_secret_access_key"])
-	token := strings.TrimSpace(kv["aws_session_token"])
-
-	if akid == "" || secret == "" {
-		return awsCredentials{}, false
-	}
-	return awsCredentials{
-		AccessKeyID:     akid,
-		SecretAccessKey: secret,
-		SessionToken:    token,
-	}, true
-}
-
-func parseINI(s string) map[string]map[string]string {
-	out := make(map[string]map[string]string)
-	section := ""
-	lines := strings.Split(s, "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		// Comments
-		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		// Section header
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-			if section != "" {
-				if _, ok := out[section]; !ok {
-					out[section] = make(map[string]string)
-				}
-			}
-			continue
-		}
-		if section == "" {
-			continue
-		}
-		// Key/value
-		// Support `k = v` and ignore inline comments (`#` or `;`) when preceded by whitespace.
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		k = strings.ToLower(strings.TrimSpace(k))
-		v = strings.TrimSpace(v)
-		if k == "" {
-			continue
-		}
-		if i := strings.Index(v, " #"); i >= 0 {
-			v = strings.TrimSpace(v[:i])
-		}
-		if i := strings.Index(v, " ;"); i >= 0 {
-			v = strings.TrimSpace(v[:i])
-		}
-		out[section][k] = v
-	}
-	return out
+	return cfg.Credentials, nil
 }
 
 // apiGatewayProxyTransport injects API Gateway auth and account routing headers,
@@ -288,11 +174,13 @@ func parseINI(s string) map[string]map[string]string {
 // Note: we intentionally disable HTTP compression in the base transport so the
 // net/http transport does not add Accept-Encoding after signing.
 type apiGatewayProxyTransport struct {
-	Base    http.RoundTripper
-	Region  string
-	APIKey  string
-	Account string
-	Now     func() time.Time
+	Base                http.RoundTripper
+	Region              string
+	APIKey              string
+	Account             string
+	CredentialsProvider credentialProvider
+	Signer              sigV4HTTPSigner
+	Now                 func() time.Time
 }
 
 func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -322,37 +210,32 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 	r.Header.Set("x-api-key", t.APIKey)
 	r.Header.Set("X-GOG-Account", strings.ToLower(strings.TrimSpace(t.Account)))
 
-	amzTime := now().UTC()
-	r.Header.Set("X-Amz-Date", amzTime.Format("20060102T150405Z"))
-
-	creds, err := loadAWSCredentials()
-	if err != nil {
-		return nil, err
-	}
-	if creds.SessionToken != "" {
-		r.Header.Set("X-Amz-Security-Token", creds.SessionToken)
-	} else {
-		r.Header.Del("X-Amz-Security-Token")
-	}
-
 	payloadHash, err := payloadSHA256Hex(r)
 	if err != nil {
 		return nil, err
 	}
 
-	authz, err := sigV4Authorization(sigV4Input{
-		Request:     r,
-		AccessKey:   creds.AccessKeyID,
-		SecretKey:   creds.SecretAccessKey,
-		Region:      t.Region,
-		Service:     awsServiceExecuteAPI,
-		SigningTime: amzTime,
-		PayloadHash: payloadHash,
-	})
-	if err != nil {
-		return nil, err
+	provider := t.CredentialsProvider
+	if provider == nil {
+		provider, err = loadAWSCredentialsProvider(req.Context(), t.Region)
+		if err != nil {
+			return nil, err
+		}
 	}
-	r.Header.Set("Authorization", authz)
+	creds, err := provider.Retrieve(req.Context())
+	if err != nil {
+		return nil, fmt.Errorf("retrieve aws credentials: %w", err)
+	}
+
+	signer := t.Signer
+	if signer == nil {
+		signer = v4.NewSigner()
+	}
+
+	amzTime := now().UTC()
+	if err := signer.SignHTTP(req.Context(), creds, r, payloadHash, awsServiceExecuteAPI, t.Region, amzTime); err != nil {
+		return nil, fmt.Errorf("sign request: %w", err)
+	}
 
 	resp, err := t.Base.RoundTrip(r)
 	if err != nil {
@@ -401,200 +284,4 @@ func payloadSHA256Hex(req *http.Request) (string, error) {
 	}
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:]), nil
-}
-
-type sigV4Input struct {
-	Request     *http.Request
-	AccessKey   string
-	SecretKey   string
-	Region      string
-	Service     string
-	SigningTime time.Time
-	PayloadHash string
-}
-
-func sigV4Authorization(in sigV4Input) (string, error) {
-	if in.Request == nil || in.Request.URL == nil {
-		return "", errMissingRequestURL
-	}
-	if strings.TrimSpace(in.AccessKey) == "" || strings.TrimSpace(in.SecretKey) == "" {
-		return "", errMissingAccessKeys
-	}
-	if strings.TrimSpace(in.Region) == "" || strings.TrimSpace(in.Service) == "" {
-		return "", errMissingRegionService
-	}
-	if strings.TrimSpace(in.PayloadHash) == "" {
-		return "", errMissingPayloadHash
-	}
-
-	amzDate := in.SigningTime.UTC().Format("20060102T150405Z")
-	dateStamp := in.SigningTime.UTC().Format("20060102")
-
-	canonicalURI := in.Request.URL.EscapedPath()
-	if canonicalURI == "" {
-		canonicalURI = "/"
-	}
-
-	canonicalQuery := canonicalQueryString(in.Request.URL)
-
-	canonicalHeaders, signedHeaders := canonicalHeaders(in.Request)
-
-	canonicalRequest := strings.Join([]string{
-		in.Request.Method,
-		canonicalURI,
-		canonicalQuery,
-		canonicalHeaders,
-		signedHeaders,
-		in.PayloadHash,
-	}, "\n")
-
-	scope := strings.Join([]string{dateStamp, in.Region, in.Service, "aws4_request"}, "/")
-	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256",
-		amzDate,
-		scope,
-		hexSHA256(canonicalRequest),
-	}, "\n")
-
-	signingKey := deriveSigningKey(in.SecretKey, dateStamp, in.Region, in.Service)
-	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
-
-	return fmt.Sprintf(
-		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-		in.AccessKey,
-		scope,
-		signedHeaders,
-		signature,
-	), nil
-}
-
-func canonicalQueryString(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	q := u.Query()
-	if len(q) == 0 {
-		return ""
-	}
-
-	keys := make([]string, 0, len(q))
-	for k := range q {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var parts []string
-	for _, k := range keys {
-		vals := q[k]
-		sort.Strings(vals)
-		ek := awsQueryEscape(k)
-		for _, v := range vals {
-			parts = append(parts, ek+"="+awsQueryEscape(v))
-		}
-	}
-	return strings.Join(parts, "&")
-}
-
-func awsQueryEscape(s string) string {
-	// url.QueryEscape is close but turns space into '+'; AWS expects '%20'.
-	esc := url.QueryEscape(s)
-	esc = strings.ReplaceAll(esc, "+", "%20")
-	esc = strings.ReplaceAll(esc, "*", "%2A")
-	esc = strings.ReplaceAll(esc, "%7E", "~")
-	return esc
-}
-
-func canonicalHeaders(req *http.Request) (string, string) {
-	// SigV4 requires Host and X-Amz-Date at minimum.
-	headers := make(map[string][]string)
-
-	host := ""
-	if req != nil {
-		if strings.TrimSpace(req.Host) != "" {
-			host = strings.TrimSpace(req.Host)
-		} else if req.URL != nil {
-			host = strings.TrimSpace(req.URL.Host)
-		}
-	}
-	if host != "" {
-		headers["host"] = []string{host}
-	}
-
-	if req != nil {
-		for k, vals := range req.Header {
-			lk := strings.ToLower(strings.TrimSpace(k))
-			if lk == "" {
-				continue
-			}
-			// Skip headers that net/http may add after RoundTripper (we disable compression
-			// in the base transport, but keep this as defense-in-depth).
-			if lk == "accept-encoding" {
-				continue
-			}
-			cleaned := make([]string, 0, len(vals))
-			for _, v := range vals {
-				v = strings.TrimSpace(v)
-				if v == "" {
-					continue
-				}
-				// Collapse sequential whitespace.
-				v = strings.Join(strings.Fields(v), " ")
-				cleaned = append(cleaned, v)
-			}
-			if len(cleaned) == 0 {
-				continue
-			}
-			headers[lk] = append(headers[lk], cleaned...)
-		}
-	}
-
-	names := make([]string, 0, len(headers))
-	for k := range headers {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-
-	var b strings.Builder
-	signed := make([]string, 0, len(names))
-	for _, name := range names {
-		vals := headers[name]
-		if len(vals) == 0 {
-			continue
-		}
-		// Per AWS, multiple values are comma-separated.
-		joined := strings.Join(vals, ",")
-		b.WriteString(name)
-		b.WriteByte(':')
-		b.WriteString(joined)
-		b.WriteByte('\n')
-		signed = append(signed, name)
-	}
-
-	return b.String(), strings.Join(signed, ";")
-}
-
-func hexSHA256(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
-func hmacSHA256(key []byte, data string) []byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(data))
-	return mac.Sum(nil)
-}
-
-func deriveSigningKey(secretKey, dateStamp, region, service string) []byte {
-	kDate := hmacSHA256([]byte("AWS4"+secretKey), dateStamp)
-	kRegion := hmac.New(sha256.New, kDate)
-	_, _ = kRegion.Write([]byte(region))
-	kRegionSum := kRegion.Sum(nil)
-
-	kService := hmac.New(sha256.New, kRegionSum)
-	_, _ = kService.Write([]byte(service))
-	kServiceSum := kService.Sum(nil)
-
-	kSigning := hmac.New(sha256.New, kServiceSum)
-	_, _ = kSigning.Write([]byte("aws4_request"))
-	return kSigning.Sum(nil)
 }

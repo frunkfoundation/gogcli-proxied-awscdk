@@ -92,10 +92,14 @@ func optionsForAccount(ctx context.Context, service googleauth.Service, email st
 	return optionsForAccountScopes(ctx, string(service), email, scopes)
 }
 
-func optionsForAccountScopes(_ context.Context, serviceLabel string, email string, scopes []string) ([]option.ClientOption, error) {
+func optionsForAccountScopes(ctx context.Context, serviceLabel string, email string, scopes []string) ([]option.ClientOption, error) {
 	slog.Debug("creating client options with custom scopes", "serviceLabel", serviceLabel, "email", email, "scopeCount", len(scopes))
 
 	proxyCfg, err := loadProxyConfig()
+	if err != nil {
+		return nil, err
+	}
+	credsProvider, err := loadAWSCredentialsProvider(ctx, proxyCfg.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +107,11 @@ func optionsForAccountScopes(_ context.Context, serviceLabel string, email strin
 	baseTransport := newBaseTransport()
 	// Inject proxy auth + SigV4, then wrap with retry logic for 429 and 5xx errors.
 	retryTransport := NewRetryTransport(&apiGatewayProxyTransport{
-		Base:    baseTransport,
-		Region:  proxyCfg.Region,
-		APIKey:  proxyCfg.APIKey,
-		Account: email,
+		Base:                baseTransport,
+		Region:              proxyCfg.Region,
+		APIKey:              proxyCfg.APIKey,
+		Account:             email,
+		CredentialsProvider: credsProvider,
 	})
 	c := &http.Client{
 		Transport: retryTransport,

@@ -4,10 +4,13 @@ package googleapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type captureRT struct {
@@ -22,6 +25,37 @@ func (c *captureRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		Header:     make(http.Header),
 		Request:    r,
 	}, nil
+}
+
+type stubCredsProvider struct {
+	creds aws.Credentials
+	err   error
+}
+
+func (s *stubCredsProvider) Retrieve(context.Context) (aws.Credentials, error) {
+	if s.err != nil {
+		return aws.Credentials{}, s.err
+	}
+	return s.creds, nil
+}
+
+type stubSigner struct {
+	err error
+}
+
+func (s *stubSigner) SignHTTP(_ context.Context, credentials aws.Credentials, r *http.Request, payloadHash string, service string, region string, signingTime time.Time, _ ...func(*signerOptions)) error {
+	if s.err != nil {
+		return s.err
+	}
+	r.Header.Set("Authorization", fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/scope, SignedHeaders=host;x-amz-date, Signature=fake", credentials.AccessKeyID))
+	r.Header.Set("X-Amz-Date", signingTime.UTC().Format("20060102T150405Z"))
+	if credentials.SessionToken != "" {
+		r.Header.Set("X-Amz-Security-Token", credentials.SessionToken)
+	}
+	r.Header.Set("X-Signed-Payload", payloadHash)
+	r.Header.Set("X-Signed-Service", service)
+	r.Header.Set("X-Signed-Region", region)
+	return nil
 }
 
 func TestLoadProxyConfig_MissingEnv(t *testing.T) {
@@ -54,16 +88,14 @@ func TestInferRegionFromExecuteAPIHost(t *testing.T) {
 }
 
 func TestProxyTransport_InjectsHeadersAndSigns(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
-	t.Setenv("AWS_SESSION_TOKEN", "TOKEN")
-
 	base := &captureRT{}
 	tr := &apiGatewayProxyTransport{
-		Base:    base,
-		Region:  "us-east-1",
-		APIKey:  "k",
-		Account: "User@Example.com",
+		Base:                base,
+		Region:              "us-east-1",
+		APIKey:              "k",
+		Account:             "User@Example.com",
+		CredentialsProvider: &stubCredsProvider{creds: aws.Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET", SessionToken: "TOKEN"}},
+		Signer:              &stubSigner{},
 		Now: func() time.Time {
 			return time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
 		},
@@ -97,7 +129,50 @@ func TestProxyTransport_InjectsHeadersAndSigns(t *testing.T) {
 		t.Fatalf("X-Amz-Security-Token=%q", got)
 	}
 	authz := r.Header.Get("Authorization")
-	if authz == "" || !strings.Contains(authz, "AWS4-HMAC-SHA256") || !strings.Contains(authz, "execute-api") {
+	if authz == "" || !strings.Contains(authz, "AWS4-HMAC-SHA256") {
 		t.Fatalf("unexpected Authorization=%q", authz)
+	}
+	if got := r.Header.Get("X-Signed-Region"); got != "us-east-1" {
+		t.Fatalf("X-Signed-Region=%q", got)
+	}
+}
+
+func TestProxyTransport_CredentialProviderError(t *testing.T) {
+	base := &captureRT{}
+	tr := &apiGatewayProxyTransport{
+		Base:                base,
+		Region:              "us-east-1",
+		APIKey:              "k",
+		Account:             "user@example.com",
+		CredentialsProvider: &stubCredsProvider{err: errors.New("no creds")},
+		Signer:              &stubSigner{},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://abc123.execute-api.us-east-1.amazonaws.com/prod/gmail/v1/users/me/labels", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	_, err = tr.RoundTrip(req)
+	if err == nil || !strings.Contains(err.Error(), "no creds") {
+		t.Fatalf("expected provider error, got %v", err)
+	}
+}
+
+func TestProxyTransport_SignerError(t *testing.T) {
+	base := &captureRT{}
+	tr := &apiGatewayProxyTransport{
+		Base:                base,
+		Region:              "us-east-1",
+		APIKey:              "k",
+		Account:             "user@example.com",
+		CredentialsProvider: &stubCredsProvider{creds: aws.Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}},
+		Signer:              &stubSigner{err: errors.New("sign failed")},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://abc123.execute-api.us-east-1.amazonaws.com/prod/gmail/v1/users/me/labels", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	_, err = tr.RoundTrip(req)
+	if err == nil || !strings.Contains(err.Error(), "sign failed") {
+		t.Fatalf("expected signer error, got %v", err)
 	}
 }
