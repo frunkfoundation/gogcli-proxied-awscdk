@@ -62,3 +62,8 @@ cdk.out/
 infra/cdk.out/
 infra/.venv/
 infra/venv/
+
+# Local agent/session docs
+IMPLEMENTATION_PLAN.md
+SKILL.md
+.tmuxinator.yml
