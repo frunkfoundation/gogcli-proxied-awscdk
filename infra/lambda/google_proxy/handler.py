@@ -132,6 +132,25 @@ def _get_header(headers: Mapping[str, Any], name: str) -> str:
     return ""
 
 
+def _assumed_role_session_name(raw: str) -> str:
+    val = str(raw or "").strip()
+    if not val:
+        return ""
+    marker = ":assumed-role/"
+    if marker in val:
+        # ARN form: arn:aws:sts::<acct>:assumed-role/<role-name>/<session-name>
+        tail = val.rsplit("/", 1)
+        if len(tail) == 2 and tail[1].strip():
+            return tail[1].strip()
+    # STS caller form: <role-id>:<session-name>
+    if val.startswith("AROA") and ":" in val:
+        _, session = val.split(":", 1)
+        session = session.strip()
+        if session:
+            return session
+    return ""
+
+
 def _caller_id(event: Mapping[str, Any]) -> str:
     rc = event.get("requestContext") or {}
     ident = (rc.get("identity") or {}) if isinstance(rc, dict) else {}
@@ -141,9 +160,15 @@ def _caller_id(event: Mapping[str, Any]) -> str:
             return cid
         arn = str(ident.get("userArn") or "").strip()
         if arn:
+            session = _assumed_role_session_name(arn)
+            if session:
+                return session
             return arn
         caller = str(ident.get("caller") or "").strip()
         if caller:
+            session = _assumed_role_session_name(caller)
+            if session:
+                return session
             return caller
     return "unknown"
 
