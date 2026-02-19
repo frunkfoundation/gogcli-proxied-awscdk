@@ -150,6 +150,8 @@ Environment:
 - `AWS_REGION` / `AWS_DEFAULT_REGION` (SigV4 signing region when it can’t be inferred from the gateway hostname)
 - `config.json` can also set `keyring_backend` (JSON5; env vars take precedence)
 - `config.json` can also set `default_timezone` (IANA name or `UTC`)
+- `config.json` can also set `default_account` for API command account defaulting
+- `config.json` can also set `proxy_base_url` and `proxy_api_key` for proxy mode
 - `config.json` can also set `account_aliases` for `gog auth alias` (JSON5)
 - `config.json` can also set `account_clients` (email -> client) and `client_domains` (domain -> client)
 

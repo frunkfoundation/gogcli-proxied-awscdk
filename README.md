@@ -71,13 +71,16 @@ Help:
 
 ### Proxy Mode (API Gateway)
 
-This build proxies all Google API calls through an API Gateway. The CLI sends the requested Google account (`--account` / `GOG_ACCOUNT`) to the proxy, and the proxy injects the correct Google credentials.
+This build proxies all Google API calls through an API Gateway. The CLI sends the requested Google account (`--account` or `config.json` `default_account`) to the proxy, and the proxy injects the correct Google credentials.
 
-Required:
+Required in `config.json`:
 
-```bash
-export GOG_PROXY_BASE_URL='https://abc123.execute-api.us-east-1.amazonaws.com/prod'
-export GOG_PROXY_API_KEY='...'
+```json5
+{
+  proxy_base_url: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
+  proxy_api_key: "replace-with-real-api-key",
+  default_account: "you@gmail.com"
+}
 ```
 
 SigV4 signing uses the AWS SDK for Go v2 default credential chain (environment, shared config/credentials files, SSO, role/web identity, metadata providers). One common option is:
@@ -94,11 +97,10 @@ If the gateway hostname isn’t `*.execute-api.<region>.amazonaws.com` (custom d
 export AWS_REGION='us-east-1'
 ```
 
-Account selection is explicit (no auto-selection):
+Account selection is explicit (no auto-selection). You can still override per-call:
 
 ```bash
-export GOG_ACCOUNT='you@gmail.com'
-gog gmail labels list
+gog --account you@gmail.com gmail labels list
 ```
 
 ### 1. Get OAuth2 Credentials
@@ -446,8 +448,8 @@ gog keep get <noteId> --account you@yourdomain.com
 - `GOG_COLOR` - Color mode: `auto` (default), `always`, or `never`
 - `GOG_TIMEZONE` - Default output timezone for Calendar/Gmail (IANA name, `UTC`, or `local`)
 - `GOG_ENABLE_COMMANDS` - Comma-separated allowlist of top-level commands (e.g., `calendar,tasks`)
-- `GOG_PROXY_BASE_URL` - API Gateway base URL for proxying Google API calls (example: `https://abc123.execute-api.us-east-1.amazonaws.com/prod`)
-- `GOG_PROXY_API_KEY` - API Gateway API key (secret; keep in env, not config)
+- `GOG_PROXY_BASE_URL` - API Gateway base URL for proxying Google API calls (legacy fallback; preferred: `config.json` `proxy_base_url`)
+- `GOG_PROXY_API_KEY` - API Gateway API key (legacy fallback; preferred: `config.json` `proxy_api_key`)
 - `AWS_REGION` / `AWS_DEFAULT_REGION` - Used for SigV4 signing when the region can’t be inferred from the gateway hostname (common with custom domains)
 
 ### Config File (JSON5)
@@ -468,6 +470,10 @@ Example (JSON5 supports comments and trailing commas):
   keyring_backend: "file",
   // Default output timezone for Calendar/Gmail (IANA, UTC, or local)
   default_timezone: "UTC",
+  // Proxy settings
+  proxy_base_url: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
+  proxy_api_key: "replace-with-real-api-key",
+  default_account: "you@gmail.com",
   // Optional account aliases
   account_aliases: {
     work: "work@company.com",
