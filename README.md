@@ -80,7 +80,7 @@ export GOG_PROXY_BASE_URL='https://abc123.execute-api.us-east-1.amazonaws.com/pr
 export GOG_PROXY_API_KEY='...'
 ```
 
-SigV4 signing uses your AWS credentials (for example STS credentials issued for a Cognito identity). Provide credentials via environment variables or `~/.aws/credentials`:
+SigV4 signing uses the AWS SDK for Go v2 default credential chain (environment, shared config/credentials files, SSO, role/web identity, metadata providers). One common option is:
 
 ```bash
 export AWS_ACCESS_KEY_ID='...'
