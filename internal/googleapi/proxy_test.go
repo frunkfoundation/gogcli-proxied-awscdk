@@ -86,9 +86,11 @@ func TestLoadProxyConfig_UsesConfigFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
 	t.Setenv(envProxyBaseURL, "")
 	t.Setenv(envProxyAPIKey, "")
+	t.Setenv(envGOGAWSProfile, "from-env")
 	if err := config.WriteConfig(config.File{
 		ProxyBaseURL: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
 		ProxyAPIKey:  "cfg-key",
+		AWSProfile:   "from-config",
 	}); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -105,6 +107,26 @@ func TestLoadProxyConfig_UsesConfigFile(t *testing.T) {
 	}
 	if got.Endpoint != "https://abc123.execute-api.us-east-1.amazonaws.com/prod/" {
 		t.Fatalf("endpoint = %q", got.Endpoint)
+	}
+	if got.AWSProfile != "from-config" {
+		t.Fatalf("aws profile = %q", got.AWSProfile)
+	}
+}
+
+func TestLoadProxyConfig_UsesProfileEnvFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv(envProxyBaseURL, "https://abc123.execute-api.us-east-1.amazonaws.com/prod")
+	t.Setenv(envProxyAPIKey, "env-key")
+	t.Setenv(envGOGAWSProfile, "from-env")
+
+	got, err := loadProxyConfig()
+	if err != nil {
+		t.Fatalf("loadProxyConfig: %v", err)
+	}
+	if got.AWSProfile != "from-env" {
+		t.Fatalf("aws profile = %q", got.AWSProfile)
 	}
 }
 

@@ -15,6 +15,7 @@ type File struct {
 	DefaultAccount  string            `json:"default_account,omitempty"`
 	ProxyBaseURL    string            `json:"proxy_base_url,omitempty"`
 	ProxyAPIKey     string            `json:"proxy_api_key,omitempty"`
+	AWSProfile      string            `json:"aws_profile,omitempty"`
 	AccountAliases  map[string]string `json:"account_aliases,omitempty"`
 	AccountClients  map[string]string `json:"account_clients,omitempty"`
 	ClientDomains   map[string]string `json:"client_domains,omitempty"`

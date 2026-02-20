@@ -23,6 +23,7 @@ import (
 const (
 	envProxyBaseURL = "GOG_PROXY_BASE_URL"
 	envProxyAPIKey  = "GOG_PROXY_API_KEY" //nolint:gosec // env var name, not credential material
+	envGOGAWSProfile = "GOG_AWS_PROFILE"
 
 	awsServiceExecuteAPI = "execute-api"
 )
@@ -66,9 +67,10 @@ func (e *ProxyConfigError) Unwrap() error {
 }
 
 type proxyConfig struct {
-	Endpoint string
-	APIKey   string
-	Region   string
+	Endpoint   string
+	APIKey     string
+	Region     string
+	AWSProfile string
 }
 
 func loadProxyConfig() (proxyConfig, error) {
@@ -78,11 +80,15 @@ func loadProxyConfig() (proxyConfig, error) {
 	}
 	base := strings.TrimSpace(cfg.ProxyBaseURL)
 	apiKey := strings.TrimSpace(cfg.ProxyAPIKey)
+	awsProfile := strings.TrimSpace(cfg.AWSProfile)
 	if base == "" {
 		base = strings.TrimSpace(os.Getenv(envProxyBaseURL))
 	}
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv(envProxyAPIKey))
+	}
+	if awsProfile == "" {
+		awsProfile = strings.TrimSpace(os.Getenv(envGOGAWSProfile))
 	}
 
 	var missing []string
@@ -130,9 +136,10 @@ func loadProxyConfig() (proxyConfig, error) {
 	}
 
 	return proxyConfig{
-		Endpoint: endpoint,
-		APIKey:   apiKey,
-		Region:   region,
+		Endpoint:   endpoint,
+		APIKey:     apiKey,
+		Region:     region,
+		AWSProfile: awsProfile,
 	}, nil
 }
 
@@ -168,8 +175,12 @@ type sigV4HTTPSigner interface {
 	SignHTTP(ctx context.Context, credentials aws.Credentials, r *http.Request, payloadHash string, service string, region string, signingTime time.Time, optFns ...func(*signerOptions)) error
 }
 
-func loadAWSCredentialsProvider(ctx context.Context, region string) (credentialProvider, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+func loadAWSCredentialsProvider(ctx context.Context, region string, profile string) (credentialProvider, error) {
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	if strings.TrimSpace(profile) != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(strings.TrimSpace(profile)))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws default config: %w", err)
 	}
@@ -228,7 +239,7 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 
 	provider := t.CredentialsProvider
 	if provider == nil {
-		provider, err = loadAWSCredentialsProvider(req.Context(), t.Region)
+		provider, err = loadAWSCredentialsProvider(req.Context(), t.Region, "")
 		if err != nil {
 			return nil, err
 		}

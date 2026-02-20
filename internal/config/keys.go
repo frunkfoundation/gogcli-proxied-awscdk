@@ -15,6 +15,7 @@ const (
 	KeyDefaultAccount Key = "default_account"
 	KeyProxyBaseURL   Key = "proxy_base_url"
 	KeyProxyAPIKey    Key = "proxy_api_key"
+	KeyAWSProfile     Key = "aws_profile"
 )
 
 type KeySpec struct {
@@ -31,6 +32,7 @@ var keyOrder = []Key{
 	KeyDefaultAccount,
 	KeyProxyBaseURL,
 	KeyProxyAPIKey,
+	KeyAWSProfile,
 }
 
 var keySpecs = map[Key]KeySpec{
@@ -112,6 +114,22 @@ var keySpecs = map[Key]KeySpec{
 		},
 		Unset: func(cfg *File) {
 			cfg.ProxyAPIKey = ""
+		},
+		EmptyHint: func() string {
+			return "(not set)"
+		},
+	},
+	KeyAWSProfile: {
+		Key: KeyAWSProfile,
+		Get: func(cfg File) string {
+			return cfg.AWSProfile
+		},
+		Set: func(cfg *File, value string) error {
+			cfg.AWSProfile = strings.TrimSpace(value)
+			return nil
+		},
+		Unset: func(cfg *File) {
+			cfg.AWSProfile = ""
 		},
 		EmptyHint: func() string {
 			return "(not set)"

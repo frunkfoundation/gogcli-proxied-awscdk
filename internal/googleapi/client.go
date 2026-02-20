@@ -99,7 +99,7 @@ func optionsForAccountScopes(ctx context.Context, serviceLabel string, email str
 	if err != nil {
 		return nil, err
 	}
-	credsProvider, err := loadAWSCredentialsProvider(ctx, proxyCfg.Region)
+	credsProvider, err := loadAWSCredentialsProvider(ctx, proxyCfg.Region, proxyCfg.AWSProfile)
 	if err != nil {
 		return nil, err
 	}

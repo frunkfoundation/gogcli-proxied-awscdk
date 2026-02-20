@@ -79,11 +79,13 @@ Required in `config.json`:
 {
   proxy_base_url: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
   proxy_api_key: "replace-with-real-api-key",
+  // Optional: explicit AWS shared config profile for SigV4 credentials.
+  aws_profile: "frunkfound-jay-admin-sandbox",
   default_account: "you@gmail.com"
 }
 ```
 
-SigV4 signing uses the AWS SDK for Go v2 default credential chain (environment, shared config/credentials files, SSO, role/web identity, metadata providers). One common option is:
+SigV4 signing uses the AWS SDK for Go v2 default credential chain (environment, shared config/credentials files, SSO, role/web identity, metadata providers). If `aws_profile` (or `GOG_AWS_PROFILE`) is set, that shared profile is used explicitly. One common option is:
 
 ```bash
 export AWS_ACCESS_KEY_ID='...'
@@ -450,6 +452,7 @@ gog keep get <noteId> --account you@yourdomain.com
 - `GOG_ENABLE_COMMANDS` - Comma-separated allowlist of top-level commands (e.g., `calendar,tasks`)
 - `GOG_PROXY_BASE_URL` - API Gateway base URL for proxying Google API calls (legacy fallback; preferred: `config.json` `proxy_base_url`)
 - `GOG_PROXY_API_KEY` - API Gateway API key (legacy fallback; preferred: `config.json` `proxy_api_key`)
+- `GOG_AWS_PROFILE` - AWS shared profile name for SigV4 credentials (legacy fallback; preferred: `config.json` `aws_profile`)
 - `AWS_REGION` / `AWS_DEFAULT_REGION` - Used for SigV4 signing when the region can’t be inferred from the gateway hostname (common with custom domains)
 
 ### Config File (JSON5)
@@ -473,6 +476,7 @@ Example (JSON5 supports comments and trailing commas):
   // Proxy settings
   proxy_base_url: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
   proxy_api_key: "replace-with-real-api-key",
+  aws_profile: "frunkfound-jay-admin-sandbox",
   default_account: "you@gmail.com",
   // Optional account aliases
   account_aliases: {

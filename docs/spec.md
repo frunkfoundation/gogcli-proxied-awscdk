@@ -146,12 +146,14 @@ Environment:
 - `GOG_ENABLE_COMMANDS=calendar,tasks` (optional allowlist of top-level commands)
 - `GOG_PROXY_BASE_URL=https://.../prod` (API Gateway base URL for proxying Google API calls; service paths are appended, e.g. `/gmail/v1/...`)
 - `GOG_PROXY_API_KEY=...` (API Gateway API key; secret)
+- `GOG_AWS_PROFILE=...` (optional AWS shared profile name used explicitly for SigV4 credential loading)
 - AWS credentials for SigV4 are resolved via the AWS SDK for Go v2 default credential chain (env/shared config+credentials/SSO/metadata/web identity)
 - `AWS_REGION` / `AWS_DEFAULT_REGION` (SigV4 signing region when it can’t be inferred from the gateway hostname)
 - `config.json` can also set `keyring_backend` (JSON5; env vars take precedence)
 - `config.json` can also set `default_timezone` (IANA name or `UTC`)
 - `config.json` can also set `default_account` for API command account defaulting
 - `config.json` can also set `proxy_base_url` and `proxy_api_key` for proxy mode
+- `config.json` can also set `aws_profile` to force a specific AWS shared profile for SigV4 credentials
 - `config.json` can also set `account_aliases` for `gog auth alias` (JSON5)
 - `config.json` can also set `account_clients` (email -> client) and `client_domains` (domain -> client)
 

@@ -89,7 +89,8 @@ func TestReadConfig_ProxyFields(t *testing.T) {
 	data := `{
 	  proxy_base_url: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
 	  proxy_api_key: "key-from-config",
-	  default_account: "user@example.com"
+	  default_account: "user@example.com",
+	  aws_profile: "sandbox"
 	}`
 
 	if err = os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -100,7 +101,7 @@ func TestReadConfig_ProxyFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConfig: %v", err)
 	}
-	if cfg.ProxyBaseURL == "" || cfg.ProxyAPIKey == "" || cfg.DefaultAccount == "" {
+	if cfg.ProxyBaseURL == "" || cfg.ProxyAPIKey == "" || cfg.DefaultAccount == "" || cfg.AWSProfile == "" {
 		t.Fatalf("missing proxy fields: %#v", cfg)
 	}
 }
