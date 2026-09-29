@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Proxy: add an owner-only remote Gmail setup guide with exact Web-client callback validation, a persisted mailbox checklist, resumable consent, factual signed-proxy verification, and retries that retain saved Google authorization.
+
 - Fork: integrate upstream v0.42.0 while retaining mandatory AWS proxy routing for generated and raw Google API clients.
 - Gmail: send, raw send, reply, forward, draft send, and generic Discovery API send calls make one attempt so an ambiguous server error cannot trigger an automatic duplicate send.
 - Proxy: cache per-account Google tokens until near expiry, invalidate on credential changes, enforce a 4 MiB request-body cap and the complete 6 MiB serialized Lambda response limit, and close upstream responses on errors.

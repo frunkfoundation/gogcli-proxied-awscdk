@@ -1,0 +1,21 @@
+{
+  "service": "https://auth.k-rae.com/",
+  "stage": "prd",
+  "application": "gogcli-proxy-prd",
+  "provider_id": 29,
+  "owner_group": "68a4f2a7-bd9a-4da2-a7b9-c671f2cdd913",
+  "owner_username": "jay.jakosky",
+  "client_id": "krae-gogcli-proxy-prd-web",
+  "client_type": "confidential",
+  "scopes": [
+    "openid",
+    "profile",
+    "email"
+  ],
+  "issuer": "https://auth.k-rae.com/application/o/gogcli-proxy-prd/",
+  "callback": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/auth/callback",
+  "secret_catalog": "project-gogcli-proxy-prd-owner-oidc",
+  "runtime_secret_parameter": "/gogcli-proxy/onboarding/oidc-client",
+  "verification": "discovery, JWKS, exact redirect and owner group passed",
+  "interactive_verification": "Owner sign-in and issued claims require the owner browser session"
+}

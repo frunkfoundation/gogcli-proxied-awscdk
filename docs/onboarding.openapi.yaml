@@ -1,0 +1,213 @@
+openapi: 3.1.0
+info:
+  title: Owner Gmail onboarding
+  version: 1.0.0
+  description: |
+    API lives beside the existing signed Gmail proxy. Owner authentication uses
+    a confidential Authentik OIDC client and a 12-hour opaque server-side session.
+    Google consent has separate session-bound state, PKCE and nonce validation.
+    All mutation requests require the exact public Origin and X-CSRF-Token from
+    GET setup. Secrets and OAuth tokens never appear in API responses.
+servers:
+  - url: /prd/onboarding
+security:
+  - OwnerSession: []
+paths:
+  /auth/login:
+    get:
+      security: []
+      summary: Start owner sign-in; destination is always the configured setup page
+      responses:
+        '303': {description: Redirect to the configured Authentik provider}
+        default: {$ref: '#/components/responses/Problem'}
+  /auth/callback:
+    get:
+      security: []
+      summary: Consume browser-bound login state and verify the owner ID token
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string}}
+        - {name: code, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+      responses:
+        '303': {description: Secure HttpOnly SameSite=Lax owner cookie and fixed setup redirect}
+        default: {$ref: '#/components/responses/Problem'}
+  /oauth/google/callback:
+    get:
+      summary: Consume one session-bound Google authorization attempt
+      description: |
+        Exchange is never repeated after an ambiguous result. Owner session and
+        Google attempt session must match; expired/replayed attempts are rejected.
+        Candidate identity, nonce, scopes and Gmail reads pass before promotion.
+        Expired owner sessions redirect to a fixed recovery page without consuming
+        the attempt or exchanging the code. Sign in and start fresh consent.
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string}}
+        - {name: code, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+      responses:
+        '303': {description: Redirect to setup with a non-secret operation ID}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/setup:
+    get:
+      summary: Read persisted project, mailbox checklist and operation progress
+      responses:
+        '200':
+          description: Owner setup including per-session CSRF token
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Setup'}
+        default: {$ref: '#/components/responses/Problem'}
+    put:
+      summary: Persist Google project, publishing confirmation and mailbox checklist
+      parameters: &mutationParameters
+        - {$ref: '#/components/parameters/Origin'}
+        - {$ref: '#/components/parameters/CSRF'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                projectId: {type: string}
+                publishingConfirmed: {type: boolean}
+                emails: {type: array, items: {type: string, description: Mailbox email or empty checklist slot}}
+      responses:
+        '200': {description: Saved non-secret setup metadata}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/oauth-client:
+    put:
+      summary: Validate and save a Google Web application client in remote SecureString
+      parameters: *mutationParameters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [web]
+              properties:
+                web:
+                  type: object
+                  required: [client_id, client_secret, redirect_uris]
+                  properties:
+                    client_id: {type: string}
+                    client_secret: {type: string, writeOnly: true}
+                    project_id: {type: string}
+                    redirect_uris: {type: array, items: {type: string, format: uri}}
+      responses:
+        '200': {description: Saved client metadata; client_secret is never returned}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/enrollments:
+    post:
+      summary: Accept or replay one durable mailbox enrollment command
+      parameters:
+        - {$ref: '#/components/parameters/Origin'}
+        - {$ref: '#/components/parameters/CSRF'}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: {email: {type: string, format: email}}
+      responses:
+        '202': {$ref: '#/components/responses/Accepted'}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/operations/{operationId}:
+    parameters: &operationParameters
+      - {$ref: '#/components/parameters/OperationId'}
+    get:
+      summary: Read current owner-visible operation state
+      responses:
+        '200':
+          description: Persisted operation and actionable failure details
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Operation'}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/operations/{operationId}/attempts:
+    parameters: *operationParameters
+    post:
+      summary: Start fresh consent after expiry, cancellation or interrupted exchange
+      parameters: *mutationParameters
+      responses:
+        '202': {$ref: '#/components/responses/Accepted'}
+        default: {$ref: '#/components/responses/Problem'}
+  /v1/operations/{operationId}/verifications:
+    parameters: *operationParameters
+    post:
+      summary: Retry saved authorization verification without repeating consent
+      parameters: *mutationParameters
+      responses:
+        '202': {$ref: '#/components/responses/Accepted'}
+        default: {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    OwnerSession: {type: apiKey, in: cookie, name: __Host-gog-owner}
+  parameters:
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema: {type: string, format: uri}
+      description: Must equal the canonical setup URL origin
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: {type: string}
+      description: Must match csrfToken returned for this owner session
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9_-]+$'}
+  responses:
+    Accepted:
+      description: Durable accepted operation; poll the operation URL to resume
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Operation'}
+    Problem:
+      description: RFC 9457 problem; no secret or upstream response-body details
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            required: [type, title, status, detail]
+            properties:
+              type: {type: string, format: uri}
+              title: {type: string}
+              status: {type: integer}
+              detail: {type: string}
+              loginUrl: {type: string, format: uri, description: Fixed sign-in URL on 401}
+  schemas:
+    Setup:
+      type: object
+      properties:
+        csrfToken: {type: string}
+        callbackUrl: {type: string, format: uri}
+        configured: {type: boolean}
+        projectId: {type: string}
+        publishingConfirmed: {type: boolean}
+        emails: {type: array, items: {type: string, description: Mailbox email or empty checklist slot}}
+        operations: {type: array, items: {$ref: '#/components/schemas/Operation'}}
+        proxyUrl: {type: string, format: uri}
+    Operation:
+      type: object
+      required: [id, email, status, phase]
+      properties:
+        id: {type: string}
+        email: {type: string, format: email}
+        status: {type: string, enum: [accepted, running, succeeded, failed]}
+        phase:
+          type: string
+          enum: [authorizing, exchanging, validating, pending_promotion, verifying, ready, verification_failed, failed]
+        authorizationUrl: {type: string, format: uri, description: Only returned when starting a consent attempt}
+        error: {type: string}

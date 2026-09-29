@@ -58,6 +58,8 @@ This fork routes managed account Google API calls through an AWS service that ho
 
 Select an account explicitly with `--account` or `default_account`. Requests use AWS SigV4 plus the API usage-plan key; Google credentials stay on the server. For custom gateway domains, set `AWS_REGION=us-east-2`. See [proxy operation and account setup](infra/README.md).
 
+For managed Gmail accounts, use the deployed owner-only `/prd/onboarding/` page. It guides Google Console setup, validates a Web application client and its exact hosted callback, saves the mailbox checklist remotely, and verifies each connection through real signed proxy reads. See [remote Gmail onboarding and first CLI read](docs/account-onboarding.md). Google credentials stay on the server; local OAuth setup below does not enroll a managed mailbox.
+
 Upstream direct-token and ADC modes are unsupported for managed account API calls in this fork. Maps/Places and public YouTube API-key modes retain their separate Google Cloud project credentials, as do Pub/Sub subscribers. Local OAuth commands remain available, but they do not register credentials with the proxy. The proxy limits transmitted request bodies to 4 MiB, including MIME/base64/JSON encoding. Run `just proxy-test` for the offline Lambda contract checks.
 
 ## Quick start

@@ -9,7 +9,7 @@ from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
-from aws_cdk.aws_lambda_python_alpha import PythonFunction
+from aws_cdk.aws_lambda_python_alpha import BundlingOptions, PythonFunction
 from constructs import Construct
 
 
@@ -19,6 +19,9 @@ class GoogleProxyApiProps:
     ssm_prefix: str = "/gogcli-proxy"
     lambda_timeout_seconds: int = 30
     lambda_memory_mb: int = 512
+    role_prefix: str = "jdev-gogcli-proxy-prd"
+    permissions_boundary_arn: str = ""
+    ssm_key_arn: str = ""
 
 
 class GoogleProxyApi(Construct):
@@ -34,13 +37,31 @@ class GoogleProxyApi(Construct):
         if not lambda_entry.exists():
             raise ValueError(f"lambda entry not found: {lambda_entry}")
 
+        boundary = iam.ManagedPolicy.from_managed_policy_arn(
+            self, "RoleBoundary", props.permissions_boundary_arn
+        )
+        proxy_role = iam.Role(
+            self, "ProxyRole", role_name=f"{props.role_prefix}-proxy",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            permissions_boundary=boundary,
+        )
+        proxy_logs = logs.LogGroup(
+            self, "ProxyLogs", log_group_name=f"/aws/lambda/{props.role_prefix}-proxy",
+            retention=logs.RetentionDays.ONE_MONTH, removal_policy=RemovalPolicy.RETAIN,
+        )
+        proxy_logs.grant_write(proxy_role)
+
         proxy_fn = PythonFunction(
             self,
             "GoogleProxyHandler",
             entry=str(lambda_entry),
+            bundling=BundlingOptions(asset_excludes=["__pycache__", "test_*.py"]),
             index="handler.py",
             handler="handler",
             runtime=lambda_.Runtime.PYTHON_3_11,
+            function_name=f"{props.role_prefix}-proxy",
+            role=proxy_role,
+            log_group=proxy_logs,
             timeout=Duration.seconds(props.lambda_timeout_seconds),
             memory_size=props.lambda_memory_mb,
             environment={
@@ -86,6 +107,11 @@ class GoogleProxyApi(Construct):
             },
         )
 
+        proxy_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["kms:Decrypt"], resources=[props.ssm_key_arn],
+            conditions={"StringEquals": {"kms:ViaService": f"ssm.{Stack.of(self).region}.amazonaws.com"}},
+        ))
+
         # SSM reads (allowlist + Google credentials). Narrow this down by prefix.
         prefix = props.ssm_prefix.rstrip("/")
         stack = Stack.of(self)
@@ -120,6 +146,7 @@ class GoogleProxyApi(Construct):
             self,
             "GoogleProxyApi",
             rest_api_name="gogcli-google-proxy",
+            cloud_watch_role=False,
             deploy_options=apigw.StageOptions(
                 stage_name=props.stage_name,
                 metrics_enabled=True,
@@ -142,6 +169,21 @@ class GoogleProxyApi(Construct):
             binary_media_types=["*/*"],
             endpoint_types=[apigw.EndpointType.REGIONAL],
         )
+
+        gateway_logs_role = iam.Role(
+            self, "GatewayLogsRole", role_name=f"{props.role_prefix}-apigw-logs",
+            assumed_by=iam.ServicePrincipal("apigateway.amazonaws.com"),
+            permissions_boundary=boundary,
+        )
+        # API Gateway validates its documented push-to-logs permissions at account setup.
+        gateway_logs_role.add_to_policy(iam.PolicyStatement(
+            actions=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:DescribeLogGroups",
+                     "logs:DescribeLogStreams", "logs:PutLogEvents", "logs:GetLogEvents", "logs:FilterLogEvents"],
+            resources=["*"],
+        ))
+        gateway_account = apigw.CfnAccount(self, "GatewayAccount", cloud_watch_role_arn=gateway_logs_role.role_arn)
+        gateway_account.node.add_dependency(gateway_logs_role, gateway_logs_role.node.find_child("DefaultPolicy"))
+        api.deployment_stage.node.add_dependency(gateway_account)
 
         integration = apigw.LambdaIntegration(proxy_fn, proxy=True)
 
@@ -185,6 +227,7 @@ class GoogleProxyApiStack(Stack):
         *,
         stage_name: str,
         ssm_prefix: str,
+        binding: dict,
         env: Optional[cdk.Environment] = None,
         **kwargs,
     ) -> None:
@@ -193,8 +236,15 @@ class GoogleProxyApiStack(Stack):
         api = GoogleProxyApi(
             self,
             "Proxy",
-            props=GoogleProxyApiProps(stage_name=stage_name, ssm_prefix=ssm_prefix),
+            props=GoogleProxyApiProps(stage_name=stage_name, ssm_prefix=ssm_prefix,
+                                      role_prefix=binding["role_prefix"],
+                                      permissions_boundary_arn=binding["permissions_boundary_arn"],
+                                      ssm_key_arn=binding["ssm_key_arn"]),
         )
+
+        from .onboarding_resources import GoogleOnboarding
+        GoogleOnboarding(self, "Onboarding", proxy=api, binding=binding)
 
         CfnOutput(self, "ProxyBaseUrl", value=api.api.url)
         CfnOutput(self, "ApiKeyId", value=api.api_key.key_id)
+        CfnOutput(self, "ProxyInvokeArn", value=api.api.arn_for_execute_api("*", "/gmail/*", stage_name))

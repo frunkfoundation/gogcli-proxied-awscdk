@@ -1,11 +1,21 @@
 # gogcli-proxy Infra (CDK)
 
-This folder contains a small Python AWS CDK app that deploys:
+This Python AWS CDK app deploys the `gogcli-prd` environment into K-Rae account
+`968138089939`, region `us-east-2`, with API Gateway stage `prd`:
 
-- 1 Lambda: Google API proxy (injects Google credentials based on `X-GOG-Account`)
-- 1 API Gateway REST API: `ANY /{proxy+}` to the Lambda
-  - Authorization: IAM (SigV4)
-  - API key required (usage plan)
+- Two Python Lambdas: the Google API proxy and the owner-onboarding handler. The
+  latter also dispatches DynamoDB stream events and runs delayed verification.
+- One API Gateway REST API: managed Google routes require IAM SigV4 and a
+  usage-plan API key; `/prd/onboarding/` uses its own owner session through the
+  existing `auth.k-rae.com` Authentik service.
+- A retained DynamoDB metadata/operation table with a stream and TTL, plus an
+  encrypted SQS verification queue and dead-letter queue. Closing the setup page
+  does not interrupt saved account operations.
+- SSM SecureString storage for Google client secrets, refresh tokens, and owner
+  OIDC credentials using the existing AWS-managed SSM key. DynamoDB and queue
+  messages contain references and operation metadata, not Google secrets.
+- Explicit bounded `jdev-gogcli-proxy-prd-*` application roles, caller policies,
+  and CloudWatch alarms for worker errors, stream age, and dead-letter backlog.
 
 The gogcli client is already wired to:
 
@@ -18,34 +28,95 @@ Managed account API requests, including Gmail history reads during watch process
 
 ## Deploy
 
-From `infra/`:
+The source is this repository; the target is
+[`env/gogcli-prd/binding.json`](../env/gogcli-prd/binding.json). Deployment and the
+first CLI caller use the Developer profile `krae-jdev-dev-prd`. The application's
+roles use the existing `JayDeveloperCreatedRoleBoundary`; canonical JDev owns
+that boundary and the Developer identity's scoped `execute-api:Invoke` grant.
+This CDK app does not modify those protected roles or redeploy Authentik.
+
+From the repository root, prepare the project-local Python environment:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv venv infra/.venv
+uv pip install --python infra/.venv/bin/python -r infra/requirements.txt
+export AWS_REGION=us-east-2
 
-cdk bootstrap
-cdk deploy
+aws --profile krae-jdev-dev-prd --region us-east-2 sts get-caller-identity
+cdk synth GogcliGoogleProxyApi \
+  --app 'infra/.venv/bin/python infra/app.py' \
+  --context environment=gogcli-prd --profile krae-jdev-dev-prd
+cdk deploy GogcliGoogleProxyApi \
+  --app 'infra/.venv/bin/python infra/app.py' \
+  --context environment=gogcli-prd --profile krae-jdev-dev-prd \
+  --outputs-file env/gogcli-prd/access.json
 ```
 
-Outputs include:
+CDK bundles the Python runtime and the onboarding HTML, JavaScript, and CSS;
+Docker must be available for packaging. The app uses
+`CliCredentialsStackSynthesizer`, so it deploys with this explicit Developer
+identity and uses the existing CDK bootstrap asset bucket without assuming
+bootstrap roles.
 
-- `ProxyBaseUrl`: set this as `GOG_PROXY_BASE_URL` in the client
-- `ApiKeyId`: use AWS CLI to fetch the API key value
+The generated CDK outputs in `env/gogcli-prd/access.json` are grouped under
+`GogcliGoogleProxyApi` and contain these non-secret access facts:
 
-Fetch API key value:
+| Output | Use |
+| --- | --- |
+| `ProxyBaseUrl` | CLI proxy base URL, ending in `/prd/` |
+| `ApiKeyId` | Identifier for the usage-plan key; not its secret value |
+| `ProxyInvokeArn` | Scope for the canonical JDev Gmail invoke binding |
+| `SetupUrl` | Published HTTPS owner setup page, ending in `/prd/onboarding/` |
+| `GoogleCallbackUrl` | Exact redirect URI for the Google Web application client |
+| `OwnerCallbackUrl` | Exact Authentik redirect URI |
+| `OnboardingTable` | Persisted checklist and operation metadata table |
+| `OnboardingRoleArn` | Application role used by signed verification reads |
+
+Apply the API-specific Gmail invoke scope through the canonical JDev deployment
+runner to both the Developer identity and created-role boundary. Keep the grant
+limited to this API's `prd` Gmail routes; account enrollment adds explicit email
+allowlist entries for the CLI and verifier.
+
+## Configure owner login and connect Gmail
+
+After deploying and generating `access.json`, configure this app on the existing
+Authentik service from the repository root:
 
 ```bash
-aws apigateway get-api-key --api-key <ApiKeyId> --include-value
+uv run --with requests --with boto3 python scripts/configure_owner_login.py
 ```
 
-Client env:
+The script reads the concrete binding and CDK outputs, creates or updates the
+app-specific confidential provider/application, restricts its owner group to
+Jay's `jay.jakosky` account, and reuses the shared authorization/invalidation
+flows and signing key. It registers `OwnerCallbackUrl` exactly. Authentik API
+access comes from the installed credential catalog; the client credentials are
+saved back to that catalog and SSM SecureString without being printed. Its final
+read-only checks verify provider discovery, JWKS, the exact callback, and owner
+membership.
+
+Open `SetupUrl` and follow the [remote Gmail account guide](../docs/account-onboarding.md).
+Create a Google **Web application** client with the displayed `GoogleCallbackUrl`,
+publish the consent screen before connecting accounts, and upload the downloaded
+JSON through the owner page. Each account completes Google consent separately.
+Saved authorization is promoted only after candidate refresh and Gmail reads
+pass. The worker then waits at least 65 seconds before checking profile and a
+one-message ID-only listing through the normal signed proxy; an empty mailbox
+passes. Failed verification retains authorization for a retry without consent.
+
+For the first CLI caller, fetch the usage-plan key using `ApiKeyId` from the
+generated access record:
 
 ```bash
-export GOG_PROXY_BASE_URL='https://abc123.execute-api.us-east-1.amazonaws.com/prod/'
-export GOG_PROXY_API_KEY='...value from get-api-key...'
+aws --profile krae-jdev-dev-prd --region us-east-2 apigateway get-api-key \
+  --api-key '<ApiKeyId>' --include-value --query value --output text
 ```
+
+Configure `proxy_base_url` from `ProxyBaseUrl`, `proxy_api_key` from the returned
+value, `aws_profile` as `krae-jdev-dev-prd`, and a verified `default_account` in the
+CLI's `config.json`. Run `bin/gog config path` to locate it. Google credentials
+stay on the server; the page's final section and the account guide provide the
+first read-only CLI check.
 
 ## SSM Parameters
 
@@ -214,7 +285,7 @@ Token minting and forwarding share a request budget capped at 27 seconds, or two
 Run the offline Lambda contract and policy checks with the bundled runtime dependencies:
 
 ```bash
-uv run --python 3.11 --with-requirements infra/lambda/google_proxy/requirements.txt python -m unittest discover -s infra/lambda/google_proxy -v
+uv run --python 3.11 --with boto3 --with-requirements infra/lambda/google_proxy/requirements.txt python -m unittest discover -s infra/lambda/google_proxy -v
 ```
 
 Maps/Places and public YouTube API-key modes also retain upstream project credentials and do not consume managed-account Google OAuth tokens. These ancillary API-key requests go directly to their provider; account-authenticated Google API requests use the proxy.

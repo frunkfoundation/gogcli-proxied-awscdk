@@ -1,0 +1,13 @@
+{
+  "GogcliGoogleProxyApi": {
+    "OnboardingTable": "GogcliGoogleProxyApi-OnboardingStateD56C56F5-JWRAJZIX0MLB",
+    "OwnerCallbackUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/auth/callback",
+    "GoogleCallbackUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/oauth/google/callback",
+    "ApiKeyId": "lreck6pz20",
+    "ProxyGoogleProxyApiEndpointBC1A4A58": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
+    "ProxyBaseUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
+    "SetupUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/",
+    "OnboardingRoleArn": "arn:aws:iam::968138089939:role/jdev-gogcli-proxy-prd-onboarding",
+    "ProxyInvokeArn": "arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/gmail/*"
+  }
+}

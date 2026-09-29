@@ -1,0 +1,150 @@
+"""Dedicated owner UI/API Lambda. Existing signed Gmail proxy stays separate."""
+import base64
+import json
+import os
+import re
+from decimal import Decimal
+from functools import lru_cache
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit
+
+from onboarding_auth import AuthError, OwnerAuth
+
+
+@lru_cache(maxsize=1)
+def get_auth():
+    return OwnerAuth()
+
+
+@lru_cache(maxsize=1)
+def get_service():
+    from onboarding_operations import build_service
+    return build_service()
+
+
+def base_url():
+    return os.environ['ONBOARDING_BASE_URL'].rstrip('/') + '/'
+
+
+def response(status, value, content_type='application/json', extra=None):
+    headers = {'Content-Type': content_type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+               'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"}
+    headers.update(extra or {})
+    body = json.dumps(value, default=lambda item: int(item) if isinstance(item, Decimal) else str(item)) if content_type.endswith('json') else value
+    return {'statusCode': status, 'headers': headers, 'body': body}
+
+
+def problem(error):
+    value = {'type': 'urn:gogcli-proxy:onboarding:' + error.code, 'title': error.code.replace('_', ' '),
+             'status': error.status, 'detail': error.detail}
+    if error.status == 401:
+        value['loginUrl'] = base_url() + 'auth/login'
+    return response(error.status, value, 'application/problem+json')
+
+
+def json_body(event):
+    raw = event.get('body') or ''
+    if len(raw) > 90000:
+        raise AuthError(413, 'body_too_large', 'Upload JSON smaller than 64 KiB.')
+    try:
+        if event.get('isBase64Encoded'):
+            raw = base64.b64decode(raw, validate=True).decode('utf-8')
+        if len(raw.encode('utf-8')) > 65536:
+            raise AuthError(413, 'body_too_large', 'Upload JSON smaller than 64 KiB.')
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise AuthError(400, 'invalid_json', 'Provide a JSON object.') from None
+    if not isinstance(value, dict):
+        raise AuthError(400, 'invalid_json', 'Provide a JSON object.')
+    return value
+
+
+def redirect(location, set_cookie=None):
+    return response(303, '', 'text/plain', {'Location': location, **({'Set-Cookie': set_cookie} if set_cookie else {})})
+
+
+def handler(event, context):
+    if event.get('Records'):
+        from onboarding_worker import handler as worker
+        return worker(event, context)
+    try:
+        return dispatch(event)
+    except AuthError as error:
+        return problem(error)
+    except Exception as error:
+        # Workflow exceptions expose safe public details; upstream response bodies never do.
+        if all(hasattr(error, name) for name in ('status', 'code', 'detail')):
+            return problem(error)
+        print(json.dumps({'event': 'onboarding_request_failed', 'error_type': type(error).__name__}))
+        return problem(AuthError(500, 'internal_error', 'The request could not be completed. Reload to check its status.'))
+
+
+def dispatch(event):
+    method = event.get('httpMethod', event.get('requestContext', {}).get('http', {}).get('method', 'GET'))
+    path = event.get('path', event.get('rawPath', ''))
+    prefix = urlsplit(base_url()).path.rstrip('/')
+    # REST API events may omit stage; HTTP API events can include it.
+    if path == prefix or path.startswith(prefix + '/'):
+        path = '/onboarding' + path[len(prefix):]
+    headers = {key.lower(): value for key, value in (event.get('headers') or {}).items()}
+    query = event.get('queryStringParameters') or {}
+    assets = {'/onboarding/': ('index.html', 'text/html'), '/onboarding/app.js': ('app.js', 'text/javascript'),
+              '/onboarding/style.css': ('style.css', 'text/css')}
+    if method == 'GET' and path == '/onboarding':
+        return redirect(base_url())
+    if method == 'GET' and path in assets:
+        filename, content_type = assets[path]
+        return response(200, (Path(__file__).parent / 'assets' / 'onboarding' / filename).read_text(), content_type)
+    if method == 'GET' and path == '/onboarding/auth/login':
+        location, set_cookie = get_auth().login()
+        return redirect(location, set_cookie)
+    if method == 'GET' and path == '/onboarding/auth/callback':
+        return redirect(base_url(), get_auth().callback(query, headers))
+    if path != '/onboarding/oauth/google/callback' and not path.startswith('/onboarding/v1/'):
+        raise AuthError(404, 'not_found', 'Route not found.')
+    auth = get_auth()
+    try:
+        session = auth.session(headers)
+    except AuthError as error:
+        if method == 'GET' and path == '/onboarding/oauth/google/callback' and error.status == 401:
+            # Drop Google's code/state; fresh consent binds to the new owner session.
+            return redirect(base_url() + '?recovery=owner-session-expired')
+        raise
+    if method not in ('GET', 'HEAD'):
+        auth.check_mutation(headers, session)
+    service = get_service()
+    owner = session['owner']
+    if method == 'GET' and path == '/onboarding/oauth/google/callback':
+        try:
+            operation = service.callback(query.get('state', ''), query.get('code', ''), session['session_id'], error=query.get('error'))
+        except Exception as error:
+            if all(hasattr(error, name) for name in ('status', 'code', 'detail')) and error.status < 500:
+                return redirect(base_url() + '?recovery=consent-incomplete')
+            raise
+        operation_id = operation.get('id', operation.get('operation_id', ''))
+        return redirect(base_url() + '?' + urlencode({'operation': operation_id}))
+    if path == '/onboarding/v1/setup':
+        if method == 'GET':
+            data = service.setup(owner)
+            data['csrfToken'] = session['csrf']
+            return response(200, data)
+        if method == 'PUT':
+            return response(200, service.update_setup(owner, json_body(event)))
+    if method == 'PUT' and path == '/onboarding/v1/oauth-client':
+        return response(200, service.save_client(owner, json_body(event)))
+    if method == 'POST' and path == '/onboarding/v1/enrollments':
+        key = headers.get('idempotency-key', '')
+        if not key or len(key) > 128 or not re.fullmatch(r'[A-Za-z0-9_-]+', key):
+            raise AuthError(400, 'invalid_idempotency_key', 'Provide an Idempotency-Key of at most 128 ASCII letters, digits, underscores or dashes.')
+        result = service.enroll(owner, json_body(event).get('email', ''), key, session['session_id'])
+        return response(202, result, extra={'Location': base_url() + 'v1/operations/' + result['id']})
+    match = re.fullmatch(r'/onboarding/v1/operations/([A-Za-z0-9_-]+)(/(attempts|verifications))?', path)
+    if match:
+        operation_id, _, action = match.groups()
+        if method == 'GET' and not action:
+            return response(200, service.operation(owner, operation_id))
+        if method == 'POST' and action == 'attempts':
+            return response(202, service.attempts(owner, operation_id, session['session_id']))
+        if method == 'POST' and action == 'verifications':
+            return response(202, service.retry(owner, operation_id))
+    raise AuthError(404, 'not_found', 'Route not found.')

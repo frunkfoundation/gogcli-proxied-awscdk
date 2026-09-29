@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gmail access</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><p class="eyebrow">Your remote account manager</p><h1>Gmail access</h1>
+    <p>Set up one Google Cloud project, then connect each mailbox separately. Start with <strong>jay.jakosky@gmail.com</strong>.</p>
+    <p>Your checklist and connection progress are saved on the server. You can close this page and return later.</p>
+  </header>
+  <p id="pageStatus" class="notice" role="status" aria-live="polite">Checking your owner session…</p>
+  <p id="recoveryStatus" class="notice" role="status" hidden></p>
+  <a id="loginLink" class="button" hidden>Sign in as the owner</a>
+  <button id="reloadPage" type="button">Reload saved progress</button>
+  <div id="guide" hidden>
+  <p id="credentialStatus" class="notice" role="status"></p>
+  <details open>
+    <summary>1. Create or choose a Google Cloud project</summary>
+    <ol>
+      <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Create a Google Cloud project ↗</a>. Sign in with the account that will own this app. Use a recognizable name, such as “Jay Gmail access”.</li>
+      <li>Select that project in the picker at the top of the console. One project can serve personal Gmail and accounts from different Google Workspace organizations.</li>
+      <li>Copy its <strong>Project ID</strong> below to make the next links open your project. This is the ID, not the display name.</li>
+    </ol>
+    <label for="projectId">Google Cloud Project ID</label>
+    <input id="projectId" type="text" placeholder="your-project-id" autocomplete="off" spellcheck="false">
+  </details>
+  <details>
+    <summary>2. Enable the Gmail API</summary>
+    <p><a data-console="https://console.cloud.google.com/apis/library/gmail.googleapis.com" href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener noreferrer">Open the Gmail API page ↗</a>, confirm your project, then click <strong>Enable</strong>. “Manage” means it is already enabled.</p>
+  </details>
+  <details>
+    <summary>3. Set up and publish the Google consent screen</summary>
+    <ol>
+      <li><a data-console="https://console.cloud.google.com/auth/branding" href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. If prompted, click <strong>Get started</strong>. Enter an app name, support email and developer contact email.</li>
+      <li><a data-console="https://console.cloud.google.com/auth/audience" href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Choose <strong>External</strong> to allow personal Gmail and different Workspace organizations. “Internal” permits only one organization.</li>
+      <li><a data-console="https://console.cloud.google.com/auth/scopes" href="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Click <strong>Add or remove scopes</strong>, add the three permissions below, then click <strong>Update</strong> and <strong>Save</strong>. Enter the full URL manually if a permission is missing.
+        <ul><li><code>openid</code></li><li><code>email</code></li><li><code>https://www.googleapis.com/auth/gmail.modify</code></li></ul>
+        Gmail permission allows reading and changing mail, including sending. The connection check only reads your profile and at most one message ID.</li>
+      <li>Return to <strong>Audience</strong> and click <strong>Publish app</strong> <em>before connecting accounts</em>. For Gmail, refresh tokens issued while an External app is in Testing expire after seven days. Reconnect any accounts previously connected in Testing.</li>
+    </ol>
+    <p>Publishing changes the audience status; it does not complete Google's app verification. Personally known users may qualify for Google's personal-use exception and see an unverified-app warning. Workspace administrators can restrict access. <a href="https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification" target="_blank" rel="noopener noreferrer">Google's verification guidance ↗</a></p>
+    <label class="check"><input id="publishingConfirmed" type="checkbox"> I checked Audience and published the app.</label>
+    <p class="small">This is your confirmation. This page cannot independently check Google's publishing status.</p>
+  </details>
+  <details>
+    <summary>4. Create a Web application client and upload its JSON</summary>
+    <ol>
+      <li><a data-console="https://console.cloud.google.com/auth/clients" href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a>, then click <strong>Create client</strong>.</li>
+      <li>Choose <strong>Web application</strong>, enter a name, and under <strong>Authorized redirect URIs</strong> click <strong>Add URI</strong>. Paste this exact address, including its path:</li>
+    </ol>
+    <label for="callbackUrl">Exact Google callback address</label>
+    <div class="copy"><input id="callbackUrl" type="text" readonly><button id="copyCallback" type="button">Copy callback</button></div>
+    <p id="copyStatus" role="status"></p>
+    <ol start="3"><li>Click <strong>Create</strong>. Download the client's JSON, then upload it below. A Desktop client will not work for this hosted callback.</li></ol>
+    <form id="credentialsForm">
+      <label for="credentialsFile">Downloaded Web application client JSON</label>
+      <input id="credentialsFile" type="file" accept=".json,application/json" required>
+      <button id="importCredentials" type="submit">Upload Google client</button>
+    </form>
+    <p id="uploadStatus" role="status" aria-live="polite"></p>
+    <p class="small">The file is uploaded over HTTPS and stored securely on the server. Google credentials and tokens are never saved in this browser's storage or your Mac keychain.</p>
+  </details>
+  <details open>
+    <summary>5. Connect each Gmail account</summary>
+    <p>Enter an email, then choose <strong>Connect Gmail</strong>. Google opens in this tab; choose that exact account and approve access. You return here automatically. The server continues checking even if this page is closed.</p>
+    <p>“Verified” means a real read through the normal signed proxy passed after the credential cache expired. A mailbox with no messages passes too.</p>
+    <div id="accounts"></div>
+    <div class="actions"><button id="addAccount" type="button">Add another account</button><button id="refresh" type="button">Refresh status</button></div>
+    <p id="saveStatus" role="status" aria-live="polite"></p>
+  </details>
+  <section id="cliSection" hidden aria-labelledby="cliTitle">
+    <h2 id="cliTitle">6. Use Gmail from the CLI</h2>
+    <p>Build this repository with <code>make build</code>; the upstream Homebrew binary does not include this proxy transport. Use the owner-provided proxy API key and this AWS profile in your gog configuration. No Google client JSON or token belongs in that file.</p>
+    <pre id="cliConfig"></pre>
+    <p>Find your config directory with <code>bin/gog config path</code>, merge these fields into <code>config.json</code>, and run this read-only check:</p>
+    <pre id="cliCommand"></pre>
+    <p class="small">The API usage-plan key and an authorized AWS session are both required. Page verification checks the server path; this command checks your actual CLI caller.</p>
+  </section>
+  </div>
+</main>
+</body>
+</html>
