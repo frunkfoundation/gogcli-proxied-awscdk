@@ -1,6 +1,9 @@
 package googleauth
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseService(t *testing.T) {
 	tests := []struct {
@@ -13,6 +16,8 @@ func TestParseService(t *testing.T) {
 		{"chat", ServiceChat},
 		{"classroom", ServiceClassroom},
 		{"drive", ServiceDrive},
+		{"driveactivity", ServiceDriveActivity},
+		{"drivelabels", ServiceDriveLabels},
 		{"docs", ServiceDocs},
 		{"slides", ServiceSlides},
 		{"contacts", ServiceContacts},
@@ -20,9 +25,17 @@ func TestParseService(t *testing.T) {
 		{"people", ServicePeople},
 		{"sheets", ServiceSheets},
 		{"forms", ServiceForms},
+		{"sites", ServiceSites},
 		{"appscript", ServiceAppScript},
+		{"analytics", ServiceAnalytics},
+		{"searchconsole", ServiceSearchConsole},
+		{"adsense", ServiceAdSense},
+		{"ads", ServiceAds},
 		{"groups", ServiceGroups},
 		{"keep", ServiceKeep},
+		{"youtube", ServiceYouTube},
+		{"photos", ServicePhotos},
+		{"photospicker", ServicePhotosPicker},
 	}
 	for _, tt := range tests {
 		got, err := ParseService(tt.in)
@@ -42,8 +55,8 @@ func TestParseService_Invalid(t *testing.T) {
 	}
 }
 
-func TestExtractCodeAndState(t *testing.T) {
-	code, state, err := extractCodeAndState("http://127.0.0.1:55555/oauth2/callback?code=abc&state=xyz")
+func TestParseRedirectURL(t *testing.T) {
+	code, state, _, err := parseRedirectURL("http://127.0.0.1:55555/oauth2/callback?code=abc&state=xyz")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -53,19 +66,19 @@ func TestExtractCodeAndState(t *testing.T) {
 	}
 }
 
-func TestExtractCodeAndState_Errors(t *testing.T) {
-	if _, _, err := extractCodeAndState("not a url"); err == nil {
+func TestParseRedirectURL_Errors(t *testing.T) {
+	if _, _, _, err := parseRedirectURL("not a url"); err == nil {
 		t.Fatalf("expected error")
 	}
 
-	if _, _, err := extractCodeAndState("http://127.0.0.1:55555/oauth2/callback?state=xyz"); err == nil {
+	if _, _, _, err := parseRedirectURL("http://127.0.0.1:55555/oauth2/callback?state=xyz"); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
 func TestAllServices(t *testing.T) {
 	svcs := AllServices()
-	if len(svcs) != 15 {
+	if len(svcs) != 27 {
 		t.Fatalf("unexpected: %v", svcs)
 	}
 	seen := make(map[Service]bool)
@@ -74,7 +87,7 @@ func TestAllServices(t *testing.T) {
 		seen[s] = true
 	}
 
-	for _, want := range []Service{ServiceGmail, ServiceCalendar, ServiceChat, ServiceClassroom, ServiceDrive, ServiceDocs, ServiceSlides, ServiceContacts, ServiceTasks, ServicePeople, ServiceSheets, ServiceForms, ServiceAppScript, ServiceGroups, ServiceKeep} {
+	for _, want := range []Service{ServiceGmail, ServiceCalendar, ServiceChat, ServiceClassroom, ServiceDrive, ServiceDriveActivity, ServiceDriveLabels, ServiceDocs, ServiceSlides, ServiceContacts, ServiceTasks, ServicePeople, ServiceSheets, ServiceForms, ServiceSites, ServiceMeet, ServiceAppScript, ServiceAnalytics, ServiceSearchConsole, ServiceAdSense, ServiceAds, ServiceGroups, ServiceKeep, ServiceAdmin, ServiceYouTube, ServicePhotos, ServicePhotosPicker} {
 		if !seen[want] {
 			t.Fatalf("missing %q", want)
 		}
@@ -83,7 +96,7 @@ func TestAllServices(t *testing.T) {
 
 func TestUserServices(t *testing.T) {
 	svcs := UserServices()
-	if len(svcs) != 13 {
+	if len(svcs) != 22 {
 		t.Fatalf("unexpected: %v", svcs)
 	}
 
@@ -96,10 +109,12 @@ func TestUserServices(t *testing.T) {
 			seenDocs = true
 		case ServiceSlides:
 			seenSlides = true
-		case ServiceForms, ServiceAppScript:
+		case ServiceDriveActivity, ServiceDriveLabels, ServiceForms, ServiceSites, ServiceMeet, ServiceAppScript, ServiceAnalytics, ServiceSearchConsole, ServiceAds, ServiceYouTube, ServicePhotos:
 			// expected user services
 		case ServiceKeep:
 			t.Fatalf("unexpected keep in user services")
+		case ServiceAdSense:
+			t.Fatal("AdSense must remain explicitly opted in")
 		}
 	}
 
@@ -113,7 +128,7 @@ func TestUserServices(t *testing.T) {
 }
 
 func TestUserServiceCSV(t *testing.T) {
-	want := "gmail,calendar,chat,classroom,drive,docs,slides,contacts,tasks,sheets,people,forms,appscript"
+	want := "gmail,calendar,chat,classroom,drive,driveactivity,drivelabels,docs,slides,contacts,tasks,sheets,people,forms,sites,meet,appscript,analytics,searchconsole,ads,youtube,photos"
 	if got := UserServiceCSV(); got != want {
 		t.Fatalf("unexpected user services csv: %q", got)
 	}
@@ -228,8 +243,25 @@ func TestScopesForServices_UnionSorted(t *testing.T) {
 	}
 }
 
+func TestScopesForServiceWithOptions_YouTubeStaysReadonly(t *testing.T) {
+	for _, readonly := range []bool{false, true} {
+		scopes, err := scopesForServiceWithOptions(ServiceYouTube, ScopeOptions{Readonly: readonly})
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		if !containsScope(scopes, "https://www.googleapis.com/auth/youtube.readonly") {
+			t.Fatalf("youtube readonly scope missing: %v", scopes)
+		}
+
+		if containsScope(scopes, "https://www.googleapis.com/auth/youtube.force-ssl") {
+			t.Fatalf("youtube force-ssl scope should not be requested for read-only commands: %v", scopes)
+		}
+	}
+}
+
 func TestScopesForManageWithOptions_Readonly(t *testing.T) {
-	scopes, err := ScopesForManageWithOptions([]Service{ServiceGmail, ServiceDrive, ServiceCalendar, ServiceContacts, ServiceTasks, ServiceSheets, ServiceDocs, ServicePeople, ServiceForms, ServiceAppScript}, ScopeOptions{
+	scopes, err := ScopesForManageWithOptions([]Service{ServiceGmail, ServiceDrive, ServiceCalendar, ServiceContacts, ServiceTasks, ServiceSheets, ServiceDocs, ServicePeople, ServiceForms, ServiceAppScript, ServiceAnalytics, ServiceSearchConsole}, ScopeOptions{
 		Readonly:   true,
 		DriveScope: DriveScopeFull,
 	})
@@ -252,6 +284,8 @@ func TestScopesForManageWithOptions_Readonly(t *testing.T) {
 		"https://www.googleapis.com/auth/forms.responses.readonly",
 		"https://www.googleapis.com/auth/script.projects.readonly",
 		"https://www.googleapis.com/auth/script.deployments.readonly",
+		"https://www.googleapis.com/auth/analytics.readonly",
+		"https://www.googleapis.com/auth/webmasters.readonly",
 		"profile",
 	}
 	for _, w := range want {
@@ -271,11 +305,90 @@ func TestScopesForManageWithOptions_Readonly(t *testing.T) {
 		"https://www.googleapis.com/auth/tasks",
 		"https://www.googleapis.com/auth/spreadsheets",
 		"https://www.googleapis.com/auth/documents",
+		"https://www.googleapis.com/auth/webmasters",
 	}
 	for _, nw := range notWant {
 		if containsScope(scopes, nw) {
 			t.Fatalf("unexpected %q in %v", nw, scopes)
 		}
+	}
+}
+
+func TestScopesForManageWithOptions_GmailScopeReadonly(t *testing.T) {
+	scopes, err := ScopesForManageWithOptions([]Service{ServiceGmail, ServiceDrive}, ScopeOptions{
+		GmailScope: GmailScopeReadonly,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if !containsScope(scopes, "https://www.googleapis.com/auth/gmail.readonly") {
+		t.Fatalf("missing gmail.readonly in %v", scopes)
+	}
+
+	for _, nw := range []string{
+		"https://www.googleapis.com/auth/gmail.modify",
+		"https://www.googleapis.com/auth/gmail.settings.basic",
+		"https://www.googleapis.com/auth/gmail.settings.sharing",
+	} {
+		if containsScope(scopes, nw) {
+			t.Fatalf("unexpected %q in %v", nw, scopes)
+		}
+	}
+
+	if !containsScope(scopes, "https://www.googleapis.com/auth/drive") {
+		t.Fatalf("missing drive in %v", scopes)
+	}
+}
+
+func TestScopesForManageWithOptions_GmailSendingScopes(t *testing.T) {
+	for _, tc := range []struct {
+		mode GmailScopeMode
+		read bool
+	}{
+		{mode: GmailScopeSend},
+		{mode: GmailScopeReadSend, read: true},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			scopes, err := ScopesForManageWithOptions([]Service{ServiceGmail}, ScopeOptions{GmailScope: tc.mode})
+			if err != nil {
+				t.Fatalf("scopes: %v", err)
+			}
+
+			want := []string{
+				"https://www.googleapis.com/auth/gmail.send",
+				"openid",
+				"email",
+				"https://www.googleapis.com/auth/userinfo.email",
+			}
+			if tc.read {
+				want = append(want, "https://www.googleapis.com/auth/gmail.readonly")
+			}
+
+			if len(scopes) != len(want) {
+				t.Fatalf("scopes = %v, want exactly %v", scopes, want)
+			}
+
+			for _, scope := range want {
+				if !containsScope(scopes, scope) {
+					t.Fatalf("missing %q in %v", scope, scopes)
+				}
+			}
+		})
+	}
+}
+
+func TestScopesForManageWithOptions_ReadonlyRejectsGmailSendingScopes(t *testing.T) {
+	for _, mode := range []GmailScopeMode{GmailScopeSend, GmailScopeReadSend} {
+		t.Run(string(mode), func(t *testing.T) {
+			_, err := ScopesForManageWithOptions([]Service{ServiceGmail}, ScopeOptions{
+				Readonly:   true,
+				GmailScope: mode,
+			})
+			if !errors.Is(err, errInvalidGmailScope) {
+				t.Fatalf("error = %v, want invalid Gmail scope", err)
+			}
+		})
 	}
 }
 
@@ -285,7 +398,7 @@ func TestScopes_ServiceKeep_DefaultIsReadonly(t *testing.T) {
 		t.Fatalf("Scopes: %v", err)
 	}
 
-	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/keep.readonly" {
+	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/keep" {
 		t.Fatalf("unexpected keep scopes: %#v", scopes)
 	}
 }
@@ -296,7 +409,7 @@ func TestScopesForServiceWithOptions_ServiceKeep_Readonly(t *testing.T) {
 		t.Fatalf("scopesForServiceWithOptions: %v", err)
 	}
 
-	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/keep.readonly" {
+	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/keep" {
 		t.Fatalf("unexpected keep readonly scopes: %#v", scopes)
 	}
 }
@@ -451,6 +564,26 @@ func TestScopes_FormsIncludesBodyAndResponses(t *testing.T) {
 	}
 }
 
+func TestScopes_SitesUsesDriveScope(t *testing.T) {
+	scopes, err := Scopes(ServiceSites)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/drive" {
+		t.Fatalf("unexpected sites scopes: %#v", scopes)
+	}
+
+	readonly, err := scopesForServiceWithOptions(ServiceSites, ScopeOptions{Readonly: true})
+	if err != nil {
+		t.Fatalf("readonly scopes: %v", err)
+	}
+
+	if len(readonly) != 1 || readonly[0] != "https://www.googleapis.com/auth/drive.readonly" {
+		t.Fatalf("unexpected readonly sites scopes: %#v", readonly)
+	}
+}
+
 func TestScopesForServiceWithOptions_AppScriptReadonly(t *testing.T) {
 	scopes, err := scopesForServiceWithOptions(ServiceAppScript, ScopeOptions{Readonly: true})
 	if err != nil {
@@ -467,6 +600,62 @@ func TestScopesForServiceWithOptions_AppScriptReadonly(t *testing.T) {
 
 	if containsScope(scopes, "https://www.googleapis.com/auth/script.projects") {
 		t.Fatalf("unexpected script.projects in %v", scopes)
+	}
+}
+
+func TestScopes_ServiceSearchConsole_DefaultIsWritable(t *testing.T) {
+	scopes, err := Scopes(ServiceSearchConsole)
+	if err != nil {
+		t.Fatalf("Scopes: %v", err)
+	}
+
+	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/webmasters" {
+		t.Fatalf("unexpected searchconsole scopes: %#v", scopes)
+	}
+}
+
+func TestScopesForServiceWithOptions_SearchConsole_Readonly(t *testing.T) {
+	scopes, err := scopesForServiceWithOptions(ServiceSearchConsole, ScopeOptions{Readonly: true})
+	if err != nil {
+		t.Fatalf("scopesForServiceWithOptions: %v", err)
+	}
+
+	if len(scopes) != 1 || scopes[0] != "https://www.googleapis.com/auth/webmasters.readonly" {
+		t.Fatalf("unexpected searchconsole readonly scopes: %#v", scopes)
+	}
+}
+
+func TestScopesForManageWithOptions_ExtraScopes(t *testing.T) {
+	scopes, err := ScopesForManageWithOptions([]Service{ServiceGmail}, ScopeOptions{
+		GmailScope: GmailScopeReadonly,
+		ExtraScopes: []string{
+			"https://www.googleapis.com/auth/gmail.labels",
+			"https://www.googleapis.com/auth/gmail.readonly", // duplicate
+		},
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if !containsScope(scopes, "https://www.googleapis.com/auth/gmail.labels") {
+		t.Fatalf("missing gmail.labels in %v", scopes)
+	}
+
+	if !containsScope(scopes, "https://www.googleapis.com/auth/gmail.readonly") {
+		t.Fatalf("missing gmail.readonly in %v", scopes)
+	}
+
+	// De-duplication: gmail.readonly should appear exactly once
+	count := 0
+
+	for _, s := range scopes {
+		if s == "https://www.googleapis.com/auth/gmail.readonly" {
+			count++
+		}
+	}
+
+	if count != 1 {
+		t.Fatalf("expected gmail.readonly exactly once, got %d in %v", count, scopes)
 	}
 }
 

@@ -1,109 +1,66 @@
 ---
-summary: "Release checklist for gogcli (GitHub release + Homebrew tap)"
+summary: "Unified GitHub Actions release process for GogCLI"
 ---
 
 # Releasing `gogcli`
 
-This playbook mirrors the Homebrew + GitHub flow used in `../camsnap`.
+Official releases run only through `.github/workflows/release-unified.yml`, which calls the fleet-standard `openclaw/release-workflows` Go CLI pipeline at `@v1`. Do not create or push release tags locally, and do not use local signing or notarization credentials.
 
-Always do **all** steps below (CI + changelog + tag + GitHub release artifacts + tap update + Homebrew sanity install). No partial releases.
+Release authorization is repository Actions write access combined with a protected, required-check-green `main` commit and the organization-scoped signing, notarization, and tap credentials. The shared workflow creates the immutable annotated tag; GogCLI intentionally has no separate local tag-signer authorization step.
 
-Shortcut scripts (preferred, keep notes non-empty):
-```sh
-scripts/release.sh X.Y.Z
-scripts/verify-release.sh X.Y.Z
-```
+## Prepare the release
 
-Assumptions:
-- Repo: `steipete/gogcli`
-- Tap repo: `../homebrew-tap` (tap: `steipete/tap`)
-- Homebrew formula name: `gogcli` (installs the `gog` binary)
+1. Update dependencies and land the complete release queue.
+2. Finalize one dated `## X.Y.Z - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
+3. Set `internal/cmd/VERSION` to `vX.Y.Z`.
+4. Run `make ci`, review the complete diff, and land it on protected `main` with required checks green.
 
-## 0) Prereqs
-- Clean working tree on `main`.
-- Go toolchain installed (Go version comes from `go.mod`).
-- `make` works locally.
-- Access to the tap repo (e.g. `steipete/homebrew-tap`).
+The workflow freezes the protected `main` commit, creates or reuses its immutable annotated version tag, builds from that commit, signs and notarizes the native Darwin binaries with organization secrets, verifies the complete asset inventory independently on arm64 and Intel runners, publishes the GitHub Release, and updates `openclaw/homebrew-tap/Formula/gogcli.rb` from verifier-bound asset hashes.
 
-## 1) Verify build is green
-```sh
-make ci
-```
+The caller preserves GogCLI's public artifact contract where applicable:
 
-Confirm GitHub Actions `ci` is green for the commit you’re tagging:
-```sh
-gh run list -L 5 --branch main
-```
+- native Darwin, Linux, and Windows archives from the GoReleaser matrix;
+- `checksums.txt` as the checksum asset;
+- the established `com.steipete.gogcli.gog` signing identifier;
+- no additional universal Darwin archive;
+- non-Darwin reproducible rebuild verification;
+- nFPM auto-detection, which remains inactive unless the GoReleaser config adds packages.
 
-## 2) Update changelog
-- Update `CHANGELOG.md` for the version you’re releasing.
+## Dispatch
 
-Example heading:
-- `## 0.1.0 - 2025-12-12`
-
-## 3) Commit, tag & push
-```sh
-git checkout main
-git pull
-
-# commit changelog + any release tweaks
-git commit -am "release: vX.Y.Z"
-
-git tag -a vX.Y.Z -m "Release X.Y.Z"
-git push origin main --tags
-```
-
-## 4) Verify GitHub release artifacts
-The tag push triggers `.github/workflows/release.yml` (GoReleaser). Ensure it completes successfully and the release has assets.
+From current protected `main`, dispatch the workflow with a SemVer version without a leading `v`:
 
 ```sh
-gh run list -L 5 --workflow release.yml
-gh release view vX.Y.Z
+gh workflow run release-unified.yml \
+  --repo openclaw/gogcli \
+  --ref main \
+  -f version=X.Y.Z
 ```
 
-Ensure GitHub release notes are not empty (mirror the changelog section).
+`scripts/release.sh X.Y.Z` is the equivalent convenience wrapper. Watch the exact returned workflow run through completion. Retrying the same version reuses the immutable annotated tag; the workflow never moves it.
 
-If the workflow needs a rerun:
+## Docker closeout
+
+After the GitHub Release is public and its tag is verified, publish the Docker image separately unless an exact-tag Docker run has already succeeded. The unified workflow creates the tag with `GITHUB_TOKEN`, which does not trigger Docker's tag-push workflow.
+
 ```sh
-gh workflow run release.yml -f tag=vX.Y.Z
+gh workflow run docker.yml \
+  --repo openclaw/gogcli \
+  --ref vX.Y.Z \
+  -f tag=vX.Y.Z
 ```
 
-## 5) Update (or add) the Homebrew formula
-In the tap repo (assumed sibling at `../homebrew-tap`), create/update `Formula/gogcli.rb`.
+Use the release tag for both `--ref` and `tag`: checkout follows the input, but build commit metadata comes from the dispatch's `GITHUB_SHA`. Dispatching from `main` can label a tagged build with a newer commit. Verify the resulting run's head SHA matches the frozen release commit and wait for success before treating the GHCR version tag (and `latest` for stable releases) as published.
 
-Recommended formula shape (build-from-source, no binary assets needed):
-- `version "X.Y.Z"`
-- `url "https://github.com/steipete/gogcli/archive/refs/tags/vX.Y.Z.tar.gz"`
-- `sha256 "<sha256>"`
-- `depends_on "go" => :build`
-- Build:
-  - `system "go", "build", *std_go_args(ldflags: "-s -w"), "./cmd/gog"`
+## Verify and close out
 
-Compute the SHA256 for the tag tarball:
-```sh
-curl -L -o /tmp/gogcli.tar.gz https://github.com/steipete/gogcli/archive/refs/tags/vX.Y.Z.tar.gz
-shasum -a 256 /tmp/gogcli.tar.gz
-```
+Before declaring the release complete, verify:
 
-Commit + push in the tap repo:
-```sh
-cd ../homebrew-tap
-git add Formula/gogcli.rb
-git commit -m "gogcli vX.Y.Z"
-git push origin main
-```
+- the exact workflow run succeeded;
+- the annotated tag resolves to the frozen protected-main commit;
+- the GitHub Release is published and its body matches the tagged changelog section;
+- the published checksum and inventory controls cover every asset;
+- both native macOS verifier jobs passed signature, Team ID, stable identifier, hardened-runtime, timestamp, architecture, and online notarization checks;
+- the Homebrew handoff succeeded and `Formula/gogcli.rb` contains the verified version, archive names, and hashes.
 
-## 6) Sanity-check install from tap
-```sh
-brew update
-brew uninstall gogcli || true
-brew untap steipete/tap || true
-brew tap steipete/tap
-brew install steipete/tap/gogcli
-brew test steipete/tap/gogcli
-
-gog --help
-```
-
-## Notes
-- `gog --version` / `gog version` should report the release version post-install.
+Finally, land the next patch `Unreleased` changelog section and set `internal/cmd/VERSION` to the released version with the `-dev` suffix. The reusable workflow may open a closeout PR containing only the changelog heading; add the development-version change to that exact PR, then review and merge it rather than creating a competing transition. Keep exactly one `Unreleased` section.

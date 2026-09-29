@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/steipete/gogcli/internal/config"
+
+	"github.com/openclaw/gogcli/internal/config"
 )
 
 type captureRT struct {
@@ -64,7 +65,7 @@ func TestLoadProxyConfig_MissingEnv(t *testing.T) {
 	t.Setenv(envProxyBaseURL, "")
 	t.Setenv(envProxyAPIKey, "")
 
-	_, err := loadProxyConfig()
+	_, err := loadProxyConfig(context.Background())
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -87,7 +88,7 @@ func TestLoadProxyConfig_UsesConfigFile(t *testing.T) {
 	t.Setenv(envProxyBaseURL, "")
 	t.Setenv(envProxyAPIKey, "")
 	t.Setenv(envGOGAWSProfile, "from-env")
-	if err := config.WriteConfig(config.File{
+	if err := config.NewConfigStore(proxyTestLayout(t)).Write(config.File{
 		ProxyBaseURL: "https://abc123.execute-api.us-east-1.amazonaws.com/prod",
 		ProxyAPIKey:  "cfg-key",
 		AWSProfile:   "from-config",
@@ -95,7 +96,7 @@ func TestLoadProxyConfig_UsesConfigFile(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	got, err := loadProxyConfig()
+	got, err := loadProxyConfig(context.Background())
 	if err != nil {
 		t.Fatalf("loadProxyConfig: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestLoadProxyConfig_UsesProfileEnvFallback(t *testing.T) {
 	t.Setenv(envProxyAPIKey, "env-key")
 	t.Setenv(envGOGAWSProfile, "from-env")
 
-	got, err := loadProxyConfig()
+	got, err := loadProxyConfig(context.Background())
 	if err != nil {
 		t.Fatalf("loadProxyConfig: %v", err)
 	}
@@ -196,15 +197,18 @@ func TestProxyTransport_CredentialProviderError(t *testing.T) {
 		Region:              "us-east-1",
 		APIKey:              "k",
 		Account:             "user@example.com",
-		CredentialsProvider: &stubCredsProvider{err: errors.New("no creds")},
+		CredentialsProvider: &stubCredsProvider{err: errBoom},
 		Signer:              &stubSigner{},
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://abc123.execute-api.us-east-1.amazonaws.com/prod/gmail/v1/users/me/labels", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	_, err = tr.RoundTrip(req)
-	if err == nil || !strings.Contains(err.Error(), "no creds") {
+	resp, err := tr.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || !errors.Is(err, errBoom) {
 		t.Fatalf("expected provider error, got %v", err)
 	}
 }
@@ -217,14 +221,26 @@ func TestProxyTransport_SignerError(t *testing.T) {
 		APIKey:              "k",
 		Account:             "user@example.com",
 		CredentialsProvider: &stubCredsProvider{creds: aws.Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}},
-		Signer:              &stubSigner{err: errors.New("sign failed")},
+		Signer:              &stubSigner{err: errBoom},
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://abc123.execute-api.us-east-1.amazonaws.com/prod/gmail/v1/users/me/labels", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	_, err = tr.RoundTrip(req)
-	if err == nil || !strings.Contains(err.Error(), "sign failed") {
+	resp, err := tr.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || !errors.Is(err, errBoom) {
 		t.Fatalf("expected signer error, got %v", err)
 	}
+}
+
+func proxyTestLayout(t *testing.T) config.Layout {
+	t.Helper()
+	layout, err := config.NewSystemResolver("").Resolve(config.PathKindConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return layout
 }

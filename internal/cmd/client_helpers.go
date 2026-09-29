@@ -4,23 +4,20 @@ import (
 	"context"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/authclient"
-	"github.com/steipete/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/authclient"
+	"github.com/openclaw/gogcli/internal/config"
 )
 
-func resolveClientOverride(flags *RootFlags, cmdClient string) string {
-	if strings.TrimSpace(cmdClient) != "" {
-		return cmdClient
-	}
+func resolveClientOverride(flags *RootFlags) string {
 	if flags == nil {
 		return ""
 	}
 	return flags.Client
 }
 
-func resolveClientForEmail(email string, flags *RootFlags, cmdClient string) (string, error) {
-	override := resolveClientOverride(flags, cmdClient)
-	return authclient.ResolveClientWithOverride(email, override)
+func resolveClientForEmail(ctx context.Context, email string, flags *RootFlags) (string, error) {
+	override := resolveClientOverride(flags)
+	return authclient.ResolveClientWithOverride(ctx, email, override)
 }
 
 func normalizeClientForFlag(raw string) (string, error) {
@@ -32,5 +29,5 @@ func resolveClientForEmailWithContext(ctx context.Context, email string, cmdClie
 	if override == "" {
 		override = authclient.ClientOverrideFromContext(ctx)
 	}
-	return authclient.ResolveClientWithOverride(email, override)
+	return authclient.ResolveClientWithOverride(ctx, email, override)
 }

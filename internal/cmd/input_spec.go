@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/config"
 )
 
 // resolveInlineOrFileBytes supports agent-friendly inputs for flags that otherwise
@@ -17,14 +17,14 @@ import (
 //   - stdin:   '-'
 //   - file:    '@path/to/file.json'
 //   - stdin:   '@-'
-func resolveInlineOrFileBytes(spec string) ([]byte, error) {
+func resolveInlineOrFileBytes(spec string, input io.Reader) ([]byte, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return nil, nil
 	}
 
 	readStdin := func() ([]byte, error) {
-		b, err := io.ReadAll(os.Stdin)
+		b, err := io.ReadAll(input)
 		if err != nil {
 			return nil, err
 		}

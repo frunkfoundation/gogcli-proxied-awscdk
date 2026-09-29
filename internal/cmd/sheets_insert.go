@@ -2,22 +2,25 @@ package cmd
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	"google.golang.org/api/sheets/v4"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type SheetsInsertCmd struct {
+	Batch         string `name:"batch" help:"Append requests to a persisted Sheets batch instead of submitting"`
 	SpreadsheetID string `arg:"" name:"spreadsheetId" help:"Spreadsheet ID"`
 	Sheet         string `arg:"" name:"sheet" help:"Sheet name (eg. Sheet1)"`
 	Dimension     string `arg:"" name:"dimension" help:"Dimension to insert: rows or cols"`
 	Start         int64  `arg:"" name:"start" help:"Position before which to insert (1-based; for cols 1=A, 2=B)"`
 	Count         int64  `name:"count" help:"Number of rows/columns to insert" default:"1"`
 	After         bool   `name:"after" help:"Insert after the position instead of before"`
+	// *bool so an unset flag keeps the historical default (inherit only when
+	// --after); passing --inherit-from-before[=false] overrides it explicitly.
+	InheritFromBefore *bool `name:"inherit-from-before" help:"Inherit number format / styling from the row/column before the insertion. Defaults to true with --after, false otherwise; false inherits from the row/column after the insertion."`
 }
 
 func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
@@ -36,10 +39,10 @@ func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
 	var apiDimension, dimLabel string
 	switch dim {
 	case "rows", "row":
-		apiDimension = "ROWS"
+		apiDimension = sheetsDimensionRows
 		dimLabel = "row"
 	case "cols", "col", "columns", "column":
-		apiDimension = "COLUMNS"
+		apiDimension = sheetsDimensionColumns
 		dimLabel = "column"
 	default:
 		return usagef("dimension must be rows or cols, got %q", c.Dimension)
@@ -58,9 +61,17 @@ func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
 		startIndex = c.Start
 	}
 	endIndex := startIndex + c.Count
+	// Default: inherit formatting only when inserting after an existing line.
+	// An explicit --inherit-from-before[=false] overrides that default.
 	inheritFromBefore := c.After
+	if c.InheritFromBefore != nil {
+		inheritFromBefore = *c.InheritFromBefore
+	}
+	if inheritFromBefore && startIndex == 0 {
+		return usagef("cannot inherit from the previous %s when inserting at position 1", dimLabel)
+	}
 
-	if dryRunErr := dryRunExit(ctx, flags, "sheets.insert", map[string]any{
+	if dryRunErr := sheetsMutationDryRun(ctx, flags, c.Batch, "sheets.insert", map[string]any{
 		"spreadsheet_id":      spreadsheetID,
 		"sheet":               sheetName,
 		"dimension":           apiDimension,
@@ -74,12 +85,7 @@ func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return dryRunErr
 	}
 
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newSheetsService(ctx, account)
+	ctx, svc, err := prepareSheetsMutation(ctx, flags, c.Batch, spreadsheetID, "sheets.insert")
 	if err != nil {
 		return err
 	}
@@ -93,28 +99,33 @@ func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usagef("unknown sheet %q", sheetName)
 	}
 
+	dimRange := &sheets.DimensionRange{
+		SheetId:    sheetID,
+		Dimension:  apiDimension,
+		StartIndex: startIndex,
+		EndIndex:   endIndex,
+	}
+	forceSendDimensionRangeZeroes(dimRange)
 	req := &sheets.BatchUpdateSpreadsheetRequest{
 		Requests: []*sheets.Request{
 			{
 				InsertDimension: &sheets.InsertDimensionRequest{
-					Range: &sheets.DimensionRange{
-						SheetId:    sheetID,
-						Dimension:  apiDimension,
-						StartIndex: startIndex,
-						EndIndex:   endIndex,
-					},
+					Range:             dimRange,
 					InheritFromBefore: inheritFromBefore,
 				},
 			},
 		},
 	}
 
+	if queued, queueErr := queueSheetsBatchRequests(ctx, req.Requests); queued || queueErr != nil {
+		return queueErr
+	}
 	if _, err := svc.Spreadsheets.BatchUpdate(spreadsheetID, req).Do(); err != nil {
 		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"spreadsheetId":     spreadsheetID,
 			"sheet":             sheetName,
 			"sheetId":           sheetID,
@@ -136,6 +147,6 @@ func (c *SheetsInsertCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if c.Count == 1 {
 		plural = dimLabel
 	}
-	u.Out().Printf("Inserted %d %s %s %s %d in %q", c.Count, plural, position, dimLabel, c.Start, sheetName)
+	u.Out().Linef("Inserted %d %s %s %s %d in %q", c.Count, plural, position, dimLabel, c.Start, sheetName)
 	return nil
 }

@@ -1,15 +1,49 @@
 package googleapi
 
 import (
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"golang.org/x/oauth2"
 )
+
+const (
+	maxBufferedReplayBodyBytes    = int64(16 << 20)
+	maxAuthRetryResponseBodyBytes = int64(1 << 20)
+	// maxRetryAfter caps Retry-After waits. Google may send delta-seconds
+	// or an HTTP-date far in the future; CLI contexts often have no deadline.
+	maxRetryAfter = 60 * time.Second
+)
+
+var errRequestBodyTooLarge = errors.New("request body too large to buffer for retry")
+
+type retriesDisabledContextKey struct{}
+
+// WithoutRetries marks requests made with ctx as single-attempt operations.
+// The configured base transport still handles authentication.
+func WithoutRetries(ctx context.Context) context.Context {
+	return context.WithValue(ctx, retriesDisabledContextKey{}, true)
+}
+
+func retriesDisabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+
+	disabled, _ := ctx.Value(retriesDisabledContextKey{}).(bool)
+
+	return disabled
+}
 
 // RetryTransport wraps an http.RoundTripper with retry logic for
 // rate limits (429) and server errors (5xx).
@@ -19,6 +53,12 @@ type RetryTransport struct {
 	MaxRetries5xx  int
 	BaseDelay      time.Duration
 	CircuitBreaker *CircuitBreaker
+	RefreshAuth    func(context.Context) error
+	// Reauth is called when the OAuth refresh token is expired or revoked
+	// (invalid_grant). It should launch a browser-based re-authorization
+	// flow, persist the new refresh token, and return nil on success.
+	// If Reauth is nil, invalid_grant errors are surfaced without retry.
+	Reauth func(context.Context) error
 }
 
 // NewRetryTransport creates a RetryTransport with sensible defaults.
@@ -39,17 +79,24 @@ func NewRetryTransport(base http.RoundTripper) *RetryTransport {
 // RoundTrip implements http.RoundTripper with retry logic.
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.CircuitBreaker != nil && t.CircuitBreaker.IsOpen() {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+
 		return nil, &CircuitBreakerError{}
 	}
+	retryDisabled := retriesDisabled(req.Context())
 
-	if err := ensureReplayableBody(req); err != nil {
+	replayable, err := ensureReplayableBody(req)
+	if err != nil {
 		return nil, err
 	}
 
 	var resp *http.Response
-	var err error
 	retries429 := 0
 	retries5xx := 0
+	retriedAuth := false
+	retriedReauth := false
 
 	for {
 		// Reset body for retry
@@ -67,6 +114,31 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err = t.Base.RoundTrip(req)
 		if err != nil {
+			// Detect invalid_grant from the OAuth2 transport layer.
+			// This happens when the stored refresh token is expired or
+			// revoked. If a Reauth function is available and we haven't
+			// already retried, attempt auto-reauth and retry the request.
+			if isInvalidGrantError(err) {
+				if t.Reauth != nil && !retriedReauth && !retryDisabled && replayable {
+					slog.Debug("refresh token expired or revoked, attempting auto-reauth")
+
+					if reauthErr := t.Reauth(req.Context()); reauthErr != nil {
+						slog.Debug("auto-reauth failed", "err", reauthErr)
+
+						return nil, fmt.Errorf("refresh token expired or revoked: %w; re-authentication failed: %w; run 'gog auth add' to re-authorize manually", err, reauthErr)
+					}
+
+					retriedReauth = true
+
+					continue
+				}
+
+				// Reauth is not available (suppressed by --no-input, not
+				// stored OAuth, or already retried). Surface a clear,
+				// actionable error instead of the raw OAuth2 message.
+				return nil, fmt.Errorf("refresh token expired or revoked: %w; run 'gog auth add' to re-authorize", err)
+			}
+
 			return nil, fmt.Errorf("round trip: %w", err)
 		}
 
@@ -81,7 +153,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		// Rate limit (429)
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if retries429 >= t.MaxRetries429 {
+			if retryDisabled || retries429 >= t.MaxRetries429 || !replayable {
 				return resp, nil // Return the 429 response after max retries
 			}
 
@@ -108,7 +180,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				t.CircuitBreaker.RecordFailure()
 			}
 
-			if retries5xx >= t.MaxRetries5xx {
+			if retryDisabled || retries5xx >= t.MaxRetries5xx || !replayable {
 				return resp, nil
 			}
 
@@ -127,17 +199,54 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			continue
 		}
 
+		if resp.StatusCode == http.StatusForbidden && t.RefreshAuth != nil && !retriedAuth && replayable && !retryDisabled {
+			insufficientScopes, detectErr := responseIndicatesInsufficientScopes(resp)
+			if detectErr != nil {
+				slog.Debug("could not inspect auth failure response for retry", "err", detectErr)
+				return resp, nil
+			}
+
+			if insufficientScopes {
+				slog.Debug("insufficient scopes response, refreshing auth token and retrying")
+
+				if err := t.RefreshAuth(req.Context()); err != nil {
+					slog.Debug("could not refresh auth after insufficient scopes response", "err", err)
+
+					return resp, nil
+				}
+
+				drainAndClose(resp.Body)
+
+				retriedAuth = true
+
+				continue
+			}
+		}
+
 		// Other errors (4xx except 429): don't retry
 		return resp, nil
 	}
 }
 
+func capRetryAfter(wait time.Duration) time.Duration {
+	if wait > maxRetryAfter {
+		return maxRetryAfter
+	}
+
+	return wait
+}
+
 func (t *RetryTransport) calculateBackoff(attempt int, resp *http.Response) time.Duration {
 	// Check Retry-After header
 	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-		if seconds, err := strconv.Atoi(retryAfter); err == nil {
+		if seconds, err := strconv.ParseInt(retryAfter, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
 			if seconds < 0 {
 				return 0
+			}
+
+			// Bound seconds before converting to a duration to avoid overflow.
+			if seconds >= int64(maxRetryAfter/time.Second) {
+				return maxRetryAfter
 			}
 
 			return time.Duration(seconds) * time.Second
@@ -149,7 +258,7 @@ func (t *RetryTransport) calculateBackoff(attempt int, resp *http.Response) time
 				return 0
 			}
 
-			return d
+			return capRetryAfter(d)
 		}
 	}
 
@@ -170,9 +279,26 @@ func (t *RetryTransport) calculateBackoff(attempt int, resp *http.Response) time
 	if jitterRange <= 0 {
 		return baseDelay
 	}
-	jitter := time.Duration(rand.Int64N(int64(jitterRange))) //nolint:gosec // non-crypto jitter
+
+	jitter, err := randomDurationBelow(jitterRange)
+	if err != nil {
+		return baseDelay
+	}
 
 	return baseDelay + jitter
+}
+
+func randomDurationBelow(upperBound time.Duration) (time.Duration, error) {
+	if upperBound <= 0 {
+		return 0, nil
+	}
+
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(upperBound)))
+	if err != nil {
+		return 0, fmt.Errorf("generate retry jitter: %w", err)
+	}
+
+	return time.Duration(n.Int64()), nil
 }
 
 func (t *RetryTransport) sleep(ctx context.Context, d time.Duration) error {
@@ -191,43 +317,33 @@ func (t *RetryTransport) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// bytesReader is a simple bytes.Reader replacement to avoid import
-type bytesReader struct {
-	data []byte
-	pos  int
-}
-
-func newBytesReader(data []byte) *bytesReader {
-	return &bytesReader{data: data}
-}
-
-func (r *bytesReader) Read(p []byte) (n int, err error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.data[r.pos:])
-	r.pos += n
-
-	return n, nil
-}
-
-func ensureReplayableBody(req *http.Request) error {
+func ensureReplayableBody(req *http.Request) (bool, error) {
 	if req == nil || req.Body == nil || req.GetBody != nil {
-		return nil
+		return true, nil
 	}
 
-	bodyBytes, err := io.ReadAll(req.Body)
+	if req.ContentLength <= 0 || req.ContentLength > maxBufferedReplayBodyBytes {
+		return false, nil
+	}
+
+	// Once buffering starts, this transport owns closing the original body,
+	// including when reading or enforcing the replay limit fails.
+	defer req.Body.Close()
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxBufferedReplayBodyBytes+1))
 	if err != nil {
-		return fmt.Errorf("read request body: %w", err)
+		return false, fmt.Errorf("read request body: %w", err)
 	}
-	_ = req.Body.Close()
 
+	if int64(len(bodyBytes)) > maxBufferedReplayBodyBytes {
+		return false, fmt.Errorf("%w: %d bytes exceeds %d bytes", errRequestBodyTooLarge, len(bodyBytes), maxBufferedReplayBodyBytes)
+	}
 	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(newBytesReader(bodyBytes)), nil
+		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
 	}
-	req.Body = io.NopCloser(newBytesReader(bodyBytes))
+	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-	return nil
+	return true, nil
 }
 
 func drainAndClose(body io.ReadCloser) {
@@ -236,4 +352,50 @@ func drainAndClose(body io.ReadCloser) {
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(body, 1<<20))
 	_ = body.Close()
+}
+
+func responseIndicatesInsufficientScopes(resp *http.Response) (bool, error) {
+	if resp == nil || resp.Body == nil {
+		return false, nil
+	}
+
+	if resp.ContentLength > maxAuthRetryResponseBodyBytes {
+		return false, nil
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthRetryResponseBodyBytes+1))
+	if err != nil {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{Reader: io.MultiReader(bytes.NewReader(bodyBytes), resp.Body), Closer: resp.Body}
+
+		return false, fmt.Errorf("read auth failure response: %w", err)
+	}
+
+	if int64(len(bodyBytes)) > maxAuthRetryResponseBodyBytes {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{Reader: io.MultiReader(bytes.NewReader(bodyBytes), resp.Body), Closer: resp.Body}
+
+		return false, nil
+	}
+
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	text := strings.ToLower(string(bodyBytes))
+	normalized := strings.NewReplacer("_", " ", "-", " ").Replace(text)
+
+	return strings.Contains(normalized, "insufficient authentication scopes") ||
+		strings.Contains(normalized, "insufficient scopes") ||
+		strings.Contains(normalized, "insufficientpermissions") ||
+		strings.Contains(normalized, "insufficient permission") ||
+		strings.Contains(normalized, "access token scope insufficient"), nil
+}
+
+func isInvalidGrantError(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	return errors.As(err, &retrieveErr) && strings.EqualFold(strings.TrimSpace(retrieveErr.ErrorCode), "invalid_grant")
 }

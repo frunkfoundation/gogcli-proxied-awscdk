@@ -13,13 +13,52 @@ import (
 	"testing"
 
 	"google.golang.org/api/gmail/v1"
-	"google.golang.org/api/option"
+
+	"github.com/openclaw/gogcli/internal/app"
+	"github.com/openclaw/gogcli/internal/config"
 )
 
-func TestExecute_GmailAttachment_OutPath_JSON(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
+func executeGmailAttachmentJSON(t *testing.T, svc *gmail.Service, args ...string) map[string]any {
+	t.Helper()
+	result := executeWithGmailTestService(t, args, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+	}
+	return parsed
+}
 
+func newGmailAttachmentCacheTestService(t *testing.T, data []byte, filename string, calls *int32) *gmail.Service {
+	t.Helper()
+	encoded := base64.URLEncoding.EncodeToString(data)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1/attachments/a1"):
+			atomic.AddInt32(calls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": encoded})
+		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1") && !strings.Contains(r.URL.Path, "/attachments/"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "m1",
+				"payload": map[string]any{"parts": []map[string]any{{
+					"filename": filename,
+					"body":     map[string]any{"attachmentId": "a1", "size": len(data)},
+				}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	svc, closeServer := newGoogleTestService(t, handler, gmail.NewService)
+	t.Cleanup(closeServer)
+	return svc
+}
+
+func TestExecute_GmailAttachment_OutPath_JSON(t *testing.T) {
 	var attachmentCalls int32
 	var messageCalls int32
 	// 2 bytes => base64 has padding; exercises padded-base64 fallback decode path.
@@ -58,36 +97,16 @@ func TestExecute_GmailAttachment_OutPath_JSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
+	svc := newGmailServiceFromServer(t, srv)
 	outPath := filepath.Join(t.TempDir(), "a.bin")
 
 	run := func() map[string]any {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute([]string{
-					"--json",
-					"--account", "a@b.com",
-					"gmail", "attachment", "m1", "a1",
-					"--out", outPath,
-				}); execErr != nil {
-					t.Fatalf("Execute: %v", execErr)
-				}
-			})
-		})
-		var parsed map[string]any
-		if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
-		}
-		return parsed
+		return executeGmailAttachmentJSON(t, svc,
+			"--json",
+			"--account", "a@b.com",
+			"gmail", "attachment", "m1", "a1",
+			"--out", outPath,
+		)
 	}
 
 	parsed1 := run()
@@ -128,8 +147,10 @@ func TestExecute_GmailAttachment_OutPath_JSON(t *testing.T) {
 }
 
 func TestExecute_GmailAttachment_NameOverride_ConfigDir_JSON(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
+	ambientHome := t.TempDir()
+	t.Setenv("HOME", ambientHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(ambientHome, "ambient-config"))
+	runtimeRoot := t.TempDir()
 
 	// Keep this unpadded base64url variant working too.
 	attachmentData := []byte("ab")
@@ -164,37 +185,38 @@ func TestExecute_GmailAttachment_NameOverride_ConfigDir_JSON(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	svc := newGmailServiceFromServer(t, srv)
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"gmail", "attachment", "m1", "a1",
-				"--name", "override.bin",
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
+	result := executeWithTestRuntime(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"gmail", "attachment", "m1", "a1",
+		"--name", "override.bin",
+	}, &app.Runtime{
+		Layout: config.Layout{
+			ConfigDir:      filepath.Join(runtimeRoot, "config"),
+			ExplicitConfig: true,
+		},
+		Services: app.Services{
+			Gmail: func(context.Context, string) (*gmail.Service, error) {
+				return svc, nil
+			},
+		},
 	})
-
+	if result.err != nil {
+		t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+	}
 	var parsed map[string]any
-	if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
 	}
 	path, _ := parsed["path"].(string)
 	if !strings.Contains(path, "override.bin") || !strings.Contains(path, "m1_a1_") {
 		t.Fatalf("unexpected path=%q", path)
+	}
+	wantDir := filepath.Join(runtimeRoot, "config", "gmail-attachments")
+	if filepath.Dir(path) != wantDir {
+		t.Fatalf("path dir=%q want=%q", filepath.Dir(path), wantDir)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -203,12 +225,12 @@ func TestExecute_GmailAttachment_NameOverride_ConfigDir_JSON(t *testing.T) {
 	if string(b) != string(attachmentData) {
 		t.Fatalf("content=%q", string(b))
 	}
+	if _, err := os.Stat(filepath.Join(ambientHome, "ambient-config")); !os.IsNotExist(err) {
+		t.Fatalf("ambient config touched: %v", err)
+	}
 }
 
 func TestExecute_GmailAttachment_NotFound(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1/attachments/"):
@@ -238,25 +260,14 @@ func TestExecute_GmailAttachment_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
 	outPath := filepath.Join(t.TempDir(), "a.bin")
-
-	err = Execute([]string{
+	result := executeWithGmailTestService(t, []string{
 		"--json",
 		"--account", "a@b.com",
 		"gmail", "attachment", "m1", "a1",
 		"--out", outPath,
-	})
-	if err == nil {
+	}, newGmailServiceFromServer(t, srv))
+	if result.err == nil {
 		t.Fatalf("expected error")
 	}
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
@@ -265,77 +276,20 @@ func TestExecute_GmailAttachment_NotFound(t *testing.T) {
 }
 
 func TestExecute_GmailAttachment_OutDirWithName_JSON(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	var attachmentCalls int32
 	attachmentData := []byte("hello")
-	attachmentEncoded := base64.URLEncoding.EncodeToString(attachmentData)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1/attachments/a1"):
-			atomic.AddInt32(&attachmentCalls, 1)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": attachmentEncoded})
-			return
-		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1") && !strings.Contains(r.URL.Path, "/attachments/"):
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "m1",
-				"payload": map[string]any{
-					"parts": []map[string]any{
-						{
-							"filename": "ignored.bin",
-							"body": map[string]any{
-								"attachmentId": "a1",
-								"size":         len(attachmentData),
-							},
-						},
-					},
-				},
-			})
-			return
-		default:
-			http.NotFound(w, r)
-			return
-		}
-	}))
-	defer srv.Close()
-
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
+	svc := newGmailAttachmentCacheTestService(t, attachmentData, "ignored.bin", &attachmentCalls)
 	outDir := t.TempDir()
 	wantPath := filepath.Join(outDir, "invoice.pdf")
 
 	run := func() map[string]any {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute([]string{
-					"--json",
-					"--account", "a@b.com",
-					"gmail", "attachment", "m1", "a1",
-					"--out", outDir,
-					"--name", "invoice.pdf",
-				}); execErr != nil {
-					t.Fatalf("Execute: %v", execErr)
-				}
-			})
-		})
-
-		var parsed map[string]any
-		if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
-		}
-		return parsed
+		return executeGmailAttachmentJSON(t, svc,
+			"--json",
+			"--account", "a@b.com",
+			"gmail", "attachment", "m1", "a1",
+			"--out", outDir,
+			"--name", "invoice.pdf",
+		)
 	}
 
 	parsed1 := run()
@@ -359,76 +313,21 @@ func TestExecute_GmailAttachment_OutDirWithName_JSON(t *testing.T) {
 }
 
 func TestExecute_GmailAttachment_StaleFileIsRedownloaded(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	var attachmentCalls int32
 	attachmentData := []byte("fresh-bytes")
-	attachmentEncoded := base64.URLEncoding.EncodeToString(attachmentData)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1/attachments/a1"):
-			atomic.AddInt32(&attachmentCalls, 1)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": attachmentEncoded})
-			return
-		case strings.Contains(r.URL.Path, "/gmail/v1/users/me/messages/m1") && !strings.Contains(r.URL.Path, "/attachments/"):
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "m1",
-				"payload": map[string]any{
-					"parts": []map[string]any{
-						{
-							"filename": "a.bin",
-							"body": map[string]any{
-								"attachmentId": "a1",
-								"size":         len(attachmentData),
-							},
-						},
-					},
-				},
-			})
-			return
-		default:
-			http.NotFound(w, r)
-			return
-		}
-	}))
-	defer srv.Close()
-
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailAttachmentCacheTestService(t, attachmentData, "a.bin", &attachmentCalls)
 
 	outPath := filepath.Join(t.TempDir(), "invoice.pdf")
 	if writeErr := os.WriteFile(outPath, []byte("stale"), 0o600); writeErr != nil {
-		t.Fatalf("WriteFile: %v", err)
+		t.Fatalf("WriteFile: %v", writeErr)
 	}
 
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"gmail", "attachment", "m1", "a1",
-				"--out", outPath,
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
-
-	var parsed map[string]any
-	if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
-	}
+	parsed := executeGmailAttachmentJSON(t, svc,
+		"--json",
+		"--account", "a@b.com",
+		"gmail", "attachment", "m1", "a1",
+		"--out", outPath,
+	)
 	if parsed["cached"] != false {
 		t.Fatalf("cached=%v", parsed["cached"])
 	}

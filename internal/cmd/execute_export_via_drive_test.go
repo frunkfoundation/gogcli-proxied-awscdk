@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,13 +17,6 @@ import (
 )
 
 func TestExecute_DocsExport_JSON(t *testing.T) {
-	origNew := newDriveService
-	origExport := driveExportDownload
-	t.Cleanup(func() {
-		newDriveService = origNew
-		driveExportDownload = origExport
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
 			http.NotFound(w, r)
@@ -45,10 +39,9 @@ func TestExecute_DocsExport_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
 	var gotExportMime string
-	driveExportDownload = func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
+	export := func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
 		gotExportMime = mimeType
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -58,27 +51,42 @@ func TestExecute_DocsExport_JSON(t *testing.T) {
 	}
 
 	outBase := filepath.Join(t.TempDir(), "out")
+	if writeErr := os.WriteFile(outBase+".docx", []byte("original"), 0o600); writeErr != nil {
+		t.Fatalf("WriteFile: %v", writeErr)
+	}
 
-	stdout := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"docs", "export", "id1",
-				"--out", outBase,
-				"--format", "docx",
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
+	result := executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"docs", "export", "id1",
+		"--out", outBase,
+		"--format", "docx",
+	}, svc, nil, export)
+	if !errors.Is(result.err, os.ErrExist) {
+		t.Fatalf("expected existing-file error, got %v", result.err)
+	}
+	if got, readErr := os.ReadFile(outBase + ".docx"); readErr != nil || string(got) != "original" {
+		t.Fatalf("existing file changed: data=%q err=%v", got, readErr)
+	}
+
+	result = executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"docs", "export", "id1",
+		"--out", outBase,
+		"--format", "docx",
+		"--overwrite",
+	}, svc, nil, export)
+	if result.err != nil {
+		t.Fatalf("Execute overwrite: %v", result.err)
+	}
 
 	var parsed struct {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	}
-	if unmarshalErr := json.Unmarshal([]byte(stdout), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, stdout)
+	if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 	}
 	if want := outBase + ".docx"; parsed.Path != want || parsed.Size != 3 {
 		t.Fatalf("unexpected: %#v", parsed)
@@ -95,10 +103,85 @@ func TestExecute_DocsExport_JSON(t *testing.T) {
 	}
 }
 
-func TestExecute_DocsExport_TypeMismatch(t *testing.T) {
-	origNew := newDriveService
-	t.Cleanup(func() { newDriveService = origNew })
+func TestExecute_DocsExport_Markdown(t *testing.T) {
+	assertExecuteDocsExport(t, "md", "text/markdown", "# Doc\n")
+}
 
+func TestExecute_DocsExport_HTML(t *testing.T) {
+	assertExecuteDocsExport(t, "html", "text/html", "<h1>Doc</h1>\n")
+}
+
+func assertExecuteDocsExport(t *testing.T, format, wantMime, body string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":       "id1",
+			"name":     "Doc",
+			"mimeType": "application/vnd.google-apps.document",
+		})
+	}))
+	defer srv.Close()
+
+	svc, err := drive.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	var gotExportMime string
+	export := func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
+		gotExportMime = mimeType
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	}
+
+	outBase := filepath.Join(t.TempDir(), "out")
+
+	result := executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"docs", "export", "id1",
+		"--out", outBase,
+		"--format", format,
+	}, svc, nil, export)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		Path string `json:"path"`
+		Size int64  `json:"size"`
+	}
+	if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
+	}
+	if want := outBase + "." + format; parsed.Path != want || parsed.Size != int64(len(body)) {
+		t.Fatalf("unexpected: %#v", parsed)
+	}
+	if gotExportMime != wantMime {
+		t.Fatalf("unexpected export mime type: %q", gotExportMime)
+	}
+	b, err := os.ReadFile(outBase + "." + format)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(b) != body {
+		t.Fatalf("unexpected file contents: %q", string(b))
+	}
+}
+
+func TestExecute_DocsExport_TypeMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
 			http.NotFound(w, r)
@@ -121,26 +204,17 @@ func TestExecute_DocsExport_TypeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
-	errOut := captureStderr(t, func() {
-		if err := Execute([]string{"--account", "a@b.com", "docs", "export", "id1", "--out", filepath.Join(t.TempDir(), "out")}); err == nil {
-			t.Fatalf("expected error")
-		}
-	})
-	if !strings.Contains(errOut, "file is not a Google Doc") {
-		t.Fatalf("unexpected stderr=%q", errOut)
+	result := executeWithDriveTestService(t, []string{"--account", "a@b.com", "docs", "export", "id1", "--out", filepath.Join(t.TempDir(), "out")}, svc)
+	if result.err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(result.stderr, "file is not a Google Doc") {
+		t.Fatalf("unexpected stderr=%q", result.stderr)
 	}
 }
 
 func TestExecute_SheetsExport_DefaultFormat_XLSX(t *testing.T) {
-	origNew := newDriveService
-	origExport := driveExportDownload
-	t.Cleanup(func() {
-		newDriveService = origNew
-		driveExportDownload = origExport
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
 			http.NotFound(w, r)
@@ -163,10 +237,9 @@ func TestExecute_SheetsExport_DefaultFormat_XLSX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
 	var gotExportMime string
-	driveExportDownload = func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
+	export := func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
 		gotExportMime = mimeType
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -177,25 +250,22 @@ func TestExecute_SheetsExport_DefaultFormat_XLSX(t *testing.T) {
 
 	outBase := filepath.Join(t.TempDir(), "out")
 
-	stdout := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"sheets", "export", "id1",
-				"--out", outBase,
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
+	result := executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"sheets", "export", "id1",
+		"--out", outBase,
+	}, svc, nil, export)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
 
 	var parsed struct {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	}
-	if unmarshalErr := json.Unmarshal([]byte(stdout), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, stdout)
+	if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 	}
 	if want := outBase + ".xlsx"; parsed.Path != want || parsed.Size != 3 {
 		t.Fatalf("unexpected: %#v", parsed)
@@ -209,13 +279,6 @@ func TestExecute_SheetsExport_DefaultFormat_XLSX(t *testing.T) {
 }
 
 func TestExecute_SheetsExport_PDF(t *testing.T) {
-	origNew := newDriveService
-	origExport := driveExportDownload
-	t.Cleanup(func() {
-		newDriveService = origNew
-		driveExportDownload = origExport
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
 			http.NotFound(w, r)
@@ -238,10 +301,9 @@ func TestExecute_SheetsExport_PDF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
 	var gotExportMime string
-	driveExportDownload = func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
+	export := func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
 		gotExportMime = mimeType
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -252,26 +314,23 @@ func TestExecute_SheetsExport_PDF(t *testing.T) {
 
 	outBase := filepath.Join(t.TempDir(), "out")
 
-	stdout := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"sheets", "export", "id1",
-				"--out", outBase,
-				"--format", "pdf",
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
+	result := executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"sheets", "export", "id1",
+		"--out", outBase,
+		"--format", "pdf",
+	}, svc, nil, export)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
 
 	var parsed struct {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	}
-	if unmarshalErr := json.Unmarshal([]byte(stdout), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, stdout)
+	if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 	}
 	if want := outBase + ".pdf"; parsed.Path != want || parsed.Size != 3 {
 		t.Fatalf("unexpected: %#v", parsed)
@@ -282,13 +341,6 @@ func TestExecute_SheetsExport_PDF(t *testing.T) {
 }
 
 func TestExecute_SlidesExport_DefaultFormat_PPTX(t *testing.T) {
-	origNew := newDriveService
-	origExport := driveExportDownload
-	t.Cleanup(func() {
-		newDriveService = origNew
-		driveExportDownload = origExport
-	})
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/files/id1") {
 			http.NotFound(w, r)
@@ -311,10 +363,9 @@ func TestExecute_SlidesExport_DefaultFormat_PPTX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
 	var gotExportMime string
-	driveExportDownload = func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
+	export := func(_ context.Context, _ *drive.Service, _ string, mimeType string) (*http.Response, error) {
 		gotExportMime = mimeType
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -325,25 +376,22 @@ func TestExecute_SlidesExport_DefaultFormat_PPTX(t *testing.T) {
 
 	outBase := filepath.Join(t.TempDir(), "out")
 
-	stdout := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{
-				"--json",
-				"--account", "a@b.com",
-				"slides", "export", "id1",
-				"--out", outBase,
-			}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
+	result := executeWithDriveTestOperations(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"slides", "export", "id1",
+		"--out", outBase,
+	}, svc, nil, export)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
 
 	var parsed struct {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	}
-	if unmarshalErr := json.Unmarshal([]byte(stdout), &parsed); unmarshalErr != nil {
-		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, stdout)
+	if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+		t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 	}
 	if want := outBase + ".pptx"; parsed.Path != want || parsed.Size != 3 {
 		t.Fatalf("unexpected: %#v", parsed)

@@ -10,8 +10,11 @@ This folder contains a small Python AWS CDK app that deploys:
 The gogcli client is already wired to:
 
 - send `X-GOG-Account: <email>`
+- send signed `X-GOG-Google-Host: <original-google-host>` and preserve the original Google request path
 - send `x-api-key: <api-key>`
 - SigV4-sign the request for `execute-api`
+
+Managed account API requests, including Gmail history reads during watch processing, use this proxy. `gog gmail watch pull` separately connects to Google Cloud Pub/Sub through its native subscriber client and Application Default Credentials. Those credentials authorize subscription reads and acknowledgements; they do not supply the managed Gmail account's OAuth token. See `internal/cmd/gmail_watch_pull.go` for the subscriber setup.
 
 ## Deploy
 
@@ -67,8 +70,14 @@ Value JSON:
 
 Notes:
 
-- `caller_id` is taken from `requestContext.identity.cognitoIdentityId` when present, else `requestContext.identity.userArn`.
-- Matching is case-insensitive. `emails` entries may also be `"*"` to allow any email for that caller.
+- `caller_id` comes only from API Gateway's authenticated request identity. Cognito identity IDs take precedence; otherwise `userArn` (or an ARN-valued `caller`) identifies the IAM principal.
+- Assumed-role sessions use a stable role identity: `arn:aws:sts::123456789012:assumed-role/proxy-agent/session-name` becomes `arn:aws:iam::123456789012:role/proxy-agent`. Account, partition, and role remain part of the key; session names cannot grant another role's access. IAM user ARNs remain unchanged.
+- Missing or invalid identities, including a bare `AROA...:session-name` without an ARN, are denied before reading allowlists. There is no `unknown` or session-name fallback.
+- Email/domain matching is case-insensitive. `emails` entries may also be `"*"` to allow any email for that caller.
+
+### Existing assumed-role allowlist and policy migration
+
+Before deploying this handler to an existing proxy, create the allowlist and caller-policy parameters under the base64url-encoded stable role identity. The obsolete keys encoded only the STS session name; this handler never reads them. For example, encode `arn:aws:iam::123456789012:role/proxy-agent`, then copy the intended allowlist to `<prefix>/allow/<new_key>` and caller policy to `<policy_prefix>/caller/<new_key>`. Review the combined permissions for that role rather than combining session allowlists automatically. Update any policy `on_match.detail` values or downstream consumers that relied on session names in emitted `caller_id` metadata, and retire the obsolete session-name parameters after rollout.
 
 ### Google Credentials (per account)
 
@@ -112,6 +121,8 @@ Notes:
 
 - For `service_account`, the proxy impersonates the requested `X-GOG-Account` email (domain-wide delegation subject).
 - For `oauth_refresh`, omit `scopes` unless you know the refresh token was minted with those scopes.
+- Warm Lambda invocations reuse access tokens separately for each account until 60 seconds before their reported expiry. Tokens without a usable expiry are never cached.
+- SSM account configuration is refreshed after its existing 60-second cache TTL. A changed credential configuration or default scope list invalidates that account's cached token when the new configuration is observed.
 
 ## Policy Enforcement (Lambda)
 
@@ -189,3 +200,21 @@ export GOG_POLICY_EVENT_BUS_ARN='arn:aws:events:...:event-bus/your-bus'
 
 When enabled and a matching rule has `on_match.emit_event=true`, Lambda emits an EventBridge event with decision metadata.
 Trigger failures are logged but do not change allow/deny results.
+
+## Routing, payloads, and timeouts
+
+`X-GOG-Google-Host` is required and validated against the supported Google API host allowlist, `docs.google.com`, or a valid subdomain of `googleusercontent.com` for Photos Picker media. The original path is preserved, including upload prefixes and API versions. Path-only host inference is obsolete and has been removed. Upgrade clients and the handler together; older clients without the signed host header receive HTTP 400. Proxy authentication/account/routing headers are removed before forwarding, and Google redirects are returned to the client for another signed request.
+
+The request body cap is 4 MiB. `GOG_MAX_REQUEST_BYTES` may lower it, but cannot raise it. This leaves room for ordinary API Gateway event/base64 overhead below Lambda's 6 MiB invocation limit. Gmail's upstream 35 MiB raw-message limit does not apply to this proxy; the proxy body cap includes MIME/base64/JSON content transmitted to Google.
+
+Responses have both a streamed raw-body cap (`GOG_MAX_RESPONSE_BYTES`, default 5,500,000 bytes) and a hard 6 MiB cap on the serialized Lambda response, including headers, base64 expansion, JSON escaping, and the response envelope. Oversized responses return HTTP 502, and upstream response streams are always closed.
+
+Token minting and forwarding share a request budget capped at 27 seconds, or two seconds less than the Lambda invocation's remaining time if shorter. Connect/read timeouts use each phase's remaining budget, token refresh retries are bounded by its refresh deadline, and streamed chunks are checked against the request deadline. Expired budgets return HTTP 504 before starting another phase.
+
+Run the offline Lambda contract and policy checks with the bundled runtime dependencies:
+
+```bash
+uv run --python 3.11 --with-requirements infra/lambda/google_proxy/requirements.txt python -m unittest discover -s infra/lambda/google_proxy -v
+```
+
+Maps/Places and public YouTube API-key modes also retain upstream project credentials and do not consume managed-account Google OAuth tokens. These ancillary API-key requests go directly to their provider; account-authenticated Google API requests use the proxy.

@@ -5,19 +5,21 @@
 - `cmd/gog/`: CLI entrypoint.
 - `internal/`: implementation (`cmd/`, Google API/OAuth, config/secrets, output/UI).
 - Tests: `*_test.go` next to code; opt-in integration suite in `internal/integration/` (build-tagged).
-- `bin/`: build outputs; `docs/`: specs/releasing; `scripts/`: release helpers + `scripts/gog.mjs`.
+- `bin/`: build outputs; `docs/`: specs/releasing; `scripts/`: release helpers.
 
 ## Build, Test, and Development Commands
 
 - `make` / `make build`: build `bin/gog`.
 - `make tools`: install pinned dev tools into `.tools/`.
 - `make fmt` / `make lint` / `make test` / `make ci`: format, lint, test, full local gate.
-- Optional: `pnpm gog …`: build + run in one step.
+- Run from source: `make gog -- …` builds and runs in one step.
+- Tracking worker: `pnpm -C internal/tracking/worker install --frozen-lockfile`, then `make worker-ci`.
+- Remote checks: after `crabbox warmup --keep --timing-json`, hydrate this repository with `crabbox actions hydrate --id <id> --github-runner`; its workflow uses Actions cache semantics that the local adapter does not support. Run `crabbox run --id <id> --timing-json --shell -- "make ci"`, reuse the lease across checks, and stop it when finished with `crabbox stop <id>`.
 - Hooks: `lefthook install` enables pre-commit/pre-push checks.
 
 ## Coding Style & Naming Conventions
 
-- Formatting: `make fmt` (`goimports` local prefix `github.com/steipete/gogcli` + `gofumpt`).
+- Formatting: `make fmt` (`goimports` local prefix `github.com/openclaw/gogcli` + `gofumpt`).
 - Output: keep stdout parseable (`--json` / `--plain`); send human hints/progress to stderr.
 - Gmail labels: treat label IDs as case-sensitive opaque tokens; only case-fold label names for name lookup.
 
@@ -35,12 +37,13 @@
 - Group related changes; avoid bundling unrelated refactors.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
 - PR review flow: when given a PR link, review via `gh pr view` / `gh pr diff` and do not change branches.
+- Maintain `CHANGELOG.md`: add user-visible changes to `Unreleased` as fixes and features land, with PR/issue references and contributor thanks. Finalize that section at release; do not put later work under an already published version. The release-time-only changelog exception for `openclaw/openclaw` does not apply to this repository.
 
 ### PR Workflow (Review vs Land)
 
 - **Review mode (PR link only):** read `gh pr view/diff`; do not switch branches; do not change code.
 - **Landing mode:** temp branch from `main`; bring in PR (squash default; rebase/merge when needed); fix; update `CHANGELOG.md` (PR #/issue + thanks); run `make ci`; final commit; merge to `main`; delete temp; end on `main`.
-- If we squash, add `Co-authored-by:` for the PR author when appropriate; leave a PR comment with what landed + SHAs.
+- If landing contributor work, always add `Co-authored-by:` trailers for PR authors, even when we partially rewrite, group, or manually apply their changes; leave a PR comment with what landed + SHAs.
 - New contributor: thank in `CHANGELOG.md` (and update README contributors list if present).
 
 ## Security & Configuration Tips

@@ -2,51 +2,28 @@ package googleapi
 
 import (
 	"context"
-	"path/filepath"
-	"strings"
 	"testing"
 
-	"golang.org/x/oauth2"
-
-	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/secrets"
+	"github.com/openclaw/gogcli/internal/googleauth"
 )
 
-func TestNewServices_ProxyConfigHappyPath(t *testing.T) {
-	t.Setenv("GOG_PROXY_BASE_URL", "https://abc123.execute-api.us-east-1.amazonaws.com/prod")
-	t.Setenv("GOG_PROXY_API_KEY", "k")
-
-	origRead := readClientCredentials
-	origOpen := openSecretsStore
-	origSA := newServiceAccountTokenSource
-
-	t.Cleanup(func() {
-		readClientCredentials = origRead
-		openSecretsStore = origOpen
-		newServiceAccountTokenSource = origSA
-	})
-
-	readClientCredentials = func(string) (config.ClientCredentials, error) {
-		t.Fatalf("readClientCredentials should not be called")
-		return config.ClientCredentials{}, nil
-	}
-	openSecretsStore = func() (secrets.Store, error) {
-		t.Fatalf("openSecretsStore should not be called")
-		return nil, errBoom
-	}
-	newServiceAccountTokenSource = func(context.Context, []byte, string, []string) (oauth2.TokenSource, error) {
-		t.Fatalf("newServiceAccountTokenSource should not be called")
-		return nil, errBoom
-	}
-
-	ctx := context.Background()
+func TestNewServicesWithProxy(t *testing.T) {
+	ctx := proxyFixtureContext(context.Background(), "https://abc.execute-api.us-east-1.amazonaws.com/prod")
 
 	if _, err := NewGmail(ctx, "a@b.com"); err != nil {
 		t.Fatalf("NewGmail: %v", err)
 	}
 
+	if _, err := NewGmailBatchDelete(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewGmailBatchDelete: %v", err)
+	}
+
 	if _, err := NewDrive(ctx, "a@b.com"); err != nil {
 		t.Fatalf("NewDrive: %v", err)
+	}
+
+	if _, err := NewDriveV2(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewDriveV2: %v", err)
 	}
 
 	if _, err := NewDocs(ctx, "a@b.com"); err != nil {
@@ -69,16 +46,32 @@ func TestNewServices_ProxyConfigHappyPath(t *testing.T) {
 		t.Fatalf("NewSheets: %v", err)
 	}
 
+	if _, err := NewConnectedSheets(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewConnectedSheets: %v", err)
+	}
+
+	if _, err := NewConnectedSheetsWriter(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewConnectedSheetsWriter: %v", err)
+	}
+
 	if _, err := NewTasks(ctx, "a@b.com"); err != nil {
 		t.Fatalf("NewTasks: %v", err)
 	}
 
-	if _, err := NewKeep(ctx, "a@b.com"); err != nil {
-		t.Fatalf("NewKeep: %v", err)
+	if _, err := NewAnalyticsAdmin(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewAnalyticsAdmin: %v", err)
 	}
 
-	if _, err := NewCloudIdentityGroups(ctx, "a@b.com"); err != nil {
-		t.Fatalf("NewCloudIdentityGroups: %v", err)
+	if _, err := NewAnalyticsData(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewAnalyticsData: %v", err)
+	}
+
+	if _, err := NewSearchConsole(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewSearchConsole: %v", err)
+	}
+
+	if _, err := NewKeep(ctx, "a@b.com"); err != nil {
+		t.Fatalf("NewKeep: %v", err)
 	}
 
 	if _, err := NewPeopleContacts(ctx, "a@b.com"); err != nil {
@@ -94,13 +87,28 @@ func TestNewServices_ProxyConfigHappyPath(t *testing.T) {
 	}
 }
 
-func TestNewKeepWithServiceAccountErrors(t *testing.T) {
-	_, err := NewKeepWithServiceAccount(context.Background(), filepath.Join(t.TempDir(), "missing.json"), "a@b.com")
-	if err == nil {
-		t.Fatalf("expected error")
+func TestNewChatScopesAreGrantedByChatAuth(t *testing.T) {
+	granted, err := googleauth.Scopes(googleauth.ServiceChat)
+	if err != nil {
+		t.Fatalf("Scopes(ServiceChat): %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "read service account file") {
-		t.Fatalf("unexpected error: %v", err)
+	seen := make(map[string]struct{}, len(granted))
+	for _, scope := range granted {
+		seen[scope] = struct{}{}
+	}
+
+	requested := []string{
+		scopeChatSpaces,
+		scopeChatMessages,
+		scopeChatMemberships,
+		scopeChatReadStateRO,
+		scopeChatReactionsCreate,
+		scopeChatReactionsRO,
+	}
+	for _, scope := range requested {
+		if _, ok := seen[scope]; !ok {
+			t.Fatalf("NewChat requests scope not granted by chat auth: %s", scope)
+		}
 	}
 }

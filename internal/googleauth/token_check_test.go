@@ -10,7 +10,8 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/steipete/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/authclient"
+	"github.com/openclaw/gogcli/internal/config"
 )
 
 func TestCheckRefreshTokenSuccess(t *testing.T) {
@@ -90,5 +91,39 @@ func TestCheckRefreshTokenReadCredentialsError(t *testing.T) {
 	err := CheckRefreshToken(context.Background(), "default", "good", []string{"scope"}, time.Second)
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestCheckRefreshTokenUsesContextCredentials(t *testing.T) {
+	origRead := readClientCredentials
+	origEndpoint := oauthEndpoint
+
+	t.Cleanup(func() {
+		readClientCredentials = origRead
+		oauthEndpoint = origEndpoint
+	})
+	readClientCredentials = nil
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "access",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer srv.Close()
+
+	oauthEndpoint = oauth2.Endpoint{AuthURL: srv.URL, TokenURL: srv.URL}
+	ctx := authclient.WithCredentialsReader(context.Background(), func(client string) (config.ClientCredentials, error) {
+		if client != "runtime" {
+			t.Fatalf("client = %q", client)
+		}
+
+		return config.ClientCredentials{ClientID: "runtime-id", ClientSecret: "runtime-secret"}, nil
+	})
+
+	if err := CheckRefreshToken(ctx, "runtime", "good", []string{"scope"}, time.Second); err != nil {
+		t.Fatalf("CheckRefreshToken: %v", err)
 	}
 }

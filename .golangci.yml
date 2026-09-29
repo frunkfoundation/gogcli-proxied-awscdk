@@ -1,5 +1,9 @@
 version: "2"
 
+run:
+  # Analyze the minimum supported Go version, not the preferred toolchain.
+  go: "1.26.0"
+
 linters:
   default: none
   enable:
@@ -62,7 +66,8 @@ linters:
               desc: "deprecated; use io or os"
     goconst:
       min-len: 3
-      min-occurrences: 4
+      min-occurrences: 10
+      ignore-tests: true
     gocyclo:
       min-complexity: 50
     forbidigo:
@@ -83,9 +88,9 @@ linters:
           json: snake
           yaml: snake
         overrides:
-          - pkg: github.com/steipete/gogcli/internal/cmd
+          - pkg: github.com/openclaw/gogcli/internal/cmd
             ignore: true
-          - pkg: github.com/steipete/gogcli/internal/googleauth
+          - pkg: github.com/openclaw/gogcli/internal/googleauth
             ignore: true
     wsl_v5:
       allow-first-in-block: true
@@ -98,6 +103,7 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
+        - inline
 
   exclusions:
     presets:
@@ -109,17 +115,21 @@ linters:
           - cyclop
           - gocyclo
           - gosec
-          - dupl
           - goconst
           - tagliatelle
           - paralleltest
       - path: internal/cmd/.*\.go
         linters:
           - err113
+          - goconst
           - wrapcheck
-          - dupl
           - wsl_v5
           - tagliatelle
+      - path: internal/safetyprofile/.*\.go
+        linters:
+          - err113
+          - wrapcheck
+          - wsl_v5
       - path: internal/googleauth/.*\.go
         linters:
           - tagliatelle
@@ -143,4 +153,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/steipete/gogcli
+        - github.com/openclaw/gogcli

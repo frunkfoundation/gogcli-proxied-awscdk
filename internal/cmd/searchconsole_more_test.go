@@ -1,0 +1,450 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+
+	gapi "google.golang.org/api/googleapi"
+	searchconsoleapi "google.golang.org/api/searchconsole/v1"
+
+	"github.com/openclaw/gogcli/internal/app"
+)
+
+func TestWrapSearchConsoleError_AccessNotConfiguredUsesAPILibrary(t *testing.T) {
+	err := wrapSearchConsoleError(&gapi.Error{
+		Code:    http.StatusForbidden,
+		Message: "accessNotConfigured: Search Console API has not been used",
+	})
+	if err == nil {
+		t.Fatal("expected wrapped error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "https://console.cloud.google.com/apis/library/searchconsole.googleapis.com") {
+		t.Fatalf("expected API Library URL, got %q", got)
+	}
+	if strings.Contains(got, "/apis/api/") {
+		t.Fatalf("must not return legacy API path, got %q", got)
+	}
+}
+
+func TestSearchConsoleQueryCmd_BuildRequest(t *testing.T) {
+	cmd := &SearchConsoleQueryCmd{
+		From:        "2026-02-01",
+		To:          "2026-02-28",
+		Dimensions:  "query,page",
+		Type:        "web",
+		Aggregation: "by_page",
+		DataState:   "final",
+		Max:         250,
+		Offset:      10,
+		Filter:      []string{"query:contains:buy shoes", "country:equals:usa"},
+	}
+
+	req, err := cmd.buildRequest(strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	if req.StartDate != "2026-02-01" || req.EndDate != "2026-02-28" {
+		t.Fatalf("unexpected date range: %s - %s", req.StartDate, req.EndDate)
+	}
+	if req.RowLimit != 250 || req.StartRow != 10 {
+		t.Fatalf("unexpected pagination: limit=%d startRow=%d", req.RowLimit, req.StartRow)
+	}
+	if len(req.Dimensions) != 2 || req.Dimensions[0] != "QUERY" || req.Dimensions[1] != "PAGE" {
+		t.Fatalf("unexpected dimensions: %#v", req.Dimensions)
+	}
+	if req.Type != "WEB" || req.AggregationType != "BY_PAGE" || req.DataState != "FINAL" {
+		t.Fatalf("unexpected query options: %#v", req)
+	}
+	if len(req.DimensionFilterGroups) != 1 || req.DimensionFilterGroups[0].GroupType != "AND" {
+		t.Fatalf("unexpected filter groups: %#v", req.DimensionFilterGroups)
+	}
+	if len(req.DimensionFilterGroups[0].Filters) != 2 {
+		t.Fatalf("unexpected filter count: %#v", req.DimensionFilterGroups[0].Filters)
+	}
+	if req.DimensionFilterGroups[0].Filters[0].Dimension != "QUERY" || req.DimensionFilterGroups[0].Filters[0].Operator != "CONTAINS" {
+		t.Fatalf("unexpected first filter: %#v", req.DimensionFilterGroups[0].Filters[0])
+	}
+}
+
+func TestSearchConsoleQueryCmd_BuildRequestFromJSON(t *testing.T) {
+	input := `{
+		"startDate":"2026-02-01",
+		"endDate":"2026-02-10",
+		"rowLimit":50,
+		"searchType":"IMAGE",
+		"dimensions":["QUERY","search_appearance"],
+		"dimensionFilterGroups":[{"groupType":"AND","filters":[{"dimension":"PAGE","operator":"NOT_CONTAINS","expression":"draft"}]}]
+	}`
+	cmd := &SearchConsoleQueryCmd{Request: "-"}
+	req, err := cmd.buildRequest(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if req.RowLimit != 50 {
+		t.Fatalf("unexpected rowLimit: %d", req.RowLimit)
+	}
+	if req.Type != "IMAGE" || req.SearchType != "IMAGE" {
+		t.Fatalf("unexpected type fields: type=%q searchType=%q", req.Type, req.SearchType)
+	}
+	if len(req.Dimensions) != 2 || req.Dimensions[0] != "QUERY" || req.Dimensions[1] != "SEARCH_APPEARANCE" {
+		t.Fatalf("unexpected dimensions: %#v", req.Dimensions)
+	}
+	if len(req.DimensionFilterGroups) != 1 || req.DimensionFilterGroups[0].GroupType != "AND" {
+		t.Fatalf("unexpected filter groups: %#v", req.DimensionFilterGroups)
+	}
+	filter := req.DimensionFilterGroups[0].Filters[0]
+	if filter.Dimension != "PAGE" || filter.Operator != "NOT_CONTAINS" || filter.Expression != "draft" {
+		t.Fatalf("unexpected filter: %#v", filter)
+	}
+}
+
+func TestExecute_SearchConsoleSitesGet_JSON(t *testing.T) {
+	svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !(r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/webmasters/v3/sites/")) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"siteUrl":         "sc-domain:example.com",
+			"permissionLevel": "SITE_OWNER",
+		})
+	}))
+	result := executeWithSearchConsoleTestService(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"searchconsole", "sites", "get", "sc-domain:example.com",
+	}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		Site struct {
+			SiteURL         string `json:"siteUrl"`
+			PermissionLevel string `json:"permissionLevel"`
+		} `json:"site"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.Site.SiteURL != "sc-domain:example.com" || parsed.Site.PermissionLevel != "SITE_OWNER" {
+		t.Fatalf("unexpected payload: %#v", parsed)
+	}
+}
+
+func TestExecute_SearchConsoleSearchAnalyticsQuery_JSON(t *testing.T) {
+	svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/searchAnalytics/query")) {
+			http.NotFound(w, r)
+			return
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req["aggregationType"] != "BY_PAGE" || req["dataState"] != "FINAL" || req["type"] != "WEB" {
+			t.Fatalf("unexpected request payload: %#v", req)
+		}
+		filterGroups, ok := req["dimensionFilterGroups"].([]any)
+		if !ok || len(filterGroups) != 1 {
+			t.Fatalf("unexpected filter groups: %#v", req["dimensionFilterGroups"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"responseAggregationType": "BY_PAGE",
+			"rows": []map[string]any{
+				{
+					"keys":        []string{"gog cli", "https://example.com/docs"},
+					"clicks":      12,
+					"impressions": 300,
+					"ctr":         0.04,
+					"position":    7.3,
+				},
+			},
+		})
+	}))
+	result := executeWithSearchConsoleTestService(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"searchconsole", "searchanalytics", "query", "sc-domain:example.com",
+		"--from", "2026-02-01",
+		"--to", "2026-02-07",
+		"--dimensions", "query,page",
+		"--type", "web",
+		"--aggregation", "by_page",
+		"--data-state", "final",
+		"--filter", "query:contains:gog",
+		"--max", "10",
+	}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		Type                    string `json:"type"`
+		ResponseAggregationType string `json:"response_aggregation_type"`
+		Rows                    []struct {
+			Keys []string `json:"keys"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.Type != "WEB" || parsed.ResponseAggregationType != "BY_PAGE" || len(parsed.Rows) != 1 {
+		t.Fatalf("unexpected payload: %#v", parsed)
+	}
+}
+
+func TestExecute_SearchConsoleSitemapsList_JSON(t *testing.T) {
+	svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !(r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/sitemaps")) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sitemap": []map[string]any{
+				{
+					"path":           "https://example.com/sitemap.xml",
+					"type":           "SITEMAP",
+					"isPending":      false,
+					"warnings":       "1",
+					"errors":         "0",
+					"lastSubmitted":  "2026-02-01",
+					"lastDownloaded": "2026-02-02",
+				},
+			},
+		})
+	}))
+	result := executeWithSearchConsoleTestService(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"searchconsole", "sitemaps", "sc-domain:example.com",
+	}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		Sitemaps []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"sitemaps"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Sitemaps) != 1 || parsed.Sitemaps[0].Path != "https://example.com/sitemap.xml" || parsed.Sitemaps[0].Type != "SITEMAP" {
+		t.Fatalf("unexpected payload: %#v", parsed)
+	}
+}
+
+func TestExecute_SearchConsoleSitemapsSubmit_DryRun_JSON(t *testing.T) {
+	result := executeWithTestRuntime(t, []string{
+		"--json",
+		"--dry-run",
+		"searchconsole", "sitemaps", "submit",
+		"sc-domain:example.com",
+		"https://example.com/sitemap.xml",
+	}, &app.Runtime{})
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		DryRun bool   `json:"dry_run"`
+		Op     string `json:"op"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !parsed.DryRun || parsed.Op != "searchconsole.sitemaps.submit" {
+		t.Fatalf("unexpected payload: %#v", parsed)
+	}
+}
+
+func TestExecute_SearchConsoleSitemaps_InvalidFeedPathIsUsageBeforeDryRun(t *testing.T) {
+	testCases := [][]string{
+		{"--json", "--dry-run", "searchconsole", "sitemaps", "submit", "sc-domain:example.com", "nope"},
+		{"--json", "--dry-run", "searchconsole", "sitemaps", "delete", "sc-domain:example.com", "nope"},
+		{"--json", "--dry-run", "searchconsole", "sitemaps", "submit", "sc-domain:example.com", "ftp://example.com/sitemap.xml"},
+	}
+	for _, args := range testCases {
+		t.Run(strings.Join(args[3:], "_"), func(t *testing.T) {
+			result := executeWithSearchConsoleTestServiceFactory(
+				t,
+				args,
+				unexpectedSearchConsoleTestService(t, "expected validation to fail before creating search console service"),
+			)
+			var exitErr *ExitError
+			if !errors.As(result.err, &exitErr) || exitErr.Code != 2 || !strings.Contains(result.err.Error(), "invalid feedpath") {
+				t.Fatalf("unexpected err: %v", result.err)
+			}
+		})
+	}
+}
+
+func TestExecute_SearchConsoleInspect_JSON(t *testing.T) {
+	svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/urlInspection/index:inspect")) {
+			http.NotFound(w, r)
+			return
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req["siteUrl"] != "sc-domain:example.com" || req["inspectionUrl"] != "https://example.com/docs" || req["languageCode"] != "en-US" {
+			t.Fatalf("unexpected request payload: %#v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"inspectionResult": map[string]any{
+				"inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:example.com",
+				"indexStatusResult": map[string]any{
+					"verdict":        "NEUTRAL",
+					"coverageState":  "Discovered - currently not indexed",
+					"indexingState":  "INDEXING_ALLOWED",
+					"pageFetchState": "SUCCESSFUL",
+					"robotsTxtState": "ALLOWED",
+					"lastCrawlTime":  "2026-08-01T00:00:00Z",
+				},
+			},
+		})
+	}))
+	result := executeWithSearchConsoleTestService(t, []string{
+		"--json",
+		"--account", "a@b.com",
+		"searchconsole", "inspect", "sc-domain:example.com", "https://example.com/docs",
+	}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var parsed struct {
+		SiteURL string `json:"site_url"`
+		URL     string `json:"inspection_url"`
+		Result  struct {
+			InspectionResultLink string `json:"inspectionResultLink"`
+			IndexStatusResult    struct {
+				Verdict       string `json:"verdict"`
+				CoverageState string `json:"coverageState"`
+			} `json:"indexStatusResult"`
+		} `json:"inspectionResult"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.SiteURL != "sc-domain:example.com" || parsed.URL != "https://example.com/docs" {
+		t.Fatalf("unexpected payload: %#v", parsed)
+	}
+	if parsed.Result.IndexStatusResult.Verdict != "NEUTRAL" || parsed.Result.IndexStatusResult.CoverageState != "Discovered - currently not indexed" {
+		t.Fatalf("unexpected index status: %#v", parsed.Result.IndexStatusResult)
+	}
+}
+
+func TestExecute_SearchConsoleInspect_Text(t *testing.T) {
+	svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !(r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/urlInspection/index:inspect")) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"inspectionResult": map[string]any{
+				"indexStatusResult": map[string]any{
+					"verdict":       "PASS",
+					"coverageState": "Submitted and indexed",
+				},
+			},
+		})
+	}))
+	result := executeWithSearchConsoleTestService(t, []string{
+		"--account", "a@b.com",
+		"searchconsole", "inspect", "sc-domain:example.com", "https://example.com/docs",
+	}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+	if !strings.Contains(result.stdout, "verdict") || !strings.Contains(result.stdout, "PASS") || !strings.Contains(result.stdout, "coverage_state") || !strings.Contains(result.stdout, "Submitted and indexed") {
+		t.Fatalf("unexpected out=%q", result.stdout)
+	}
+}
+
+func TestExecute_SearchConsoleInspect_EmptyArgsAreUsageBeforeServiceCall(t *testing.T) {
+	testCases := [][]string{
+		{"--account", "a@b.com", "searchconsole", "inspect", " ", "https://example.com/docs"},
+		{"--account", "a@b.com", "searchconsole", "inspect", "sc-domain:example.com", " "},
+	}
+	for _, args := range testCases {
+		t.Run(strings.Join(args[3:], "_"), func(t *testing.T) {
+			result := executeWithSearchConsoleTestServiceFactory(
+				t,
+				args,
+				unexpectedSearchConsoleTestService(t, "expected validation to fail before creating search console service"),
+			)
+			var exitErr *ExitError
+			if !errors.As(result.err, &exitErr) || exitErr.Code != 2 {
+				t.Fatalf("unexpected err: %v", result.err)
+			}
+		})
+	}
+}
+
+func TestExecute_SearchConsoleInspect_ServiceError(t *testing.T) {
+	result := executeWithSearchConsoleTestServiceFactory(
+		t,
+		[]string{"--account", "a@b.com", "searchconsole", "inspect", "sc-domain:example.com", "https://example.com/docs"},
+		func(context.Context, string) (*searchconsoleapi.Service, error) {
+			return nil, errors.New("search console service down")
+		},
+	)
+	if result.err == nil || !strings.Contains(result.err.Error(), "search console service down") {
+		t.Fatalf("unexpected err: %v", result.err)
+	}
+}
+
+func TestExecute_SearchConsoleInspect_EmptyResultIsError(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprint(jsonOutput), func(t *testing.T) {
+			svc := newSearchConsoleTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			args := []string{"--account", "a@b.com", "searchconsole", "inspect", "sc-domain:example.com", "https://example.com/docs"}
+			if jsonOutput {
+				args = append([]string{"--json"}, args...)
+			}
+			result := executeWithSearchConsoleTestService(t, args, svc)
+			if result.err == nil || !strings.Contains(result.err.Error(), "empty inspection result") {
+				t.Fatalf("expected missing result error, got %v", result.err)
+			}
+			if result.stdout != "" {
+				t.Fatalf("unexpected successful output: %s", result.stdout)
+			}
+		})
+	}
+}
+
+func TestWrapSearchConsoleErrorPreservesPermissionExitCode(t *testing.T) {
+	for _, message := range []string{"accessNotConfigured: API has not been used", "insufficientPermissions"} {
+		t.Run(message, func(t *testing.T) {
+			cause := &gapi.Error{Code: http.StatusForbidden, Message: message}
+			err := wrapSearchConsoleError(cause)
+			if !errors.Is(err, cause) {
+				t.Errorf("provider error lost: %v", err)
+			}
+			if code := ExitCode(stableExitCode(err)); code != exitCodePermissionDenied {
+				t.Fatalf("exit code = %d, want %d", code, exitCodePermissionDenied)
+			}
+		})
+	}
+}

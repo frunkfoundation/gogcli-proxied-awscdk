@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -14,8 +15,11 @@ const (
 	KeyKeyringBackend Key = "keyring_backend"
 	KeyDefaultAccount Key = "default_account"
 	KeyProxyBaseURL   Key = "proxy_base_url"
-	KeyProxyAPIKey    Key = "proxy_api_key"
+	KeyProxyAPIKey    Key = "proxy_api_key" //nolint:gosec // Configuration key name.
 	KeyAWSProfile     Key = "aws_profile"
+	KeyGmailNoSend    Key = "gmail_no_send"
+	KeyYoutubeAPIKey  Key = "youtube_api_key"
+	KeyPlacesAPIKey   Key = "places_api_key"
 )
 
 type KeySpec struct {
@@ -24,6 +28,7 @@ type KeySpec struct {
 	Set       func(*File, string) error
 	Unset     func(*File)
 	EmptyHint func() string
+	Sensitive bool
 }
 
 var keyOrder = []Key{
@@ -33,6 +38,9 @@ var keyOrder = []Key{
 	KeyProxyBaseURL,
 	KeyProxyAPIKey,
 	KeyAWSProfile,
+	KeyGmailNoSend,
+	KeyYoutubeAPIKey,
+	KeyPlacesAPIKey,
 }
 
 var keySpecs = map[Key]KeySpec{
@@ -46,6 +54,7 @@ var keySpecs = map[Key]KeySpec{
 				return fmt.Errorf("invalid timezone %q: %w (use IANA timezone names like America/New_York, UTC, Europe/London)", value, err)
 			}
 			cfg.DefaultTimezone = value
+
 			return nil
 		},
 		Unset: func(cfg *File) {
@@ -62,6 +71,7 @@ var keySpecs = map[Key]KeySpec{
 		},
 		Set: func(cfg *File, value string) error {
 			cfg.KeyringBackend = value
+
 			return nil
 		},
 		Unset: func(cfg *File) {
@@ -104,7 +114,8 @@ var keySpecs = map[Key]KeySpec{
 		},
 	},
 	KeyProxyAPIKey: {
-		Key: KeyProxyAPIKey,
+		Key:       KeyProxyAPIKey,
+		Sensitive: true,
 		Get: func(cfg File) string {
 			return cfg.ProxyAPIKey
 		},
@@ -135,12 +146,80 @@ var keySpecs = map[Key]KeySpec{
 			return "(not set)"
 		},
 	},
+	KeyGmailNoSend: {
+		Key: KeyGmailNoSend,
+		Get: func(cfg File) string {
+			return boolConfigString(cfg.GmailNoSend)
+		},
+		Set: func(cfg *File, value string) error {
+			parsed, err := parseConfigBool(value)
+			if err != nil {
+				return err
+			}
+			cfg.GmailNoSend = parsed
+
+			return nil
+		},
+		Unset: func(cfg *File) {
+			cfg.GmailNoSend = false
+		},
+		EmptyHint: func() string {
+			return "false"
+		},
+	},
+	KeyYoutubeAPIKey: {
+		Key:       KeyYoutubeAPIKey,
+		Sensitive: true,
+		Get: func(cfg File) string {
+			if v := os.Getenv("GOG_YOUTUBE_API_KEY"); v != "" {
+				return v
+			}
+
+			return cfg.YoutubeAPIKey
+		},
+		Set: func(cfg *File, value string) error {
+			cfg.YoutubeAPIKey = value
+			return nil
+		},
+		Unset: func(cfg *File) {
+			cfg.YoutubeAPIKey = ""
+		},
+		EmptyHint: func() string {
+			return "(not set; set for YouTube Data API: config set youtube_api_key KEY or GOG_YOUTUBE_API_KEY)"
+		},
+	},
+	KeyPlacesAPIKey: {
+		Key:       KeyPlacesAPIKey,
+		Sensitive: true,
+		Get: func(cfg File) string {
+			if v := os.Getenv("GOG_PLACES_API_KEY"); v != "" {
+				return v
+			}
+
+			if v := os.Getenv("GOOGLE_PLACES_API_KEY"); v != "" {
+				return v
+			}
+
+			return cfg.PlacesAPIKey
+		},
+		Set: func(cfg *File, value string) error {
+			cfg.PlacesAPIKey = value
+			return nil
+		},
+		Unset: func(cfg *File) {
+			cfg.PlacesAPIKey = ""
+		},
+		EmptyHint: func() string {
+			return "(not set; set for Places API: config set places_api_key KEY or GOG_PLACES_API_KEY)"
+		},
+	},
 }
 
 var (
 	errUnknownConfigKey     = errors.New("unknown config key")
 	errConfigKeyCannotSet   = errors.New("config key cannot be set")
 	errConfigKeyCannotUnset = errors.New("config key cannot be unset")
+	errInvalidConfigBool    = errors.New("invalid boolean")
 )
 
 func (k Key) String() string {
@@ -220,4 +299,23 @@ func UnsetValue(cfg *File, key Key) error {
 	}
 
 	return fmt.Errorf("%w: %s", errConfigKeyCannotUnset, key)
+}
+
+func parseConfigBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: %q (use true or false)", errInvalidConfigBool, value)
+	}
+}
+
+func boolConfigString(value bool) string {
+	if value {
+		return "true"
+	}
+
+	return "false"
 }

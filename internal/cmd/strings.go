@@ -1,5 +1,8 @@
 package cmd
 
 const (
-	strFile = "file"
+	strDate   = "date"
+	strFile   = "file"
+	strFolder = "folder"
+	strList   = "list"
 )

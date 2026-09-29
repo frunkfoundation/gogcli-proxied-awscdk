@@ -10,43 +10,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/googleauth"
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/secrets"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/app"
+	"github.com/openclaw/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/googleauth"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/secrets"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 func TestAuthAddCmd_JSON_More(t *testing.T) {
-	origOpen := openSecretsStore
-	origAuth := authorizeGoogle
-	origKeychain := ensureKeychainAccess
-	origFetch := fetchAuthorizedEmail
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		authorizeGoogle = origAuth
-		ensureKeychainAccess = origKeychain
-		fetchAuthorizedEmail = origFetch
-	})
-
 	store := newMemSecretsStore()
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
-	authorizeGoogle = func(ctx context.Context, opts googleauth.AuthorizeOptions) (string, error) {
-		if len(opts.Services) == 0 {
-			t.Fatalf("expected services")
-		}
-		return "rt", nil
+	operations := app.AuthOperations{
+		OpenSecretsStore: func() (secrets.Store, error) { return store, nil },
+		AuthorizeGoogle: func(_ context.Context, opts googleauth.AuthorizeOptions) (string, error) {
+			if len(opts.Services) == 0 {
+				t.Fatalf("expected services")
+			}
+			return "rt", nil
+		},
+		FetchAuthorizedIdentity: func(context.Context, string, string, []string, time.Duration) (googleauth.Identity, error) {
+			return googleauth.Identity{Email: "a@b.com"}, nil
+		},
+		EnsureKeychainAccess: func(context.Context) error { return nil },
 	}
-	fetchAuthorizedEmail = func(context.Context, string, string, []string, time.Duration) (string, error) {
-		return "a@b.com", nil
-	}
-	ensureKeychainAccess = func() error { return nil }
 
 	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
 	if uiErr != nil {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
-	ctx := outfmt.WithMode(ui.WithUI(context.Background(), u), outfmt.Mode{JSON: true})
+	ctx := withAuthOperations(
+		outfmt.WithMode(ui.WithUI(context.Background(), u), outfmt.Mode{JSON: true}),
+		operations,
+	)
 
 	cmd := &AuthAddCmd{Email: "a@b.com", ServicesCSV: "gmail,drive"}
 	out := captureStdout(t, func() {
@@ -87,6 +82,7 @@ func TestAuthKeepCmd_JSON_More(t *testing.T) {
 		t.Fatalf("ui.New: %v", uiErr)
 	}
 	ctx := outfmt.WithMode(ui.WithUI(context.Background(), u), outfmt.Mode{JSON: true})
+	ctx = withTestRuntime(ctx, func(*app.Runtime) {})
 
 	cmd := &AuthKeepCmd{Email: "user@example.com", Key: keyPath}
 	out := captureStdout(t, func() {

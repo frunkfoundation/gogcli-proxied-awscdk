@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	"github.com/99designs/keyring"
+	"golang.org/x/oauth2"
 	ggoogleapi "google.golang.org/api/googleapi"
 
-	"github.com/steipete/gogcli/internal/config"
-	gogapi "github.com/steipete/gogcli/internal/googleapi"
+	"github.com/openclaw/gogcli/internal/config"
+	gogapi "github.com/openclaw/gogcli/internal/googleapi"
 )
 
 const (
@@ -25,10 +26,28 @@ const (
 	exitCodeRateLimited      = 7
 	exitCodeRetryable        = 8
 	exitCodeConfig           = 10
+	exitCodeOrphaned         = 11
 
 	// 130 is the conventional "interrupted" exit code (SIGINT / Ctrl-C).
 	exitCodeCancelled = 130
 )
+
+func stableExitCodes() map[string]int {
+	return map[string]int{
+		"ok":                0,
+		"error":             1,
+		"usage":             2,
+		"empty_results":     emptyResultsExitCode,
+		"auth_required":     exitCodeAuthRequired,
+		"not_found":         exitCodeNotFound,
+		"permission_denied": exitCodePermissionDenied,
+		"rate_limited":      exitCodeRateLimited,
+		"retryable":         exitCodeRetryable,
+		"config":            exitCodeConfig,
+		"orphaned":          exitCodeOrphaned,
+		"cancelled":         exitCodeCancelled,
+	}
+}
 
 // stableExitCode wraps common/expected failure modes in ExitError so callers can
 // branch on exit status without needing to parse human-oriented stderr.
@@ -45,9 +64,22 @@ func stableExitCode(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return &ExitError{Code: exitCodeCancelled, Err: err}
 	}
+	if errors.Is(err, gogapi.ErrReadOnly) {
+		return &ExitError{Code: 2, Err: err}
+	}
 
 	var authErr *gogapi.AuthRequiredError
 	if errors.As(err, &authErr) {
+		return &ExitError{Code: exitCodeAuthRequired, Err: err}
+	}
+
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) && strings.EqualFold(strings.TrimSpace(retrieveErr.ErrorCode), "invalid_grant") {
+		return &ExitError{Code: exitCodeAuthRequired, Err: err}
+	}
+
+	var scopeErr *gogapi.InsufficientScopeError
+	if errors.As(err, &scopeErr) {
 		return &ExitError{Code: exitCodeAuthRequired, Err: err}
 	}
 
@@ -63,6 +95,13 @@ func stableExitCode(err error) error {
 
 	if errors.Is(err, keyring.ErrKeyNotFound) {
 		return &ExitError{Code: exitCodeAuthRequired, Err: err}
+	}
+
+	var httpErr *gogapi.HTTPStatusError
+	if errors.As(err, &httpErr) {
+		if code := httpStatusExitCode(httpErr.Code, httpErr.Status); code != 1 {
+			return &ExitError{Code: code, Err: err}
+		}
 	}
 
 	var gerr *ggoogleapi.Error
@@ -103,7 +142,11 @@ func googleAPIExitCode(err *ggoogleapi.Error) int {
 		reason = strings.TrimSpace(strings.ToLower(err.Errors[0].Reason))
 	}
 
-	switch err.Code {
+	return httpStatusExitCode(err.Code, reason)
+}
+
+func httpStatusExitCode(code int, reason string) int {
+	switch code {
 	case 401:
 		return exitCodeAuthRequired
 	case 403:
@@ -116,7 +159,7 @@ func googleAPIExitCode(err *ggoogleapi.Error) int {
 	case 429:
 		return exitCodeRateLimited
 	default:
-		if err.Code >= 500 {
+		if code >= 500 {
 			return exitCodeRetryable
 		}
 	}
@@ -125,7 +168,10 @@ func googleAPIExitCode(err *ggoogleapi.Error) int {
 }
 
 func isQuotaOrRateLimitReason(reason string) bool {
-	switch strings.TrimSpace(strings.ToLower(reason)) {
+	normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(
+		strings.TrimSpace(strings.ToLower(reason)),
+	)
+	switch normalized {
 	case "ratelimitexceeded",
 		"userratelimitexceeded",
 		"quotaexceeded",

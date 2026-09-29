@@ -3,12 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"google.golang.org/api/slides/v1"
+
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type SlidesListSlidesCmd struct {
@@ -28,7 +29,7 @@ func (c *SlidesListSlidesCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty presentationId")
 	}
 
-	slidesSvc, err := newSlidesService(ctx, account)
+	slidesSvc, err := slidesService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -42,11 +43,12 @@ func (c *SlidesListSlidesCmd) Run(ctx context.Context, flags *RootFlags) error {
 		items := make([]map[string]any, len(pres.Slides))
 		for i, s := range pres.Slides {
 			items[i] = map[string]any{
-				"number":   i + 1,
-				"objectId": s.ObjectId,
+				"number":    i + 1,
+				"objectId":  s.ObjectId,
+				"isSkipped": slideIsSkipped(s),
 			}
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"presentationId": presentationID,
 			"title":          pres.Title,
 			"slideCount":     len(pres.Slides),
@@ -54,14 +56,25 @@ func (c *SlidesListSlidesCmd) Run(ctx context.Context, flags *RootFlags) error {
 		})
 	}
 
-	u.Out().Printf("Presentation: %s (%d slides)", pres.Title, len(pres.Slides))
+	u.Out().Linef("Presentation: %s (%d slides)", pres.Title, len(pres.Slides))
 	u.Out().Println("")
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "#\tOBJECT ID")
-	for i, s := range pres.Slides {
-		fmt.Fprintf(tw, "%d\t%s\n", i+1, s.ObjectId)
+	tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
+	if outfmt.IsPlain(ctx) {
+		fmt.Fprintln(tw, "#\tOBJECT ID")
+		for i, s := range pres.Slides {
+			fmt.Fprintf(tw, "%d\t%s\n", i+1, s.ObjectId)
+		}
+	} else {
+		fmt.Fprintln(tw, "#\tOBJECT ID\tSKIPPED")
+		for i, s := range pres.Slides {
+			fmt.Fprintf(tw, "%d\t%s\t%t\n", i+1, s.ObjectId, slideIsSkipped(s))
+		}
 	}
 	_ = tw.Flush()
 	return nil
+}
+
+func slideIsSkipped(slide *slides.Page) bool {
+	return slide != nil && slide.SlideProperties != nil && slide.SlideProperties.IsSkipped
 }

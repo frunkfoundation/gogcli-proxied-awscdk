@@ -13,17 +13,24 @@ import (
 
 	"github.com/99designs/keyring"
 
-	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/secrets"
+	"github.com/openclaw/gogcli/internal/app"
+	"github.com/openclaw/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/oauthclient"
+	"github.com/openclaw/gogcli/internal/secrets"
 )
 
 type memSecretsStore struct {
 	tokens   map[string]secrets.Token
 	defaults map[string]string
+	secrets  map[string][]byte
 }
 
 func newMemSecretsStore() *memSecretsStore {
-	return &memSecretsStore{tokens: make(map[string]secrets.Token), defaults: make(map[string]string)}
+	return &memSecretsStore{
+		tokens:   make(map[string]secrets.Token),
+		defaults: make(map[string]string),
+		secrets:  make(map[string][]byte),
+	}
 }
 
 func normalizeEmailTest(s string) string {
@@ -112,33 +119,49 @@ func (s *memSecretsStore) SetDefaultAccount(client string, email string) error {
 	return nil
 }
 
-func TestAuthTokens_ExportImportRoundtrip_JSON(t *testing.T) {
-	origOpen := openSecretsStore
-	origKeychain := ensureKeychainAccess
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		ensureKeychainAccess = origKeychain
-	})
+func (s *memSecretsStore) SetSecret(key string, value []byte) error {
+	s.secrets[key] = append([]byte(nil), value...)
+	return nil
+}
 
-	ensureKeychainAccess = func() error { return nil }
+func (s *memSecretsStore) GetSecret(key string) ([]byte, error) {
+	value, ok := s.secrets[key]
+	if !ok {
+		return nil, keyring.ErrKeyNotFound
+	}
+	return append([]byte(nil), value...), nil
+}
+
+func (s *memSecretsStore) DeleteSecret(key string) error {
+	if _, ok := s.secrets[key]; !ok {
+		return keyring.ErrKeyNotFound
+	}
+	delete(s.secrets, key)
+	return nil
+}
+
+func TestAuthTokens_ExportImportRoundtrip_JSON(t *testing.T) {
 	store := newMemSecretsStore()
+	runtime := runtimeWithAuthStore(store)
+	runtime.Auth.EnsureKeychainAccess = func(context.Context) error { return nil }
+	execute := func(args []string) error { return executeWithRuntime(args, runtime) }
 	createdAt := time.Date(2025, 12, 12, 0, 0, 0, 0, time.UTC)
 	if err := store.SetToken(config.DefaultClientName, "A@B.COM", secrets.Token{
-		Services:     []string{"gmail"},
-		Scopes:       []string{"s1"},
-		CreatedAt:    createdAt,
-		RefreshToken: "rt",
+		Services:             []string{"gmail"},
+		Scopes:               []string{"s1"},
+		CreatedAt:            createdAt,
+		RefreshToken:         "rt",
+		AccessToken:          "at",
+		AccessTokenExpiresAt: createdAt.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("SetToken: %v", err)
 	}
-
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
 
 	outPath := filepath.Join(t.TempDir(), "token.json")
 
 	stdout := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "tokens", "export", "a@b.com", "--out", outPath}); err != nil {
+			if err := execute([]string{"--json", "auth", "tokens", "export", "a@b.com", "--out", outPath}); err != nil {
 				t.Fatalf("Execute export: %v", err)
 			}
 		})
@@ -162,6 +185,9 @@ func TestAuthTokens_ExportImportRoundtrip_JSON(t *testing.T) {
 	if !strings.Contains(string(b), "\"refresh_token\"") {
 		t.Fatalf("expected refresh_token in file: %q", string(b))
 	}
+	if !strings.Contains(string(b), "\"access_token\"") {
+		t.Fatalf("expected access_token in file: %q", string(b))
+	}
 
 	// Clear token, then import it back.
 	if err := store.DeleteToken(config.DefaultClientName, "a@b.com"); err != nil {
@@ -170,7 +196,7 @@ func TestAuthTokens_ExportImportRoundtrip_JSON(t *testing.T) {
 
 	importOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "tokens", "import", outPath}); err != nil {
+			if err := execute([]string{"--json", "auth", "tokens", "import", outPath}); err != nil {
 				t.Fatalf("Execute import: %v", err)
 			}
 		})
@@ -185,29 +211,45 @@ func TestAuthTokens_ExportImportRoundtrip_JSON(t *testing.T) {
 	if !importResp.Imported || importResp.Email != "a@b.com" {
 		t.Fatalf("unexpected import resp: %#v", importResp)
 	}
-	if tok, err := store.GetToken(config.DefaultClientName, "a@b.com"); err != nil || tok.RefreshToken != "rt" {
+	if tok, err := store.GetToken(config.DefaultClientName, "a@b.com"); err != nil || tok.RefreshToken != "rt" || tok.AccessToken != "at" {
 		t.Fatalf("expected token restored, got tok=%#v err=%v", tok, err)
 	}
 }
 
 func TestAuthTokensList_FiltersNonTokenKeys(t *testing.T) {
-	origOpen := openSecretsStore
-	t.Cleanup(func() { openSecretsStore = origOpen })
-
 	store := newMemSecretsStore()
 	_ = store.SetToken(config.DefaultClientName, "a@b.com", secrets.Token{RefreshToken: "rt"})
 	_ = store.SetToken("org", "c@d.com", secrets.Token{RefreshToken: "rt2"})
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
+	runtime := runtimeWithAuthStore(store)
 
 	out := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"auth", "tokens", "list"}); err != nil {
+			if err := executeWithRuntime([]string{"auth", "tokens", "list"}, runtime); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
 		})
 	})
 
 	if !strings.Contains(out, "token:default:a@b.com") || !strings.Contains(out, "token:org:c@d.com") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestAuthTokensList_ListsKeysWithoutDecrypting(t *testing.T) {
+	runtime := runtimeWithAuthStore(&errorTokenStore{
+		keys: []string{secrets.TokenKey(config.DefaultClientName, "a@b.com")},
+		err:  errors.New("read token: aes.KeyUnwrap(): integrity check failed"),
+	})
+
+	out := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := executeWithRuntime([]string{"auth", "tokens", "list"}, runtime); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+		})
+	})
+
+	if strings.TrimSpace(out) != "token:default:a@b.com" {
 		t.Fatalf("unexpected output: %q", out)
 	}
 }
@@ -253,11 +295,10 @@ func TestAuthStatus_Text_ConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	os.Unsetenv("GOG_KEYRING_BACKEND")
+	t.Cleanup(func() { os.Setenv("GOG_KEYRING_BACKEND", "file") })
 
-	cfgPath, err := config.ConfigPath()
-	if err != nil {
-		t.Fatalf("ConfigPath: %v", err)
-	}
+	cfgPath := defaultConfigStoreForTest(t).Path()
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -284,6 +325,392 @@ func TestAuthStatus_Text_ConfigFile(t *testing.T) {
 	}
 }
 
+type errorTokenStore struct {
+	keys      []string
+	err       error
+	keysCalls int
+	getErrs   []error
+	getCalls  int
+}
+
+func (s *errorTokenStore) Keys() ([]string, error) {
+	s.keysCalls++
+
+	return s.keys, nil
+}
+
+func (s *errorTokenStore) SetToken(string, string, secrets.Token) error { return nil }
+
+func (s *errorTokenStore) GetToken(string, string) (secrets.Token, error) {
+	s.getCalls++
+	if s.getCalls <= len(s.getErrs) {
+		return secrets.Token{}, s.getErrs[s.getCalls-1]
+	}
+	return secrets.Token{}, s.err
+}
+
+func (s *errorTokenStore) DeleteToken(string, string) error { return nil }
+
+func (s *errorTokenStore) ListTokens() ([]secrets.Token, error) { return nil, s.err }
+
+func (s *errorTokenStore) GetDefaultAccount(string) (string, error) { return "", nil }
+
+func (s *errorTokenStore) SetDefaultAccount(string, string) error { return nil }
+
+func TestAuthListWithFallbackSkipsReadableFallbackOnKeyringTimeout(t *testing.T) {
+	store := &errorTokenStore{
+		keys: []string{secrets.TokenKey(config.DefaultClientName, "a@b.com")},
+		err:  errors.New("list tokens: keyring connection timed out after 10s while reading keyring item"),
+	}
+
+	tokens, readErrors, err := listAuthTokensWithFallback(store)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	if !secrets.IsKeyringTimeout(err) {
+		t.Fatalf("expected keyring timeout, got %v", err)
+	}
+
+	if len(tokens) != 0 || len(readErrors) != 0 {
+		t.Fatalf("expected no fallback results, got tokens=%#v readErrors=%#v", tokens, readErrors)
+	}
+
+	if store.keysCalls != 0 {
+		t.Fatalf("fallback should not call Keys after timeout, got %d calls", store.keysCalls)
+	}
+}
+
+func TestAuthListWithFallbackStopsReadableFallbackOnKeyringTimeout(t *testing.T) {
+	store := &errorTokenStore{
+		keys: []string{
+			secrets.TokenKey(config.DefaultClientName, "broken@example.com"),
+			secrets.TokenKey(config.DefaultClientName, "timeout@example.com"),
+			secrets.TokenKey(config.DefaultClientName, "unread@example.com"),
+		},
+		err: errors.New("list tokens: malformed token"),
+		getErrs: []error{
+			errors.New("decode token: malformed payload"),
+			errors.New("keyring connection timed out after 10s while reading keyring item"),
+			errors.New("must not be read"),
+		},
+	}
+
+	tokens, readErrors, err := listAuthTokensWithFallback(store)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !secrets.IsKeyringTimeout(err) {
+		t.Fatalf("expected keyring timeout, got %v", err)
+	}
+	if len(tokens) != 0 || len(readErrors) != 0 {
+		t.Fatalf("expected no partial fallback results, got tokens=%#v readErrors=%#v", tokens, readErrors)
+	}
+	if store.getCalls != 2 {
+		t.Fatalf("fallback should stop after timeout, got %d token reads", store.getCalls)
+	}
+}
+
+func TestAuthDoctor_JSON_ClassifiesFileKeyringIntegrity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOG_KEYRING_BACKEND", "file")
+	t.Setenv("GOG_KEYRING_PASSWORD", "pw")
+
+	runtime := runtimeWithAuthStore(&errorTokenStore{
+		keys: []string{secrets.TokenKey(config.DefaultClientName, "a@b.com")},
+		err:  errors.New("read token: aes.KeyUnwrap(): integrity check failed"),
+	})
+
+	out := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := executeWithRuntime([]string{"--json", "auth", "doctor"}, runtime); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+		})
+	})
+
+	var payload struct {
+		Status string `json:"status"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Hint   string `json:"hint"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, out)
+	}
+	if payload.Status != "error" {
+		t.Fatalf("status=%q, want error", payload.Status)
+	}
+	found := false
+	for _, check := range payload.Checks {
+		if check.Name == "token.default.a@b.com" && check.Status == "error" && strings.Contains(check.Hint, "password mismatch") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing classified token error: %#v", payload.Checks)
+	}
+}
+
+func TestAuthDoctor_JSON_ReportsForcedKeychainTrust(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	runtime := runtimeWithAuthStore(newMemSecretsStore())
+	runtime.KeyringOptions.Backend = "keychain"
+	runtime.KeyringOptions.GOOS = "darwin"
+	runtime.KeyringOptions.KeychainTrustApplication = "true"
+
+	result := executeWithTestRuntime(t, []string{"--json", "auth", "doctor"}, runtime)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var payload struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &payload); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+	}
+	for _, check := range payload.Checks {
+		if check.Name == "keychain.trust" {
+			if check.Status != "ok" || check.Detail != "forced on via GOG_KEYCHAIN_TRUST_APPLICATION" {
+				t.Fatalf("keychain trust check = %#v", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing keychain.trust check: %#v", payload.Checks)
+}
+
+func TestAuthDoctor_JSON_MissingOptionalConfigIsHealthy(t *testing.T) {
+	t.Setenv("GOG_HOME", t.TempDir())
+	t.Setenv("GOG_KEYRING_BACKEND", "keychain")
+	layout, err := config.NewSystemResolver("").Resolve(config.PathKindConfig, config.PathKindData)
+	if err != nil {
+		t.Fatalf("resolve config layout: %v", err)
+	}
+	store := newMemSecretsStore()
+	credentials, err := oauthclient.NewCredentialsStore(config.NewClientCredentialsStore(layout), store)
+	if err != nil {
+		t.Fatalf("create OAuth credentials store: %v", err)
+	}
+	if err := credentials.Write(config.DefaultClientName, config.ClientCredentials{
+		ClientID:     "test-client.apps.googleusercontent.com",
+		ClientSecret: "fixture-client-secret",
+	}, false); err != nil {
+		t.Fatalf("write OAuth credentials: %v", err)
+	}
+	if err := store.SetToken(config.DefaultClientName, "user@example.com", secrets.Token{RefreshToken: "fixture-token"}); err != nil {
+		t.Fatalf("store fixture token: %v", err)
+	}
+	runtime := runtimeWithAuthStore(store)
+	runtime.KeyringOptions.Backend = "keychain"
+	result := executeWithTestRuntime(t, []string{"--json", "auth", "doctor"}, runtime)
+	if result.err != nil {
+		t.Fatalf("auth doctor: %v", result.err)
+	}
+	var payload struct {
+		Status string            `json:"status"`
+		Checks []authDoctorCheck `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &payload); err != nil {
+		t.Fatalf("decode auth doctor output: %v", err)
+	}
+	if payload.Status != doctorOK {
+		t.Fatalf("status = %q, checks = %#v", payload.Status, payload.Checks)
+	}
+	foundConfig, foundCredentials := false, false
+	for _, check := range payload.Checks {
+		switch check.Name {
+		case "config.path":
+			if check.Status != doctorOK || check.Hint != "" || !strings.Contains(check.Detail, "optional") {
+				t.Fatalf("optional config check = %#v", check)
+			}
+			foundConfig = true
+		case "credentials.default":
+			if check.Status != doctorOK || check.Hint != "" {
+				t.Fatalf("OAuth credentials check = %#v", check)
+			}
+			foundCredentials = true
+		}
+	}
+	if !foundConfig || !foundCredentials {
+		t.Fatalf("missing config or OAuth credentials check: %#v", payload.Checks)
+	}
+	if strings.Contains(result.stdout, "fixture-client-secret") {
+		t.Fatal("auth doctor exposed the OAuth client secret")
+	}
+}
+
+func TestAuthDoctor_JSON_ReportsUnusableOAuthCredentials(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		client        string
+		writeMetadata bool
+		secondToken   bool
+		wantHint      string
+	}{
+		{name: "missing client metadata", wantHint: "gog auth credentials <credentials.json>"},
+		{name: "missing keyring secret", writeMetadata: true, wantHint: "gog auth credentials <credentials.json>"},
+		{name: "named client with multiple accounts", client: "work", secondToken: true, wantHint: "gog --client work auth credentials <credentials.json>"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GOG_HOME", t.TempDir())
+			t.Setenv("GOG_KEYRING_BACKEND", "keychain")
+			layout, err := config.NewSystemResolver("").Resolve(config.PathKindConfig, config.PathKindData)
+			if err != nil {
+				t.Fatalf("resolve config layout: %v", err)
+			}
+			client := test.client
+			if client == "" {
+				client = config.DefaultClientName
+			}
+			if test.writeMetadata {
+				if err := config.NewClientCredentialsStore(layout).WriteMetadata(client, config.ClientCredentials{
+					ClientID: "test-client.apps.googleusercontent.com",
+				}); err != nil {
+					t.Fatalf("write OAuth credentials metadata: %v", err)
+				}
+			}
+			store := newMemSecretsStore()
+			if err := store.SetToken(client, "user@example.com", secrets.Token{RefreshToken: "fixture-token"}); err != nil {
+				t.Fatalf("store fixture token: %v", err)
+			}
+			if test.secondToken {
+				if err := store.SetToken(client, "another@example.com", secrets.Token{RefreshToken: "another-fixture-token"}); err != nil {
+					t.Fatalf("store second fixture token: %v", err)
+				}
+			}
+			runtime := runtimeWithAuthStore(store)
+			runtime.KeyringOptions.Backend = "keychain"
+			result := executeWithTestRuntime(t, []string{"--json", "auth", "doctor"}, runtime)
+			if result.err != nil {
+				t.Fatalf("auth doctor: %v", result.err)
+			}
+			var payload struct {
+				Status string            `json:"status"`
+				Checks []authDoctorCheck `json:"checks"`
+			}
+			if err := json.Unmarshal([]byte(result.stdout), &payload); err != nil {
+				t.Fatalf("decode auth doctor output: %v", err)
+			}
+			if payload.Status != doctorError {
+				t.Fatalf("status = %q, checks = %#v", payload.Status, payload.Checks)
+			}
+			credentialsChecks := 0
+			for _, check := range payload.Checks {
+				if check.Name == "credentials."+client {
+					credentialsChecks++
+					if check.Status != doctorError || !strings.Contains(check.Hint, test.wantHint) {
+						t.Fatalf("OAuth credentials check = %#v", check)
+					}
+				}
+			}
+			if credentialsChecks != 1 {
+				t.Fatalf("expected one OAuth credentials check, got %d: %#v", credentialsChecks, payload.Checks)
+			}
+		})
+	}
+}
+
+func TestAuthList_JSON_ReportsUnreadableToken(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	runtime := runtimeWithAuthStore(&errorTokenStore{
+		keys: []string{secrets.TokenKey(config.DefaultClientName, "a@b.com")},
+		err:  errors.New("read token: aes.KeyUnwrap(): integrity check failed"),
+	})
+
+	out := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := executeWithRuntime([]string{"--json", "auth", "list"}, runtime); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+		})
+	})
+
+	var payload struct {
+		Accounts []struct {
+			Email  string `json:"email"`
+			Client string `json:"client"`
+			Auth   string `json:"auth"`
+			Error  string `json:"error"`
+			Hint   string `json:"hint"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, out)
+	}
+	if len(payload.Accounts) != 1 {
+		t.Fatalf("accounts=%#v, want one unreadable token row", payload.Accounts)
+	}
+	account := payload.Accounts[0]
+	if account.Email != "a@b.com" || account.Client != config.DefaultClientName || account.Auth != authTypeOAuth {
+		t.Fatalf("unexpected account row: %#v", account)
+	}
+	if !strings.Contains(account.Error, "integrity check failed") || !strings.Contains(account.Hint, "password mismatch") {
+		t.Fatalf("missing classified unreadable-token details: %#v", account)
+	}
+}
+
+func TestAuthDoctor_JSON_CheckClassifiesInvalidRAPT(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOG_KEYRING_BACKEND", "keychain")
+
+	store := newMemSecretsStore()
+	if err := store.SetToken(config.DefaultClientName, "a@b.com", secrets.Token{
+		RefreshToken: "rt",
+		Scopes:       []string{"scope"},
+	}); err != nil {
+		t.Fatalf("SetToken: %v", err)
+	}
+	result := executeWithTestRuntime(t, []string{"--json", "auth", "doctor", "--check"}, &app.Runtime{
+		Auth: app.AuthOperations{
+			OpenSecretsStore: func() (secrets.Store, error) { return store, nil },
+			CheckRefreshToken: func(context.Context, string, string, []string, time.Duration) error {
+				return errors.New(`oauth2: "invalid_grant" "reauth related error (invalid_rapt)"`)
+			},
+		},
+	})
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+
+	var payload struct {
+		Status string `json:"status"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Hint   string `json:"hint"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &payload); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
+	}
+	if payload.Status != "error" {
+		t.Fatalf("status=%q, want error", payload.Status)
+	}
+	found := false
+	for _, check := range payload.Checks {
+		if check.Name == "refresh.default.a@b.com" && check.Status == "error" && strings.Contains(check.Hint, "service-account") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing invalid_rapt hint: %#v", payload.Checks)
+	}
+}
+
 func TestAuthTokensExport_RequiresOut(t *testing.T) {
 	err := Execute([]string{"--json", "auth", "tokens", "export", "a@b.com"})
 	if err == nil {
@@ -295,20 +722,17 @@ func TestAuthTokensExport_RequiresOut(t *testing.T) {
 }
 
 func TestAuthTokensImport_NoInput(t *testing.T) {
-	origKeychain := ensureKeychainAccess
-	t.Cleanup(func() { ensureKeychainAccess = origKeychain })
-
 	t.Setenv("GOG_KEYRING_BACKEND", "keychain")
-	ensureKeychainAccess = func() error {
-		return errors.New("keychain locked")
-	}
+	runtime := &app.Runtime{Auth: app.AuthOperations{
+		EnsureKeychainAccess: func(context.Context) error { return errors.New("keychain locked") },
+	}}
 
 	outPath := filepath.Join(t.TempDir(), "token.json")
 	if err := os.WriteFile(outPath, []byte(`{"email":"a@b.com","refresh_token":"rt"}`), 0o600); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 
-	err := Execute([]string{"--json", "--no-input", "auth", "tokens", "import", outPath})
+	err := executeWithRuntime([]string{"--json", "--no-input", "auth", "tokens", "import", outPath}, runtime)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -318,27 +742,18 @@ func TestAuthTokensImport_NoInput(t *testing.T) {
 }
 
 func TestAuthTokensImport_FileBackendSkipsKeychain(t *testing.T) {
-	origOpen := openSecretsStore
-	origKeychain := ensureKeychainAccess
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		ensureKeychainAccess = origKeychain
-	})
-
 	t.Setenv("GOG_KEYRING_BACKEND", "file")
-	ensureKeychainAccess = func() error {
-		return errors.New("keychain locked")
-	}
 
 	store := newMemSecretsStore()
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
+	runtime := runtimeWithAuthStore(store)
+	runtime.Auth.EnsureKeychainAccess = func(context.Context) error { return errors.New("keychain locked") }
 
 	outPath := filepath.Join(t.TempDir(), "token.json")
 	if err := os.WriteFile(outPath, []byte(`{"email":"a@b.com","refresh_token":"rt"}`), 0o600); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 
-	if err := Execute([]string{"--json", "auth", "tokens", "import", outPath}); err != nil {
+	if err := executeWithRuntime([]string{"--json", "auth", "tokens", "import", outPath}, runtime); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -348,21 +763,18 @@ func TestAuthTokensImport_FileBackendSkipsKeychain(t *testing.T) {
 }
 
 func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
-	origOpen := openSecretsStore
-	origCheck := checkRefreshToken
-	t.Cleanup(func() {
-		openSecretsStore = origOpen
-		checkRefreshToken = origCheck
-	})
-
 	store := newMemSecretsStore()
-	openSecretsStore = func() (secrets.Store, error) { return store, nil }
 
-	checkRefreshToken = func(_ context.Context, _ string, refreshToken string, _ []string, _ time.Duration) error {
-		if refreshToken == "rt2" {
-			return errors.New("invalid_grant")
-		}
-		return nil
+	runtime := &app.Runtime{
+		Auth: app.AuthOperations{
+			OpenSecretsStore: func() (secrets.Store, error) { return store, nil },
+			CheckRefreshToken: func(_ context.Context, _ string, refreshToken string, _ []string, _ time.Duration) error {
+				if refreshToken == "rt2" {
+					return errors.New("invalid_grant")
+				}
+				return nil
+			},
+		},
 	}
 
 	_ = store.SetToken(config.DefaultClientName, "b@b.com", secrets.Token{RefreshToken: "rt2"})
@@ -370,7 +782,7 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 
 	listOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "list"}); err != nil {
+			if err := executeWithRuntime([]string{"--json", "auth", "list"}, runtime); err != nil {
 				t.Fatalf("Execute list: %v", err)
 			}
 		})
@@ -387,13 +799,10 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 		t.Fatalf("unexpected accounts: %#v", listResp.Accounts)
 	}
 
-	listOut = captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "list", "--check"}); err != nil {
-				t.Fatalf("Execute list --check: %v", err)
-			}
-		})
-	})
+	listChecked := executeWithTestRuntime(t, []string{"--json", "auth", "list", "--check"}, runtime)
+	if listChecked.err != nil {
+		t.Fatalf("Execute list --check: %v", listChecked.err)
+	}
 	var listCheckedResp struct {
 		Accounts []struct {
 			Email string `json:"email"`
@@ -401,8 +810,8 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 			Error string `json:"error,omitempty"`
 		} `json:"accounts"`
 	}
-	if err := json.Unmarshal([]byte(listOut), &listCheckedResp); err != nil {
-		t.Fatalf("list --check json: %v\nout=%q", err, listOut)
+	if err := json.Unmarshal([]byte(listChecked.stdout), &listCheckedResp); err != nil {
+		t.Fatalf("list --check json: %v\nout=%q", err, listChecked.stdout)
 	}
 	if len(listCheckedResp.Accounts) != 2 {
 		t.Fatalf("unexpected accounts: %#v", listCheckedResp.Accounts)
@@ -417,7 +826,7 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 	// Tokens list (keys).
 	keysOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "tokens", "list"}); err != nil {
+			if err := executeWithRuntime([]string{"--json", "auth", "tokens", "list"}, runtime); err != nil {
 				t.Fatalf("Execute tokens list: %v", err)
 			}
 		})
@@ -435,7 +844,7 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 	// Remove (auth remove)
 	rmOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--force", "auth", "remove", "b@b.com"}); err != nil {
+			if err := executeWithRuntime([]string{"--json", "--force", "auth", "remove", "b@b.com"}, runtime); err != nil {
 				t.Fatalf("Execute remove: %v", err)
 			}
 		})
@@ -454,7 +863,7 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 	// Tokens delete (auth tokens delete)
 	delOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--force", "auth", "tokens", "delete", "a@b.com"}); err != nil {
+			if err := executeWithRuntime([]string{"--json", "--force", "auth", "tokens", "delete", "a@b.com"}, runtime); err != nil {
 				t.Fatalf("Execute tokens delete: %v", err)
 			}
 		})
@@ -473,7 +882,7 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 	// Now empty.
 	emptyKeysOut := captureStdout(t, func() {
 		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "auth", "tokens", "list"}); err != nil {
+			if err := executeWithRuntime([]string{"--json", "auth", "tokens", "list"}, runtime); err != nil {
 				t.Fatalf("Execute tokens list: %v", err)
 			}
 		})
@@ -486,5 +895,60 @@ func TestAuthListRemoveTokensListDelete_JSON(t *testing.T) {
 	}
 	if len(emptyKeysResp.Keys) != 0 {
 		t.Fatalf("expected empty keys, got: %#v", emptyKeysResp.Keys)
+	}
+}
+
+func TestAuthRemove_CleansUpConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("GOG_KEYRING_BACKEND", "file")
+
+	store := newMemSecretsStore()
+	_ = store.SetToken("custom-client", "remove@example.com", secrets.Token{RefreshToken: "rt-remove"})
+	runtime := runtimeWithAuthStore(store)
+
+	// Write config with alias and client entries for the email we will remove.
+	cfg := config.File{
+		AccountAliases: map[string]string{
+			"work": "remove@example.com",
+			"keep": "other@example.com",
+		},
+		AccountClients: map[string]string{
+			"remove@example.com": "custom-client",
+			"other@example.com":  "default",
+		},
+	}
+	configStore := defaultConfigStoreForTest(t)
+	if err := configStore.Write(cfg); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+
+	// Run auth remove.
+	_ = captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := executeWithRuntime([]string{"--json", "--force", "auth", "remove", "remove@example.com"}, runtime); err != nil {
+				t.Fatalf("Execute remove: %v", err)
+			}
+		})
+	})
+
+	// Verify config was cleaned up.
+	updated, err := configStore.Read()
+	if err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+
+	if _, ok := updated.AccountAliases["work"]; ok {
+		t.Fatalf("expected alias 'work' to be removed, but it still exists")
+	}
+	if v, ok := updated.AccountAliases["keep"]; !ok || v != "other@example.com" {
+		t.Fatalf("expected alias 'keep' to be preserved, got: %v", updated.AccountAliases)
+	}
+	if _, ok := updated.AccountClients["remove@example.com"]; ok {
+		t.Fatalf("expected account_clients entry for remove@example.com to be removed")
+	}
+	if v, ok := updated.AccountClients["other@example.com"]; !ok || v != "default" {
+		t.Fatalf("expected account_clients entry for other@example.com to be preserved, got: %v", updated.AccountClients)
 	}
 }

@@ -3,13 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/classroom/v1"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type ClassroomTopicsCmd struct {
@@ -29,82 +28,11 @@ type ClassroomTopicsListCmd struct {
 }
 
 func (c *ClassroomTopicsListCmd) Run(ctx context.Context, flags *RootFlags) error {
-	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-	courseID := strings.TrimSpace(c.CourseID)
-	if courseID == "" {
-		return usage("empty courseId")
-	}
-
-	svc, err := newClassroomService(ctx, account)
-	if err != nil {
-		return wrapClassroomError(err)
-	}
-
-	fetch := func(pageToken string) ([]*classroom.Topic, string, error) {
-		call := svc.Courses.Topics.List(courseID).PageSize(c.Max).Context(ctx)
-		if strings.TrimSpace(pageToken) != "" {
-			call = call.PageToken(pageToken)
-		}
-		resp, err := call.Do()
-		if err != nil {
-			return nil, "", wrapClassroomError(err)
-		}
-		return resp.Topic, resp.NextPageToken, nil
-	}
-
-	var topics []*classroom.Topic
-	nextPageToken := ""
-	if c.All {
-		all, err := collectAllPages(c.Page, fetch)
-		if err != nil {
-			return err
-		}
-		topics = all
-	} else {
-		var err error
-		topics, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
-	}
-
-	if outfmt.IsJSON(ctx) {
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-			"topics":        topics,
-			"nextPageToken": nextPageToken,
-		}); err != nil {
-			return err
-		}
-		if len(topics) == 0 {
-			return failEmptyExit(c.FailEmpty)
-		}
-		return nil
-	}
-
-	if len(topics) == 0 {
-		u.Err().Println("No topics")
-		return failEmptyExit(c.FailEmpty)
-	}
-
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "TOPIC_ID\tNAME\tUPDATED")
-	for _, topic := range topics {
-		if topic == nil {
-			continue
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n",
-			sanitizeTab(topic.TopicId),
-			sanitizeTab(topic.Name),
-			sanitizeTab(topic.UpdateTime),
-		)
-	}
-	printNextPageHint(u, nextPageToken)
-	return nil
+	return runClassroomPagedList(ctx, flags, classroomPagedListOptions[classroom.Topic]{
+		parentName: "courseId", parentID: c.CourseID, max: c.Max, page: c.Page, all: c.All,
+		failEmpty: c.FailEmpty, jsonKey: "topics", emptyMessage: "No topics", columns: classroomTopicColumns(),
+		fetch: fetchClassroomTopicPage,
+	})
 }
 
 type ClassroomTopicsGetCmd struct {
@@ -114,10 +42,6 @@ type ClassroomTopicsGetCmd struct {
 
 func (c *ClassroomTopicsGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
 	courseID := strings.TrimSpace(c.CourseID)
 	topicID := strings.TrimSpace(c.TopicID)
 	if courseID == "" {
@@ -127,7 +51,7 @@ func (c *ClassroomTopicsGetCmd) Run(ctx context.Context, flags *RootFlags) error
 		return usage("empty topicId")
 	}
 
-	svc, err := newClassroomService(ctx, account)
+	_, svc, err := requireClassroomService(ctx, flags)
 	if err != nil {
 		return wrapClassroomError(err)
 	}
@@ -138,13 +62,13 @@ func (c *ClassroomTopicsGetCmd) Run(ctx context.Context, flags *RootFlags) error
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": topic})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": topic})
 	}
 
-	u.Out().Printf("id\t%s", topic.TopicId)
-	u.Out().Printf("name\t%s", topic.Name)
+	u.Out().Linef("id\t%s", topic.TopicId)
+	u.Out().Linef("name\t%s", topic.Name)
 	if topic.UpdateTime != "" {
-		u.Out().Printf("updated\t%s", topic.UpdateTime)
+		u.Out().Linef("updated\t%s", topic.UpdateTime)
 	}
 	return nil
 }
@@ -173,12 +97,7 @@ func (c *ClassroomTopicsCreateCmd) Run(ctx context.Context, flags *RootFlags) er
 		return err
 	}
 
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newClassroomService(ctx, account)
+	_, svc, err := requireClassroomService(ctx, flags)
 	if err != nil {
 		return wrapClassroomError(err)
 	}
@@ -189,10 +108,10 @@ func (c *ClassroomTopicsCreateCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": created})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": created})
 	}
-	u.Out().Printf("id\t%s", created.TopicId)
-	u.Out().Printf("name\t%s", created.Name)
+	u.Out().Linef("id\t%s", created.TopicId)
+	u.Out().Linef("name\t%s", created.Name)
 	return nil
 }
 
@@ -227,12 +146,7 @@ func (c *ClassroomTopicsUpdateCmd) Run(ctx context.Context, flags *RootFlags) er
 		return err
 	}
 
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newClassroomService(ctx, account)
+	_, svc, err := requireClassroomService(ctx, flags)
 	if err != nil {
 		return wrapClassroomError(err)
 	}
@@ -243,10 +157,10 @@ func (c *ClassroomTopicsUpdateCmd) Run(ctx context.Context, flags *RootFlags) er
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"topic": updated})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"topic": updated})
 	}
-	u.Out().Printf("id\t%s", updated.TopicId)
-	u.Out().Printf("name\t%s", updated.Name)
+	u.Out().Linef("id\t%s", updated.TopicId)
+	u.Out().Linef("name\t%s", updated.Name)
 	return nil
 }
 
@@ -256,37 +170,15 @@ type ClassroomTopicsDeleteCmd struct {
 }
 
 func (c *ClassroomTopicsDeleteCmd) Run(ctx context.Context, flags *RootFlags) error {
-	u := ui.FromContext(ctx)
-	courseID := strings.TrimSpace(c.CourseID)
-	topicID := strings.TrimSpace(c.TopicID)
-	if courseID == "" {
-		return usage("empty courseId")
-	}
-	if topicID == "" {
-		return usage("empty topicId")
-	}
-
-	if err := confirmDestructive(ctx, flags, fmt.Sprintf("delete topic %s from %s", topicID, courseID)); err != nil {
-		return err
-	}
-
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newClassroomService(ctx, account)
-	if err != nil {
-		return wrapClassroomError(err)
-	}
-
-	if _, err := svc.Courses.Topics.Delete(courseID, topicID).Context(ctx).Do(); err != nil {
-		return wrapClassroomError(err)
-	}
-
-	return writeResult(ctx, u,
-		kv("deleted", true),
-		kv("courseId", courseID),
-		kv("topicId", topicID),
-	)
+	return runClassroomDelete(ctx, flags, c.CourseID, c.TopicID, classroomDeleteOperation{
+		op: "classroom.topics.delete", parentName: "courseId", parentPayloadKey: "course_id", parentResultKey: "courseId",
+		childName: "topicId", childPayloadKey: "topic_id", childResultKey: "topicId", successResultKey: "deleted",
+		action: func(courseID, topicID string) string {
+			return fmt.Sprintf("delete topic %s from %s", topicID, courseID)
+		},
+		delete: func(svc *classroom.Service, courseID, topicID string) error {
+			_, err := svc.Courses.Topics.Delete(courseID, topicID).Context(ctx).Do()
+			return err
+		},
+	})
 }

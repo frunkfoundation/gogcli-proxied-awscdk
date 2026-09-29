@@ -1,0 +1,393 @@
+# Gmail Workflows
+
+read_when:
+- Working with Gmail content, filters, watches, labels, or agent-safe reads.
+- Reviewing Gmail commands that cross from read-only into send or modify flows.
+
+Gmail is one of gog's broadest surfaces. Use command-specific pages for exact
+flags, and use this page to choose the right workflow shape.
+
+## Search and Read
+
+```bash
+gog gmail search 'newer_than:7d' --max 10 --json
+gog gmail get <messageId> --json
+gog gmail thread get <threadId> --json
+```
+
+Thread searches fail if any thread detail cannot be fetched, without emitting a
+partial result list. Retry the search after resolving the reported API error.
+
+Use `--from-contact 'Ada Lovelace'` with `gmail search` to resolve a contact
+into a sender query. If contact search misses, the fallback scans connections
+page by page and retains only exact name or email matches. Multiple matching
+contacts require a more specific selector; a repeated page token stops with a
+pagination error instead of leaving the command stuck.
+
+Query-based bulk message commands and autoreply also reject repeated page
+tokens, including empty pages, before modifying messages or sending replies.
+Their existing `--max` limit still stops the scan as soon as it is reached.
+
+For agents, logs, or issue reports, prefer sanitized content:
+
+```bash
+gog gmail get <messageId> --sanitize-content --json
+gog gmail thread get <threadId> --sanitize-content --json
+```
+
+`--sanitize-content` strips unsafe/raw payload details while keeping useful
+message text for automation. Message JSON remains under the `message` key;
+add `--results-only` to emit that sanitized message directly. Both shapes emit
+the message headers and body once.
+
+Message JSON exposes Reply-To as `headers.reply_to` in both full and default
+metadata reads. With `--sanitize-content`, use `message.headers.reply_to` (or
+`headers.reply_to` with `--results-only`); sanitized thread reads expose it in
+each `thread.messages[].headers.reply_to`. Custom metadata `--headers` lists
+remain explicit: include `Reply-To` when you need it.
+
+```bash
+gog gmail get <messageId> --format metadata --json --select headers.reply_to
+gog gmail get <messageId> --sanitize-content --wrap-untrusted --json
+```
+
+`--wrap-untrusted` marks this externally supplied header as untrusted content,
+including in sanitized thread output. A missing header is empty in ordinary
+message JSON and omitted in sanitized output. Reading Reply-To does not change
+reply routing or send a message.
+
+Thread and draft attachment downloads honor `--dry-run` before opening account
+credentials, fetching messages, or writing files. Thread downloads keep their
+current-directory default or explicit `--out-dir`; draft downloads retain the
+existing configured attachment directory.
+
+## Filters
+
+Export filters as Gmail WebUI-compatible XML:
+
+```bash
+gog gmail settings filters export --out filters.xml
+```
+
+Keep API JSON when a script needs the Gmail API shape:
+
+```bash
+gog gmail settings filters export --format json --json
+```
+
+Command pages:
+
+- [`gog gmail settings filters export`](commands/gog-gmail-settings-filters-export.md)
+- [`gog gmail settings filters list`](commands/gog-gmail-settings-filters-list.md)
+- [`gog gmail settings filters create`](commands/gog-gmail-settings-filters-create.md)
+- [`gog gmail settings filters delete`](commands/gog-gmail-settings-filters-delete.md)
+
+## Drafts Sent from Gmail Web
+
+gog preserves long logical lines when building a plain-text draft from `--body`
+or `--body-file`. Gmail web has been reported to insert hard line breaks when
+it opens and sends such a draft without edits; see the
+[before/after MIME comparison in #1058](https://github.com/openclaw/gogcli/issues/1058#issuecomment-5501187051).
+
+For drafts you intend to review and send in Gmail web, the reported workaround
+is to supply HTML paragraphs through `--body-html` or `--body-html-file`:
+
+```bash
+gog --account you@example.com gmail drafts create \
+  --to recipient@example.com --subject "Draft for review" \
+  --body-html '<p>One continuous paragraph that can reflow.</p><p>Another paragraph.</p>'
+```
+
+This creates an HTML draft; it does not change plain-text MIME behavior. Check
+the draft and recipient-client rendering before relying on the workaround for
+a particular workflow.
+
+## Stage an exact RFC822 message as a draft
+
+Use the same prebuilt MIME file as `gmail send --raw-file` to stage a draft
+without rebuilding its headers, multipart alternatives, or CID inline images:
+
+```bash
+gog --account you@example.com --gmail-no-send gmail drafts create --raw-file approved.eml --json
+gog --account you@example.com --gmail-no-send gmail drafts update DRAFT_ID --raw-file approved.eml --json
+gog --account you@example.com --gmail-no-send gmail drafts create --raw-file - < approved.eml
+```
+
+Raw create and update submit the input bytes unchanged. Raw update replaces the
+entire message: it does not merge the old recipients, attachments, thread ID, or
+reply headers. The draft ID stays stable, but Gmail replaces the nested message
+ID. JSON retains the normal `draftId`, `message`, `threadId`, `inReplyTo`,
+`references`, and `replyContextSource` fields. Text output includes `draft_id`
+and `message_id`.
+
+Rules:
+
+- Supply a non-empty, parseable RFC822 message with exactly one valid `From`
+  address matching the account or a verified send-as alias. The caller's
+  display name is not replaced. Alias validation requires Gmail settings access.
+- Recipients may be omitted for a draft; any supplied recipient addresses must
+  be valid. Direct access tokens and ADC require an explicit `--account`.
+- Compose flags cannot be combined with raw input, including body, recipient,
+  attachment, sender, reply, quote, and update's clear flags. If
+  `GOG_GMAIL_AUTO_FROM_ADDRESSED_ALIAS` is enabled, disable it for raw mode with
+  `--auto-from-addressed-alias=false`.
+- Optional `--thread-id` sets only `message.threadId`; it does not fetch a reply
+  target or rewrite headers. Gmail thread URLs are accepted. To join a thread,
+  the raw message must also contain suitable `In-Reply-To` and `References`
+  headers and a matching subject.
+- Input is limited to 36,700,160 bytes (35 MiB), before the outer base64url
+  encoding. Files and stdin are bounded; oversize inputs fail before any API
+  call. Gmail can still reject messages for other server-side limits.
+- Global and per-account no-send policies permit draft create and update.
+  `--readonly` blocks these mutations before authentication. `--dry-run` works
+  offline, even with `--readonly`, and reports only the source, byte count,
+  SHA-256, optional thread ID, and update's draft ID, never message content.
+- Draft writes need `gmail.compose`, `gmail.modify`, or `mail.google.com` OAuth
+  scope. A token with only `gmail.send` cannot create or update drafts.
+
+Retrieve the stored MIME for verification:
+
+```bash
+gog --account you@example.com --readonly gmail drafts get DRAFT_ID --format raw --plain > stored.eml
+gog --account you@example.com --readonly gmail drafts get DRAFT_ID --format raw --json
+```
+
+Raw text output contains only the decoded RFC822 bytes, without a heading or
+added newline. JSON retains the `draft` envelope with `draft.message.raw` in
+base64url form. The default `--format full` is unchanged. Raw retrieval cannot
+be combined with `--download` or `--use-indexed-attachment-ids`. Omit
+`--wrap-untrusted` when comparing bytes, since text wrapping changes output.
+
+The CLI guarantees unchanged bytes at submission, not unchanged Gmail storage
+or Gmail web editing. Compare the retrieved MIME and inspect the draft in the
+intended mail client before relying on it as a review artifact.
+
+## Send Guardrails
+
+Block send operations globally for one run:
+
+```bash
+gog --gmail-no-send gmail send --to you@example.com --subject test --body body
+```
+
+Or use the environment variable in agent shells:
+
+```bash
+export GOG_GMAIL_NO_SEND=1
+```
+
+For account-specific send blocking, use the no-send config commands:
+
+- [`gog config no-send set`](commands/gog-config-no-send-set.md)
+- [`gog config no-send list`](commands/gog-config-no-send-list.md)
+- [`gog config no-send remove`](commands/gog-config-no-send-remove.md)
+
+### Send an exact RFC822 message
+
+Use raw mode when a trusted caller has already constructed and approved the
+complete message, including its headers and MIME body:
+
+```bash
+gog --account you@example.com gmail send --raw-file approved.eml
+cat approved.eml | gog --account you@example.com gmail send --raw-file - --thread-id <threadId>
+```
+
+Raw mode sends the input bytes unchanged. It cannot be combined with compose,
+reply, attachment, signature, or tracking flags; `--thread-id` is the only
+optional message setting, and Gmail thread URLs are accepted. The single `From`
+address must match the authenticated account or a verified send-as alias;
+checking aliases requires Gmail settings access, so a `--gmail-scope send` token
+can send only from its own account. Direct access tokens and ADC require an
+explicit `--account`. Read-only and global/per-account no-send policies still
+apply. A dry-run validates the RFC822 structure without authentication and
+reports only the source, byte count, SHA-256 digest, and optional thread ID.
+Raw send uses the same 35 MiB input bound as raw drafts.
+
+Command page: [`gog gmail send`](commands/gog-gmail-send.md).
+
+## Import an RFC822 Message
+
+Import one existing RFC822/EML message from a file or stdin:
+
+```bash
+gog gmail import message.eml --label Imported --never-mark-spam
+cat message.eml | gog gmail import - --internal-date-source receivedTime
+```
+
+Use `--dry-run` to parse the message and report its source, byte count, key
+headers, labels, and import controls without authenticating or changing the
+mailbox. `--internal-date-source dateHeader` (the default) asks Gmail to use a
+valid `Date` header; `receivedTime` uses the import time. The optional
+`--process-for-calendar` flag lets Gmail process calendar invitations.
+
+This command imports one message through Gmail's normal delivery scanning and
+classification. It does not fetch from IMAP, synchronize mailboxes, or
+orchestrate bulk migrations.
+
+Command page: [`gog gmail import`](commands/gog-gmail-import.md).
+
+## Modify Labels
+
+`gmail batch modify` and `gmail thread modify` accept repeated literal label
+names or IDs with `--add-label` and `--remove-label`. Commas and backslashes stay
+inside each label name:
+
+```bash
+gog gmail batch modify <messageId> --add-label 'Status, important'
+gog gmail thread modify <threadId> --remove-label 'Projects\Review'
+gog gmail batch modify <messageId> --add INBOX,UNREAD --add-label 'Status, important'
+```
+
+The existing `--add` and `--remove` flags still split comma-separated values.
+Both forms can be repeated and combined. Label IDs remain case-sensitive;
+label names use normal name lookup.
+
+## Reply and Reply All
+
+The Gmail API has no reply method. Clients fetch the original message, build a
+complete RFC MIME message, and call `messages.send`. Use the first-class reply
+commands so gog owns that composition work:
+
+```bash
+gog gmail reply <messageId> --body-file reply.txt
+gog gmail reply-all <messageId> --body-file reply.txt \
+  --bcc '"Introducer" <introducer@example.com>'
+```
+
+Reply defaults match normal Gmail composition:
+
+- The original subject is inherited with one `Re:` prefix.
+- The original message is quoted; use `--no-quote` to omit it.
+- `reply` targets `Reply-To` when present, otherwise `From`.
+- `reply-all` also carries forward original To/Cc recipients while excluding
+  the active account and its send-as aliases.
+- Display names are preserved.
+- CID-backed inline images referenced by quoted HTML are fetched and rebuilt
+  as `multipart/related`. If a referenced MIME part is missing, the command
+  fails instead of sending broken images.
+
+Recipient flags modify the derived recipient set. `--to`, `--cc`, and `--bcc`
+are additive; naming an inherited recipient in a different field moves it
+there. Repeat `--remove` to subtract recipients from every field:
+
+```bash
+gog gmail reply-all <messageId> --body "Thanks all" \
+  --bcc introducer@example.com \
+  --remove former-participant@example.com
+```
+
+An explicit `--subject` override is supported. A changed subject cannot meet
+Gmail's thread-matching requirement, so gog keeps the RFC reply headers but
+does not force the original `threadId`; Gmail creates a new conversation.
+
+To stage a reply for review instead of sending it, use the draft-side
+counterparts. By default they build the same message from the same composition
+flags, saving it as a draft instead of sending, so they work under no-send
+guardrails:
+
+```bash
+gog gmail drafts reply <messageId> --body-file reply.txt
+gog gmail drafts reply-all <messageId> --body "Thanks all"
+```
+
+### Drafts with missing inline images
+
+Missing quoted CID resources still fail by default. For a reviewable draft, opt
+in to replacing an unambiguously missing `<img src="cid:...">` with a visible
+text placeholder:
+
+```bash
+gog --gmail-no-send gmail drafts reply <messageId> --body "Thanks" \
+  --missing-inline-images=placeholder --json
+```
+
+This policy is available only on `drafts reply` and `drafts reply-all`, and cannot
+be combined with `--no-quote`. It preserves the remaining quoted HTML and valid
+inline resources. Placeholders include the missing Content-ID and image alt
+text; the plain alternative retains its original text plus corresponding
+markers, or is derived from the repaired HTML when no plain text exists.
+
+Successful replacement exits zero, warns on stderr, and adds metadata to the
+normal draft result (also retained with `--results-only`):
+
+```json
+{"degraded":true,"warnings":[{"code":"missing_inline_image","sourceMessageId":"source-id","contentId":"missing@example.test","occurrences":1,"replacement":"placeholder"}]}
+```
+
+Have the calling workflow require human review of degraded drafts. Unaffected
+results omit these fields. Dry runs remain offline: they report the requested
+policy without inspecting the source or claiming that degradation will occur.
+
+Only genuinely absent image parts qualify. Missing references in CSS, SVG,
+`srcset`, `<picture>`, or other resource-bearing contexts remain errors, as do
+ambiguous image attributes and complex image styles. Duplicate MIME IDs,
+malformed multipart boundaries, invalid transfer encoding, unavailable body
+data, and failed attachment downloads are never converted to placeholders.
+Before replacing an image, gog fetches the original raw MIME to validate its
+structure and confirm that the part is absent there too. This check accepts
+ordinary mixed/alternative/related MIME, limits the source to 35 MiB, 64 nested
+levels, 1,000 parts, and 64 KiB of headers per part, and rejects embedded messages
+and other multipart types. Messages without missing images need no extra raw fetch.
+
+## Forward
+
+`gog gmail forward` sends a message on with a `Fwd:` subject, a Gmail-style
+forwarded-message block, and the original attachments (skip them with
+`--skip-attachments`). `gog gmail drafts forward` saves the same composition
+as a draft instead; unlike the send side it does not require `--to`, matching
+Gmail's UI, which allows an addressless forward draft:
+
+```bash
+gog gmail forward <messageId> --to colleague@example.com --note "FYI"
+gog gmail drafts forward <messageId> --note "FYI"
+```
+
+Remote HTTP images remain remote references. Only MIME parts referenced with
+`cid:` are copied into the outgoing message.
+
+`gmail send --reply-to-message-id` remains available as lower-level
+composition. It now inherits an omitted subject, but its explicit `--to` and
+`--cc` values retain replacement semantics and quoting remains opt-in. Prefer
+`gmail reply` or `gmail reply-all` for ordinary replies.
+
+Official behavior references:
+
+- [Gmail API: Manage threads](https://developers.google.com/workspace/gmail/api/guides/threads)
+- [Gmail API: Create and send messages](https://developers.google.com/workspace/gmail/api/guides/sending)
+- [RFC 2387: multipart/related](https://www.rfc-editor.org/rfc/rfc2387.html)
+- [RFC 2392: Content-ID URLs](https://www.rfc-editor.org/rfc/rfc2392)
+
+## Attachment Confirmation
+
+`gmail send --json`, `gmail drafts create|update --json`, and
+`gmail drafts reply|reply-all --json` include an `attachments` array when the
+resulting message contains attachments:
+
+```json
+{"attachments":[{"filename":"report.pdf","size":2411233}]}
+```
+
+Sizes are reported in bytes. Draft updates report preserved attachments when
+`--attach` is omitted; `--clear-attachments` removes them and omits the field.
+
+## Watches and Pub/Sub
+
+Gmail watch/PubSub workflows are documented in [Gmail watch](watch.md).
+
+Key command pages:
+
+- [`gog gmail watch start`](commands/gog-gmail-settings-watch-start.md)
+- [`gog gmail watch serve`](commands/gog-gmail-settings-watch-serve.md)
+- [`gog gmail watch pull`](commands/gog-gmail-settings-watch-pull.md)
+- [`gog gmail watch renew`](commands/gog-gmail-settings-watch-renew.md)
+- [`gog gmail history`](commands/gog-gmail-history.md)
+
+## Email Tracking
+
+Open tracking is documented in [Email Tracking](email-tracking.md) and
+[Email Tracking Worker](email-tracking-worker.md).
+
+## Raw Gmail
+
+Use [`gog gmail raw`](commands/gog-gmail-raw.md) when you need the underlying
+Gmail API `Message` object. See [Raw API Dumps](raw-api.md) for safety notes.

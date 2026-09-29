@@ -2,11 +2,10 @@ package cmd
 
 import (
 	"context"
-	"os"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type ClassroomProfileCmd struct {
@@ -28,7 +27,7 @@ func (c *ClassroomProfileGetCmd) Run(ctx context.Context, flags *RootFlags) erro
 		userID = "me"
 	}
 
-	svc, err := newClassroomService(ctx, account)
+	svc, err := classroomService(ctx, account)
 	if err != nil {
 		return wrapClassroomError(err)
 	}
@@ -39,15 +38,15 @@ func (c *ClassroomProfileGetCmd) Run(ctx context.Context, flags *RootFlags) erro
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"profile": profile})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"profile": profile})
 	}
 
-	u.Out().Printf("id\t%s", profile.Id)
-	u.Out().Printf("email\t%s", profile.EmailAddress)
-	u.Out().Printf("name\t%s", profileName(profile))
-	u.Out().Printf("verified_teacher\t%t", profile.VerifiedTeacher)
+	u.Out().Linef("id\t%s", profile.Id)
+	u.Out().Linef("email\t%s", profile.EmailAddress)
+	u.Out().Linef("name\t%s", profileName(profile))
+	u.Out().Linef("verified_teacher\t%t", profile.VerifiedTeacher)
 	if profile.PhotoUrl != "" {
-		u.Out().Printf("photo_url\t%s", profile.PhotoUrl)
+		u.Out().Linef("photo_url\t%s", profile.PhotoUrl)
 	}
 	return nil
 }
