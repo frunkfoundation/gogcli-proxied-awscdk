@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const apiBase = new URL('v1/', new URL('./', location.href));
 let snapshot, csrfToken = '', loading = false, pollTimer;
 const drafts = new Map(), pending = new Set(), keys = new Map();
-let projectDirty = false, reviewedProjectRevision = '', reviewedServices;
+let projectDirty = false, reviewedProjectRevision = '';
 function message(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle('error', error); }
 function element(tag, text, parent) { const node = document.createElement(tag); if (text) node.textContent = text; if (parent) parent.append(node); return node; }
 async function request(route, method = 'GET', body, headers = {}) {
@@ -44,7 +44,7 @@ function renderProject() {
   element('li', 'openid, email', $('serviceDescriptions'));
   document.querySelectorAll('[data-console]').forEach(link => { const url = new URL(link.dataset.console); url.searchParams.set('project', saved.projectId); link.href = url.href; });
   $('saveProject').disabled = !saved.clientConfigured;
-  $('adminInstructions').textContent = 'Please allow Google OAuth client ' + (saved.clientId || '(upload the client JSON first)') + ' in project ' + saved.projectId + ' with scopes: ' + snapshot.serviceOptions.filter(service => !reviewedServices || reviewedServices.includes(service.name)).map(service => service.scope).join(', ') + ', openid, email.';
+  $('adminInstructions').textContent = 'Please allow Google OAuth client ' + (saved.clientId || '(upload the client JSON first)') + ' in project ' + saved.projectId + ' with scopes: ' + snapshot.serviceOptions.map(service => service.scope).join(', ') + ', openid, email.';
   projectDirty = false;
 }
 function openNextStep() { const saved = project(); $(saved?.clientConfigured ? 'confirmStep' : 'apisStep').open = true; }
@@ -84,21 +84,20 @@ function renderAccounts() {
     const selected = snapshot.projects.find(item => item.projectId === draft.projectId);
     const needsSetup = !selected?.clientConfigured || draft.services.some(name => !selected?.apiConfirmed?.[name]);
     const prepare = needsSetup && (!installed || op?.phase === 'authorizing') && !account.recovery_available && !canContinue(op);
-    const primary = element('button', prepare ? 'Prepare Google setup' : op?.phase === 'authorizing' ? canContinue(op) ? 'Continue Google consent' : 'Restart Google consent' : installed ? 'Check saved connection' : account.recovery_available ? 'Retry saved authorization' : draft.ownerAccessEnabled ? 'Connect and enable my tools' : 'Connect Google only', row); primary.type = 'button'; primary.disabled = pending.has(account.email) || (active(op) && op.phase !== 'authorizing');
-    primary.addEventListener('click', () => prepare ? showProject(draft.projectId, draft.services) : act(account, op?.phase === 'authorizing' ? 'enrollments' : installed ? 'verifications' : account.recovery_available ? 'recoveries' : 'enrollments', status));
-    const secondary = element('details', '', row); secondary.open = openOptions.has(account.email); element('summary', 'Account options', secondary);
-    const projectLabel = element('label', 'Google project', secondary); const select = element('select', '', projectLabel); choices(select, draft.projectId); select.addEventListener('change', () => { draft.projectId = select.value; draft.dirty = true; renderAccounts(); });
-    button(secondary, 'Google setup', () => showProject(draft.projectId, draft.services));
+    if (prepare) status.textContent = 'Complete Google setup above for this project.';
+    const primary = element('button', op?.phase === 'authorizing' ? canContinue(op) ? 'Continue Google consent' : 'Restart Google consent' : installed ? 'Check saved connection' : account.recovery_available ? 'Retry saved authorization' : draft.ownerAccessEnabled ? 'Connect and enable my tools' : 'Connect Google only', row); primary.type = 'button'; primary.disabled = prepare || pending.has(account.email) || (active(op) && op.phase !== 'authorizing');
+    primary.addEventListener('click', () => act(account, op?.phase === 'authorizing' ? 'enrollments' : installed ? 'verifications' : account.recovery_available ? 'recoveries' : 'enrollments', status));
+    const secondary = element('details', '', row); secondary.open = openOptions.has(account.email); element('summary', installed ? 'Connection options' : 'Advanced options', secondary);
+    const projectLabel = element('label', 'Google project (advanced)', secondary); const select = element('select', '', projectLabel); choices(select, draft.projectId); select.addEventListener('change', () => { draft.projectId = select.value; draft.dirty = true; renderAccounts(); });
     if (op?.phase === 'authorizing') button(secondary, 'Restart Google consent', () => act(account, 'enrollments', status, true));
     if (installed) button(secondary, 'Reconnect / add selected service', () => act(account, 'enrollments', status, true));
     if (account.recovery_available) button(secondary, 'Retry saved authorization', () => act(account, 'recoveries', status));
     if (installed) button(secondary, account.owner_access_enabled ? 'Remove my tools’ access' : 'Enable my tools’ access', () => act(account, 'access', status));
     if (installed || account.connection_status === 'disconnecting') button(secondary, 'Disconnect', () => { if (confirm('Disconnect ' + account.email + '? Your Google data is not affected.')) act(account, 'connection', status); });
-    const google = element('a', 'Revoke at Google ↗', secondary); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer';
+    if (installed) { const google = element('a', 'Revoke at Google ↗', secondary); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer'; }
   });
 }
 function button(parent, text, action) { const node = element('button', text, parent); node.type = 'button'; node.addEventListener('click', action); return node; }
-function showProject(id, services) { reviewedServices = services; $('projectId').value = id; renderProject(); openNextStep(); $('projectGuide').scrollIntoView(); $('projectId').focus(); }
 async function act(account, action, status, restart = false) {
   if (pending.has(account.email)) return;
   pending.add(account.email); status.textContent = 'Saving…';
@@ -136,7 +135,7 @@ async function loadSetup() {
   finally { loading = false; }
 }
 $('refresh').addEventListener('click', loadSetup);
-$('projectId').addEventListener('change', () => { reviewedServices = undefined; renderProject(); });
+$('projectId').addEventListener('change', renderProject);
 $('publishingConfirmed').addEventListener('change', markProjectDirty);
 $('saveDefault').addEventListener('click', async () => { try { await request('setup', 'PUT', { defaultProjectId: $('projectId').value }); message('defaultStatus', 'Saved.'); await loadSetup(); } catch (error) { message('defaultStatus', error.message, true); } });
 $('saveProject').addEventListener('click', async () => {

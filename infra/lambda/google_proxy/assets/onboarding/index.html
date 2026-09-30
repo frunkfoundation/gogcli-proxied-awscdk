@@ -12,16 +12,8 @@
   <a id="loginLink" class="button" hidden>Sign in</a>
   <button id="refresh" type="button">Refresh</button>
   <div id="guide" hidden>
-    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
-      <p id="connectedCount" role="status"></p>
-      <div id="accounts"></div>
-      <form id="addAccountsForm"><label for="newEmails">Add accounts</label>
-        <textarea id="newEmails" rows="3" placeholder="Emails, separated by commas or new lines" autocomplete="off"></textarea>
-        <button type="submit">Add</button>
-        <p id="addStatus" role="status" aria-live="polite"></p>
-      </form>
-    </section>
     <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Google setup</h2>
+      <p>Prepare this Google project once, then connect your accounts below. Use the same project for each account unless you need a different one.</p>
       <label for="projectId">Google Cloud project</label><select id="projectId"></select>
       <p id="credentialStatus" class="notice" role="status"></p>
       <details id="apisStep"><summary>1. Enable APIs</summary>
@@ -56,6 +48,15 @@
       </details>
       <details><summary>Default project for new accounts</summary><button id="saveDefault" type="button">Use selected project</button><p id="defaultStatus" role="status"></p></details>
       <details><summary>Blocked by a Workspace administrator?</summary><p>Send them this:</p><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy</button><p id="adminStatus" role="status"></p></details>
+    </section>
+    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
+      <p id="connectedCount" role="status"></p>
+      <div id="accounts"></div>
+      <form id="addAccountsForm"><label for="newEmails">Add accounts</label>
+        <textarea id="newEmails" rows="3" placeholder="Emails, separated by commas or new lines" autocomplete="off"></textarea>
+        <button type="submit">Add</button>
+        <p id="addStatus" role="status" aria-live="polite"></p>
+      </form>
     </section>
     <details><summary>Use the CLI</summary><p>Build with <code>make build</code>, then merge this into the file shown by <code>bin/gog config path</code>:</p><pre id="cliConfig"></pre><p id="callerIdentity" class="small"></p><p>Test with <code>bin/gog auth doctor --check</code>.</p></details>
   </div>

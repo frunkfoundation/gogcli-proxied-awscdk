@@ -93,6 +93,12 @@ administrator approval, or a working Google connection.
 
 ## Connect accounts
 
+Complete the shared **Google setup** above the account list once per project.
+Each account then has its own service choices and Connect button. Use
+**Advanced options → Google project** only when an account needs another project;
+prepare that project in the shared setup section. Connected accounts expose
+repair, access, disconnect, and Google revocation under **Connection options**.
+
 Start with `jay.jakosky@gmail.com`. Add the other addresses individually or paste
 a comma/newline-separated list. Eight is the initial target; more are supported.
 Choose Gmail, Drive, or both. New accounts default to both. Identity permissions

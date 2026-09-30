@@ -32,6 +32,27 @@ def main():
         browser("open", url)
         browser("wait", "#accounts article")
         check("if(document.querySelectorAll('.account')[1].querySelector('button').textContent==='Prepare Google setup') throw Error('Testing project was blocked from consent')")
+        check("""
+          const connected=document.querySelectorAll('.account')[0], fresh=document.querySelectorAll('.account')[1];
+          if([...fresh.querySelectorAll('details button')].some(button=>button.textContent==='Google setup'))
+            throw Error('account options repeat shared Google setup');
+          if(fresh.querySelector('a[href="https://myaccount.google.com/connections"]'))
+            throw Error('unconnected account offers Google revocation');
+          if(!connected.querySelector('a[href="https://myaccount.google.com/connections"]'))
+            throw Error('connected account lost Google revocation');
+          if(!(document.querySelector('#projectGuide').compareDocumentPosition(document.querySelector('#accounts')) & Node.DOCUMENT_POSITION_FOLLOWING))
+            throw Error('shared setup must precede account connections');
+        """)
+        STATE["projects"][0]["clientConfigured"] = False
+        check("document.querySelector('#refresh').click()")
+        browser("wait", "200")
+        check("""
+          const fresh=document.querySelectorAll('.account')[1];
+          if(!fresh.querySelector('button').disabled || !fresh.textContent.includes('Complete Google setup above'))
+            throw Error('unprepared account should wait for shared setup');
+          if(!fresh.querySelector('details select')) throw Error('advanced project selection disappeared');
+        """)
+        STATE["projects"][0]["clientConfigured"] = True
         STATE["projects"][0]["publishingConfirmed"] = True
         check("document.querySelector('#refresh').click()")
         browser("wait", "200")
