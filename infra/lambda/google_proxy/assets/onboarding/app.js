@@ -30,7 +30,8 @@ function choices(select, selected) {
 function renderProject() {
   const saved = project(); if (!saved) return; reviewedProjectRevision = saved.clientRevision;
   $('appName').value = saved.projectId; $('webClientName').value = saved.projectId + ' web client';
-  message('credentialStatus', !saved.clientConfigured ? 'Complete these steps before connecting accounts.' : saved.publishingConfirmed ? 'Setup saved.' : 'Client uploaded. Finish step 4.');
+  $('testUserEmails').textContent = snapshot.accounts.map(account => account.email).join(', ');
+  message('credentialStatus', !saved.clientConfigured ? 'Complete these steps before connecting accounts.' : 'Web client uploaded. Confirm selected APIs, save settings, then connect.');
   $('publishingConfirmed').checked = saved.publishingConfirmed === true;
   $('apiLinks').replaceChildren(); $('apiConfirmations').replaceChildren(); $('serviceDescriptions').replaceChildren();
   snapshot.serviceOptions.forEach(service => {
@@ -46,7 +47,7 @@ function renderProject() {
   $('adminInstructions').textContent = 'Please allow Google OAuth client ' + (saved.clientId || '(upload the client JSON first)') + ' in project ' + saved.projectId + ' with scopes: ' + snapshot.serviceOptions.filter(service => !reviewedServices || reviewedServices.includes(service.name)).map(service => service.scope).join(', ') + ', openid, email.';
   projectDirty = false;
 }
-function openNextStep() { const saved = project(); $(saved?.clientConfigured && !saved.publishingConfirmed ? 'confirmStep' : 'apisStep').open = true; }
+function openNextStep() { const saved = project(); $(saved?.clientConfigured ? 'confirmStep' : 'apisStep').open = true; }
 function markProjectDirty() { projectDirty = true; message('projectSaveStatus', 'Unsaved changes.'); }
 function draftFor(account) {
   if (!drafts.has(account.email)) drafts.set(account.email, { projectId: account.selected_project_id || snapshot.defaultProjectId,
@@ -81,7 +82,7 @@ function renderAccounts() {
       label.append(document.createTextNode('Allow my tools to use this account')); input.addEventListener('change', () => { draft.ownerAccessEnabled = input.checked; draft.dirty = true; renderAccounts(); $('accounts').children[index].querySelector('.owner-access').focus(); });
     } else element('p', 'My tools: ' + (active(op) && op.kind === 'access' ? account.owner_access_enabled ? 'enabling…' : 'removing…' : account.owner_access_enabled ? 'enabled' : 'off'), row);
     const selected = snapshot.projects.find(item => item.projectId === draft.projectId);
-    const needsSetup = !selected?.clientConfigured || !selected?.publishingConfirmed || draft.services.some(name => !selected?.apiConfirmed?.[name]);
+    const needsSetup = !selected?.clientConfigured || draft.services.some(name => !selected?.apiConfirmed?.[name]);
     const prepare = needsSetup && (!installed || op?.phase === 'authorizing') && !account.recovery_available && !canContinue(op);
     const primary = element('button', prepare ? 'Prepare Google setup' : op?.phase === 'authorizing' ? canContinue(op) ? 'Continue Google consent' : 'Restart Google consent' : installed ? 'Check saved connection' : account.recovery_available ? 'Retry saved authorization' : draft.ownerAccessEnabled ? 'Connect and enable my tools' : 'Connect Google only', row); primary.type = 'button'; primary.disabled = pending.has(account.email) || (active(op) && op.phase !== 'authorizing');
     primary.addEventListener('click', () => prepare ? showProject(draft.projectId, draft.services) : act(account, op?.phase === 'authorizing' ? 'enrollments' : installed ? 'verifications' : account.recovery_available ? 'recoveries' : 'enrollments', status));

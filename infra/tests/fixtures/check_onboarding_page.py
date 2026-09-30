@@ -23,6 +23,7 @@ def check(code):
 
 
 def main():
+    STATE["projects"][0]["publishingConfirmed"] = False
     STATE["projects"].append({"projectId": "another-project", "clientRevision": "other-revision"})
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -30,6 +31,10 @@ def main():
     try:
         browser("open", url)
         browser("wait", "#accounts article")
+        check("if(document.querySelectorAll('.account')[1].querySelector('button').textContent==='Prepare Google setup') throw Error('Testing project was blocked from consent')")
+        STATE["projects"][0]["publishingConfirmed"] = True
+        check("document.querySelector('#refresh').click()")
+        browser("wait", "200")
         check(f"""
           const app=document.querySelector('#appName'), client=document.querySelector('#webClientName');
           if(!app?.readOnly || app.value!=={PROJECT!r} || !client?.readOnly || client.value!=={(PROJECT + ' web client')!r})

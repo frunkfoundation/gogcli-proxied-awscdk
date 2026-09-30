@@ -24,8 +24,8 @@ def enroll(service, owner, email, key, session_id, body):
     if not set(account.get("installed_services", [])).issubset(services):
         raise WorkflowError(409, "scope_removal_requires_policy", "Reconnect preserves installed services; narrow caller policy or disconnect.")
     client = service.store.get("CLIENT#" + project)
-    if not client or not client.get("publishing_confirmed") or any(not client.get("api_confirmed", {}).get(name) for name in services):
-        raise WorkflowError(409, "project_setup_required", "Import this project's Web client and confirm publishing and selected service APIs.")
+    if not client or any(not client.get("api_confirmed", {}).get(name) for name in services):
+        raise WorkflowError(409, "project_setup_required", "Import this project's Web client and confirm selected service APIs.")
     enabled = account.get("desired_owner_access", True)
     if not account.get("credential_revision"):
         enabled = body.get("ownerAccessEnabled", enabled)

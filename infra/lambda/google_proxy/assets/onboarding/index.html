@@ -36,7 +36,8 @@
           <li><strong>Developer contact information:</strong> <code>jay.jakosky@gmail.com</code></li>
           <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code></li>
         </ul>
-        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. User type: <strong>External</strong>. If the status is <strong>Testing</strong>, choose <strong>Publish app</strong>.</p>
+        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Keep <strong>External</strong> and <strong>Testing</strong>. Under <strong>Test users</strong>, add the accounts you want to connect: <span id="testUserEmails"></span>.</p>
+        <p>Gmail and Drive refresh tokens issued in Testing expire after seven days; reconnect with fresh Google consent then. Production is optional for longer-lived connections.</p>
         <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Choose <strong>Add or remove scopes</strong>, select these, and save:</p><ul id="serviceDescriptions"></ul>
       </details>
       <details id="clientStep"><summary>3. Create a Web client</summary>
@@ -50,7 +51,7 @@
         <p id="uploadStatus" role="status" aria-live="polite"></p>
       </details>
       <details id="confirmStep"><summary>4. Save reviewed settings</summary>
-        <label class="check"><input id="publishingConfirmed" type="checkbox"> Publishing status is In production</label>
+        <label class="check"><input id="publishingConfirmed" type="checkbox"> In production (optional; leave unchecked for Testing)</label>
         <button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
       </details>
       <details><summary>Default project for new accounts</summary><button id="saveDefault" type="button">Use selected project</button><p id="defaultStatus" role="status"></p></details>

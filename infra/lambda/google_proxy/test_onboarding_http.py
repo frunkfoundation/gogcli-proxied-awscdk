@@ -93,6 +93,36 @@ class ClientImportTests(unittest.TestCase):
             return onboarding.handler({'path': '/onboarding/v1/projects/project-one/oauth-client',
                 'httpMethod': 'PUT', 'body': json.dumps(self.document)}, None)
 
+    def enroll_in_testing(self, api_confirmed):
+        self.assertEqual(200, self.upload()['statusCode'])
+        revision = self.store.get('CLIENT#project-one')['revision']
+        self.service.update_project('owner', 'project-one', {'clientRevision': revision,
+            'publishingConfirmed': False, 'apiConfirmed': api_confirmed})
+        self.service.save_account('owner', 'jay@example.com', {'projectId': 'project-one', 'services': ['drive']})
+        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
+            auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
+            return onboarding.handler({'path': '/onboarding/v1/accounts/jay@example.com/enrollments',
+                'httpMethod': 'POST', 'headers': {'Idempotency-Key': 'testing-consent'}, 'body': '{}'}, None)
+
+    def test_testing_project_can_start_owner_google_consent(self):
+        result = self.enroll_in_testing({'drive': True})
+        self.assertEqual(202, result['statusCode'], result['body'])
+        operation = json.loads(result['body'])
+        self.assertEqual('authorizing', operation['phase'])
+        self.assertTrue(operation['authorizationUrl'].startswith('https://accounts.google.com/o/oauth2/v2/auth?'))
+        self.assertTrue(result['headers']['Location'].endswith('/v1/operations/' + operation['id']))
+        self.assertEqual(operation['id'], self.store.get('ACCOUNT#jay@example.com')['active_operation'])
+        self.assertFalse(self.store.get('CLIENT#project-one')['publishing_confirmed'])
+        self.http.post.assert_not_called()
+
+    def test_testing_project_still_requires_selected_service_api_confirmation(self):
+        result = self.enroll_in_testing({'gmail': True, 'drive': False})
+        self.assertEqual(409, result['statusCode'], result['body'])
+        self.assertEqual('project setup required', json.loads(result['body'])['title'])
+        self.assertFalse(self.store.rows('OP#'))
+        self.assertNotIn('active_operation', self.store.get('ACCOUNT#jay@example.com'))
+        self.http.post.assert_not_called()
+
     def test_google_download_import_uses_canonical_runtime_endpoints(self):
         for endpoint in ('https://accounts.google.com/o/oauth2/auth', 'https://accounts.google.com/o/oauth2/v2/auth'):
             with self.subTest(endpoint=endpoint):

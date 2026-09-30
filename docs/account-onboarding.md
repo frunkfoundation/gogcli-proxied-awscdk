@@ -38,7 +38,7 @@ Keep working settings; the values below are suggestions for missing fields.
    | User support email | `jay.jakosky@gmail.com` if available in Google's dropdown; otherwise choose an eligible address you monitor |
    | Contact Information → Email address / Developer contact information | `jay.jakosky@gmail.com`, or your existing monitored contact address |
    | Audience → User type | **External**, so personal Gmail and accounts from different organizations can connect |
-   | Publishing status | **In production** for durable use; use **Publish app** if it is currently Testing |
+   | Publishing status | **Testing** works now; keep it and add the intended accounts under **Test users** |
    | Data Access → Add or remove scopes | `openid`, `email`, plus `https://www.googleapis.com/auth/gmail.modify` for Gmail and `https://www.googleapis.com/auth/drive` for Drive |
 
    If Google opens its initial **Get started** wizard, use the same App
@@ -50,8 +50,15 @@ Keep working settings; the values below are suggestions for missing fields.
    or a path). Keep existing optional logo, homepage, privacy-policy, and terms
    settings; do not invent URLs. Follow any verification requirements Google
    actually displays. Publishing does not itself complete verification.
-   If you temporarily keep **Testing**, add each intended account's exact email
-   under **Test users**. Testing grants ordinarily expire after seven days.
+   Add each intended account's exact email under **Test users**. Gmail and Drive
+   refresh tokens issued while **Testing** expire after seven days; reconnect with
+   fresh Google consent when they expire. Having only one personal Gmail account
+   does not exempt its Gmail/Drive scopes from that rule.
+
+   **In production** is optional for longer-lived connections. If you choose that
+   later, Google requires valid app name, support email, homepage URL, and privacy
+   policy URL before publishing. Complete those real Branding requirements rather
+   than enter placeholder URLs. You can connect in Testing without doing this.
 3. **Prepare a Web client.** Open **Clients**, choose **Create client** (or
    **Create credentials → OAuth client ID**), and fill these fields. You may
    instead edit an existing Web application client in the selected project.
@@ -72,8 +79,9 @@ Keep working settings; the values below are suggestions for missing fields.
    The recorded Desktop client served local software; keep it if still needed.
 4. **Save and import.** Choose **Create** or **Save**, download that Web client's
    JSON, and upload it on the owner page. Use Google's downloaded file unchanged.
-   Then review the enabled APIs and publishing status and choose **Save reviewed
-   settings** on the page. Confirmations apply to that saved client revision.
+   Then confirm the enabled APIs and choose **Save reviewed settings** on the
+   page. Leave the optional **In production** checkbox unchecked for Testing.
+   Confirmations apply to that saved client revision.
 
 This callback uses a permanent project-owned hostname. Keep the same Web client
 and callback when replacing the underlying API; do not register an AWS-generated

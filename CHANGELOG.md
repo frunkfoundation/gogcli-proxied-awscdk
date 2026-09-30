@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Setup: allow Google Testing applications to connect without a production confirmation; retain API checks and explain test-user setup and seven-day refresh-token expiry.
 - Setup: cut explanatory caveats from the owner page to direct instructions, and keep open Google setup steps and account options open when the page refreshes or regains focus.
 
 - Setup: accept Google-downloaded Web client JSON using its standard authorization URL while keeping runtime endpoints fixed.
