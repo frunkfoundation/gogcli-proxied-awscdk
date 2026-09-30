@@ -14,7 +14,7 @@ import (
 
 const (
 	managedDefaultTimeout = 15 * time.Second
-	canonicalSetupURL     = "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/"
+	canonicalSetupURL     = "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/"
 )
 
 type ManagedAuthListCmd struct {

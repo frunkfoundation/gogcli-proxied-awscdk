@@ -43,7 +43,7 @@ class GoogleOnboarding(Construct):
         log_group = logs.LogGroup(self, "Logs", log_group_name=f"/aws/lambda/{role_prefix}-onboarding",
             retention=logs.RetentionDays.ONE_MONTH, removal_policy=RemovalPolicy.RETAIN)
         log_group.grant_write(role)
-        proxy_url = f"https://{proxy.api.rest_api_id}.execute-api.{stack.region}.{stack.url_suffix}/{binding['stage']}/"
+        proxy_url = proxy.public_base_url
         setup_url = proxy_url + "onboarding/"
         google_callback = setup_url + "oauth/google/callback"
         owner_callback = setup_url + "auth/callback"

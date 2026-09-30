@@ -8,9 +8,12 @@ from typing import Optional
 import aws_cdk as cdk
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigateway as apigw
+from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_route53 as route53
+from aws_cdk import aws_route53_targets as targets
 from .python_asset import python_asset
 from constructs import Construct
 
@@ -221,10 +224,36 @@ class GoogleProxyApiStack(Stack):
                                       ssm_key_arn=binding["ssm_key_arn"]),
         )
 
+        zone = route53.HostedZone.from_hosted_zone_attributes(
+            self, "PublicHostedZone", hosted_zone_id=binding["public_hosted_zone_id"],
+            zone_name=binding["public_hosted_zone_name"],
+        )
+        certificate = acm.Certificate(
+            self, "PublicCertificate", domain_name=binding["public_domain_name"],
+            validation=acm.CertificateValidation.from_dns(zone),
+        )
+        certificate.apply_removal_policy(RemovalPolicy.RETAIN)
+        domain = apigw.DomainName(
+            self, "PublicDomain", domain_name=binding["public_domain_name"],
+            certificate=certificate, endpoint_type=apigw.EndpointType.REGIONAL,
+            security_policy=apigw.SecurityPolicy.TLS_1_2,
+        )
+        domain.apply_removal_policy(RemovalPolicy.RETAIN)
+        apigw.BasePathMapping(
+            self, "PublicMapping", domain_name=domain, rest_api=api.api,
+            stage=api.api.deployment_stage, base_path=stage_name,
+        )
+        alias = route53.ARecord(
+            self, "PublicAlias", zone=zone, record_name=binding["public_domain_name"],
+            target=route53.RecordTarget.from_alias(targets.ApiGatewayDomain(domain)),
+        )
+        alias.apply_removal_policy(RemovalPolicy.RETAIN)
+        api.public_base_url = f"https://{binding['public_domain_name']}/{stage_name}/"
+
         from .onboarding_resources import GoogleOnboarding
         GoogleOnboarding(self, "Onboarding", proxy=api, binding=binding)
 
-        CfnOutput(self, "ProxyBaseUrl", value=api.api.url)
+        CfnOutput(self, "ProxyBaseUrl", value=api.public_base_url)
         CfnOutput(self, "ApiKeyId", value=api.api_key.key_id)
         CfnOutput(self, "ProxyInvokeArns", value=json.dumps([
             api.api.arn_for_execute_api(method, path, stage_name)

@@ -101,6 +101,22 @@ proof of a deployed binding; inspect stack completion and real signed requests
 after rollout. Do not run a fleet deployment to clear other targets' expected
 baseline-version differences.
 
+## Stable public address
+
+The production binding fixes `public_domain_name` under the existing `k-rae.com`
+Route53 zone. The stack owns a DNS-validated regional ACM certificate, API
+Gateway custom domain, `/prd` base-path mapping, and DNS alias. All public setup,
+callback, and proxy URLs use that hostname; the underlying API ID remains an IAM
+invocation resource, not an OAuth registration address.
+
+The domain, certificate, and DNS alias are retained on stack deletion. Preserve
+the binding across API replacements and repoint the mapping to the replacement
+stage. Recreating a deleted stack requires importing these retained resources;
+do not generate another hostname to bypass ownership conflicts. Intentional
+retirement requires removing external registrations and explicitly cleaning up
+the retained resources. This endpoint contract does not replace credential and
+account-state preservation.
+
 ## Configure owner login and connect Google accounts
 
 After deploying and generating `access.json`, configure this app on the existing

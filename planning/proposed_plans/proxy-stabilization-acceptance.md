@@ -88,4 +88,4 @@ enrolled account. Eight-account enrollment remains incomplete until each account
 is connected and checked, or has an explicit owner/Workspace action recorded.
 No Google content writes are used for production acceptance.
 
-Owner page: <https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/>
+Owner page: <https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/>

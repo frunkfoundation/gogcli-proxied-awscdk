@@ -8,7 +8,7 @@ info:
     remain applying at least 65 seconds after writes. Google consent and caller access are separate. Secrets and
     provider response bodies are never returned.
 servers:
-- url: https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding
+- url: https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding
 security:
 - OwnerSession: []
 paths:
@@ -339,7 +339,7 @@ paths:
           $ref: '#/components/responses/Problem'
   /proxy/v1/accounts:
     servers:
-    - url: https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd
+    - url: https://gp-039168171bf05570eadba6a8.k-rae.com/prd
     get:
       summary: Read metadata visible to the authenticated caller
       responses:

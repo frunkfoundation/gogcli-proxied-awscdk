@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Proxy: publish setup, Google/owner callbacks, and CLI access on a retained custom domain so API replacement does not change registered OAuth URLs.
+
 - Proxy: stabilize owner account setup for Gmail and Drive with existing-project guidance, independent installed/attempt status, revision-bound configuration, account-level recovery, and explicit caller access and disconnect controls.
 - Breaking: caller/default permission and optional account ceilings are evaluated independently; any matching explicit deny wins. Restrictive caller policies no longer inherit global allows. Review existing policy documents before rollout; see `infra/README.md`.
 - Proxy: validate the forwarded request before authorization, reject ambiguous routing/query/method overrides, and bound authorization-cache propagation.

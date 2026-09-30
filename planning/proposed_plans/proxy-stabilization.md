@@ -468,10 +468,10 @@ If a rollout fails, pause new enrollment and restore a reviewed compatible versi
 
 Keep these published URLs available directly:
 
-- Setup: `https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/`
-- Proxy: `https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/`
-- Google callback: `https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/oauth/google/callback`
-- Owner callback: `https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/auth/callback`
+- Setup: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/`
+- Proxy: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/`
+- Google callback: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback`
+- Owner callback: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/auth/callback`
 
 ### Delivery
 

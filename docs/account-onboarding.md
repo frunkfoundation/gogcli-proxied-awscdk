@@ -1,6 +1,6 @@
 # Connect your Google accounts
 
-Open [Google account connections](https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/)
+Open [Google account connections](https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/)
 and sign in with the designated owner account through Authentik. This page saves
 your progress remotely. You can close it and return later.
 
@@ -37,11 +37,15 @@ Review the existing project using the page's project-specific Console links:
 4. Register this exact **Authorized redirect URI** on the Web client:
 
    ```text
-   https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/oauth/google/callback
+   https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback
    ```
 
 5. Download the Web client's JSON and upload it on the owner page. Confirm the
    setup for that saved client revision. Replacing a client requires a new review.
+
+This callback uses a permanent project-owned hostname. Keep the same Web client
+and callback when replacing the underlying API; do not register an AWS-generated
+API hostname. Each Google account still approves its own consent.
 
 The page rejects Desktop clients and Web clients missing the exact callback.
 Recorded projects and downloaded JSON do not prove API enablement, publishing,
@@ -127,7 +131,7 @@ Run `bin/gog config path`, then merge these fields into its `config.json`:
 
 ```json
 {
-  "proxy_base_url": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
+  "proxy_base_url": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/",
   "proxy_api_key": "<owner-provided usage-plan key>",
   "aws_profile": "krae-jdev-dev-prd",
   "default_account": "jay.jakosky@gmail.com"

@@ -18,6 +18,8 @@ class InfrastructureContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.binding = json.loads((Path(__file__).resolve().parents[1] / 'env/gogcli-prd/binding.json').read_text())
+        cls.binding.update(public_domain_name='gp-1111111111111111111111.k-rae.com',
+            public_hosted_zone_id='Z0123456789', public_hosted_zone_name='k-rae.com')
         app = App()
         with patch('stacks.google_proxy_api_substack.python_asset', unbundled_asset), \
                 patch('stacks.onboarding_resources.python_asset', unbundled_asset):
@@ -100,13 +102,34 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertEqual(self.binding['owner_group'], variables['ONBOARDING_OWNER_GROUP'])
         self.assertEqual(self.binding['ssm_prefix'] + '/onboarding/oidc-client', variables['ONBOARDING_OIDC_SECRET_PARAMETER'])
         self.assertEqual(variables['GOG_PROXY_URL'], variables['PROXY_BASE_URL'])
-        base_parts = variables['ONBOARDING_BASE_URL']['Fn::Join'][1]
-        callback_parts = variables['GOOGLE_CALLBACK_URL']['Fn::Join'][1]
-        self.assertEqual(base_parts[:-1], callback_parts[:-1])
-        self.assertEqual(base_parts[-1] + 'oauth/google/callback', callback_parts[-1])
-        self.assertTrue(base_parts[-1].endswith('/' + self.binding['stage'] + '/onboarding/'))
+        setup_url = f"https://{self.binding['public_domain_name']}/{self.binding['stage']}/onboarding/"
+        self.assertEqual(setup_url, variables['ONBOARDING_BASE_URL'])
+        self.assertEqual(setup_url + 'oauth/google/callback', variables['GOOGLE_CALLBACK_URL'])
         stage_keys = set(self.template.find_resources('AWS::ApiGateway::Stage'))
         self.assertFalse(any(key in json.dumps(variables) for key in stage_keys))
+
+    def test_public_callbacks_and_proxy_urls_survive_api_replacement(self):
+        hostname = self.binding['public_domain_name']
+        base_url = f"https://{hostname}/{self.binding['stage']}/"
+        outputs = self.template.to_json()['Outputs']
+        self.assertEqual(base_url, outputs['ProxyBaseUrl']['Value'])
+        self.assertEqual(base_url + 'onboarding/oauth/google/callback', outputs['GoogleCallbackUrl']['Value'])
+        self.assertEqual(base_url + 'onboarding/auth/callback', outputs['OwnerCallbackUrl']['Value'])
+        self.template.has_resource_properties('AWS::ApiGateway::DomainName', {
+            'DomainName': hostname, 'EndpointConfiguration': {'Types': ['REGIONAL']},
+            'SecurityPolicy': 'TLS_1_2'})
+        self.template.has_resource_properties('AWS::ApiGateway::BasePathMapping', {
+            'BasePath': self.binding['stage'], 'Stage': {'Ref': next(iter(self.template.find_resources('AWS::ApiGateway::Stage')))}})
+        self.template.has_resource_properties('AWS::CertificateManager::Certificate', {
+            'DomainName': hostname, 'ValidationMethod': 'DNS',
+            'DomainValidationOptions': [{'DomainName': hostname, 'HostedZoneId': self.binding['public_hosted_zone_id']}]})
+        for resource_type in ('AWS::ApiGateway::DomainName', 'AWS::CertificateManager::Certificate', 'AWS::Route53::RecordSet'):
+            resource = next(iter(self.template.find_resources(resource_type).values()))
+            self.assertEqual('Retain', resource['DeletionPolicy'])
+            self.assertEqual('Retain', resource['UpdateReplacePolicy'])
+        self.template.has_resource_properties('AWS::Route53::RecordSet', {
+            'Name': hostname + '.', 'Type': 'A', 'HostedZoneId': self.binding['public_hosted_zone_id'],
+            'AliasTarget': Match.object_like({'DNSName': Match.any_value(), 'HostedZoneId': Match.any_value()})})
 
     def test_inventory_and_services_have_bounded_runtime_bindings(self):
         functions = self.template.find_resources('AWS::Lambda::Function')

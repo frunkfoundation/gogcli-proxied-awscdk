@@ -16,7 +16,7 @@ See [Install](install.md) for the source repository and update procedure.
 
 ## 2. Connect Google accounts remotely
 
-Open the [owner account page](https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/).
+Open the [owner account page](https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/).
 The [account guide](account-onboarding.md) walks through the existing Google
 project, its hosted Web client, service selection, and Google consent. Start
 with `jay.jakosky@gmail.com`. Each account approves Gmail, Drive, or both.
