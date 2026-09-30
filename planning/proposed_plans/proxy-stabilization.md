@@ -2,7 +2,7 @@
 
 Date: 2026-09-30
 
-Status: Implementation plan; application changes described here are not yet implemented.
+Status: Implemented and deployed on 2026-09-30. Real Google enrollment and caller acceptance remain pending (0 of 8 connected). See [acceptance evidence](proxy-stabilization-acceptance.md).
 
 Approach: Ponytail — retain the architecture, repair the existing contracts, and finish the usable product.
 

@@ -4,10 +4,10 @@
     "OwnerCallbackUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/auth/callback",
     "GoogleCallbackUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/oauth/google/callback",
     "ApiKeyId": "lreck6pz20",
+    "ProxyInvokeArns": "[\"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/gmail/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/upload/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/resumable/upload/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/GET/proxy/v1/accounts\"]",
     "ProxyGoogleProxyApiEndpointBC1A4A58": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
     "ProxyBaseUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
     "SetupUrl": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/",
-    "OnboardingRoleArn": "arn:aws:iam::968138089939:role/jdev-gogcli-proxy-prd-onboarding",
-    "ProxyInvokeArn": "arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/gmail/*"
+    "OnboardingRoleArn": "arn:aws:iam::968138089939:role/jdev-gogcli-proxy-prd-onboarding"
   }
 }
