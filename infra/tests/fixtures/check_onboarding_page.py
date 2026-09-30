@@ -48,6 +48,25 @@ def main():
           document.querySelector('#connectAccounts').click();
           if(document.activeElement!==fresh.querySelector('.connect-account'))
             throw Error('step 5 lost keyboard handoff to ready account');
+          if([...document.querySelectorAll('.account [data-service="calendar"]')].some(input=>input.checked))
+            throw Error('existing Gmail/Drive selections auto-expanded to Calendar');
+          const calendarAPI=[...document.querySelectorAll('#apiLinks a')].find(link=>link.textContent.includes('Calendar'));
+          if(new URL(calendarAPI.href).pathname!=='/apis/library/calendar-json.googleapis.com')
+            throw Error('Calendar API library link is incorrect');
+          fresh.querySelector('[data-service="calendar"]').click();
+          document.querySelector('#refresh').click();
+        """)
+        browser("wait", "200")
+        check("""
+          const fresh=document.querySelectorAll('.account')[1];
+          if(!fresh.querySelector('[data-service="calendar"]').checked) throw Error('refresh lost Calendar draft');
+          if(!fresh.querySelector('.connect-account').disabled || !fresh.textContent.includes('Calendar'))
+            throw Error('unreviewed Calendar did not block consent with guidance');
+          fresh.querySelector('[data-service="calendar"]').click();
+          if(JSON.stringify(drafts.get(fresh.dataset.email).services)!==JSON.stringify(['gmail','drive']))
+            throw Error('Calendar deselect changed existing Gmail/Drive selection');
+          if(document.querySelectorAll('.account')[1].querySelector('.connect-account').disabled)
+            throw Error('Calendar deselect did not restore Gmail/Drive readiness');
         """)
         STATE["projects"][0]["clientConfigured"] = False
         check("document.querySelector('#refresh').click()")
@@ -106,7 +125,7 @@ def main():
             throw Error('failed replacement hid installed access or recovery');
           if(cards[0].querySelector('button').textContent!=='Check saved connection')
             throw Error('connected primary action must check saved access');
-          const access=cards[1].querySelectorAll('input')[2];
+          const access=cards[1].querySelector('.owner-access');
           if(!access.checked) throw Error('new account owner access must be explicit and checked');
           document.querySelector('#newEmails').value='not an email';
           document.querySelector('#addAccountsForm').requestSubmit()
@@ -156,6 +175,9 @@ def main():
         """)
         browser("wait", "200")
         check("if(document.querySelectorAll('.account').length!==5 || document.querySelector('#newEmails').value) throw Error('pasted accounts were not saved and draft reset')")
+        added = [account for account in STATE["accounts"] if account["email"] in ("four@example.com", "five@example.com")]
+        if any(account["requested_services"] != ["gmail", "drive"] for account in added):
+            raise AssertionError("adding accounts enabled Calendar without an explicit selection")
         STATE["accounts"][0]["latest_operation"] = {"id": "op-waiting", "phase": "authorizing", "status": "accepted"}
         check("document.querySelector('#refresh').click()")
         browser("wait", "200")

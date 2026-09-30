@@ -18,7 +18,7 @@ from .python_asset import python_asset
 from constructs import Construct
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lambda" / "google_proxy"))
-from onboarding_services import SCOPES_BY_SERVICE
+from onboarding_services import DEFAULT_SERVICES, SCOPES_BY_SERVICE
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,7 @@ class GoogleProxyApi(Construct):
                 # Defaults can be overridden per-account via SSM JSON.
                 "GOG_DEFAULT_SCOPES": os.getenv(
                     "GOG_DEFAULT_SCOPES",
-                    ",".join(SCOPES_BY_SERVICE.values()),
+                    ",".join(SCOPES_BY_SERVICE[name] for name in DEFAULT_SERVICES),
                 ),
             },
         )
@@ -259,5 +259,5 @@ class GoogleProxyApiStack(Stack):
             api.api.arn_for_execute_api(method, path, stage_name)
             for method, path in (("*", "/gmail/*"), ("*", "/drive/v3/*"),
                 ("*", "/upload/drive/v3/*"), ("*", "/resumable/upload/drive/v3/*"),
-                ("GET", "/proxy/v1/accounts"))
+                ("GET", "/proxy/v1/accounts"), ("*", "/calendar/v3/*"))
         ]))

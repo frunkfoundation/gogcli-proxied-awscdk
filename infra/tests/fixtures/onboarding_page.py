@@ -15,8 +15,9 @@ STATE = {
     "csrfToken": "offline-fixture", "proxyUrl": "https://example.invalid/prd/",
     "defaultProjectId": PROJECT, "ownerCallerArn": "offline-owner",
     "serviceOptions": [
-        {"name": "gmail", "label": "Gmail", "scope": "fixture:gmail", "description": "Read and change mail, including sending."},
-        {"name": "drive", "label": "Drive", "scope": "fixture:drive", "description": "Read and change files within transfer limits."},
+        {"name": "gmail", "label": "Gmail", "apiName": "gmail.googleapis.com", "scope": "fixture:gmail", "description": "Read and change mail, including sending."},
+        {"name": "drive", "label": "Drive", "apiName": "drive.googleapis.com", "scope": "fixture:drive", "description": "Read and change files within transfer limits."},
+        {"name": "calendar", "label": "Google Calendar", "apiName": "calendar-json.googleapis.com", "scope": "fixture:calendar", "description": "Read and change calendars and events."},
     ],
     "projects": [{"projectId": PROJECT, "clientConfigured": True, "clientRevision": "fixture-revision",
                   "publishingConfirmed": True, "apiConfirmed": {"gmail": True, "drive": True},

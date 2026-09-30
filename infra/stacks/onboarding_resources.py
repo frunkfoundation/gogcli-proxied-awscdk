@@ -18,7 +18,7 @@ from .python_asset import python_asset
 from constructs import Construct
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lambda" / "google_proxy"))
-from onboarding_services import DEFAULT_SERVICES, probes, service_policy, verifier_policy
+from onboarding_services import SCOPES_BY_SERVICE, probes, service_policy, verifier_policy
 
 
 def encoded(value):
@@ -82,7 +82,7 @@ class GoogleOnboarding(Construct):
         role.add_to_policy(iam.PolicyStatement(actions=["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"], resources=[binding["ssm_key_arn"]],
             conditions={"StringEquals": {"kms:ViaService": f"ssm.{stack.region}.amazonaws.com"}}))
         role.add_to_policy(iam.PolicyStatement(actions=["apigateway:GET"], resources=[f"arn:aws:apigateway:{stack.region}::/apikeys/{proxy.api_key.key_id}"]))
-        role.add_to_policy(iam.PolicyStatement(actions=["execute-api:Invoke"], resources=[proxy.api.arn_for_execute_api("GET", path, binding["stage"]) for service in DEFAULT_SERVICES for _, path, _ in probes(service)]))
+        role.add_to_policy(iam.PolicyStatement(actions=["execute-api:Invoke"], resources=[proxy.api.arn_for_execute_api("GET", path, binding["stage"]) for service in SCOPES_BY_SERVICE for _, path, _ in probes(service)]))
         integration = apigw.LambdaIntegration(function)
         resource = proxy.api.root.add_resource("onboarding")
         resource.add_method("ANY", integration, authorization_type=apigw.AuthorizationType.NONE, api_key_required=False)
@@ -90,7 +90,7 @@ class GoogleOnboarding(Construct):
         ssm.StringParameter(self, "DefaultPolicy", parameter_name=prefix + "/policy/default",
             string_value=json.dumps({"version": 1, "default_effect": "deny", "rules": []}))
         for label, caller, policy in [
-            ("Cli", binding["client_role_arn"], service_policy(DEFAULT_SERVICES)),
+            ("Cli", binding["client_role_arn"], service_policy(list(SCOPES_BY_SERVICE))),
             ("Verifier", f"arn:aws:iam::{binding['account_id']}:role/{role_prefix}-onboarding", verifier_policy())]:
             ssm.StringParameter(self, label + "Policy", parameter_name=prefix + "/policy/caller/" + encoded(caller),
                 string_value=json.dumps(policy))

@@ -146,7 +146,7 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertNotIn('ProxyInvokeArn', outputs)
         arns = outputs['ProxyInvokeArns']['Value']['Fn::Join'][1]
         text = ''.join(part if isinstance(part, str) else '<api>' for part in arns)
-        for suffix in ('prd/*/gmail/*', 'prd/*/drive/v3/*', 'prd/*/upload/drive/v3/*', 'prd/*/resumable/upload/drive/v3/*', 'prd/GET/proxy/v1/accounts'):
+        for suffix in ('prd/*/gmail/*', 'prd/*/drive/v3/*', 'prd/*/upload/drive/v3/*', 'prd/*/resumable/upload/drive/v3/*', 'prd/*/calendar/v3/*', 'prd/GET/proxy/v1/accounts'):
             self.assertIn(suffix, text)
 
     def test_account_ceiling_and_verifier_service_access_are_owned_and_narrow(self):
@@ -158,9 +158,14 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertTrue(any('/policy/account/*' in resource for resource in write_resources))
         invoke_resources = [resource for statement in statements if statement['Action'] == 'execute-api:Invoke' for resource in statement['Resource']]
         rendered = json.dumps(invoke_resources)
-        for endpoint in ('/gmail/v1/users/me/profile', '/gmail/v1/users/me/messages', '/drive/v3/about', '/drive/v3/files'):
+        for endpoint in ('/gmail/v1/users/me/profile', '/gmail/v1/users/me/messages', '/drive/v3/about', '/drive/v3/files', '/calendar/v3/users/me/calendarList'):
             self.assertIn(endpoint, rendered)
         self.assertNotIn('/upload/', rendered)
+        self.assertNotIn('/events', rendered)
+        caller_policy = next(value['Properties'] for key, value in self.resources.items()
+            if value['Type'] == 'AWS::SSM::Parameter' and 'CliPolicy' in key)
+        self.assertEqual({'gmail', 'drive', 'calendar'},
+            {rule['id'] for rule in json.loads(caller_policy['Value'])['rules']})
 
 
 if __name__ == '__main__':

@@ -77,8 +77,8 @@ The generated CDK outputs in `env/gogcli-prd/access.json` are grouped under
 
 The invocation list contains these resource suffixes under this exact API and
 `prd`: `*/gmail/*`, `*/drive/v3/*`, `*/upload/drive/v3/*`,
-`*/resumable/upload/drive/v3/*`, and `GET/proxy/v1/accounts`. Inventory is GET-only;
-this grant does not include onboarding, Calendar, other stages, or generic
+`*/resumable/upload/drive/v3/*`, `*/calendar/v3/*`, and `GET/proxy/v1/accounts`. Inventory is GET-only;
+this grant does not include onboarding, other stages, or generic
 Google HTTP batch routes. Account access and caller/account policy still apply
 after API Gateway accepts a signed request.
 
@@ -140,7 +140,7 @@ Reuse the recorded Google project and import a **Web application** client with
 the exact displayed `GoogleCallbackUrl`. The three recorded Desktop/local client
 contexts are historical context, not remote credentials or verified Google
 Console state. Project confirmations are bound to the imported client revision;
-each account chooses a project and Gmail, Drive, or both.
+each account chooses a project and any combination of Gmail, Drive, and Calendar.
 
 The shared service registry requests `openid` and `email` for identity, plus
 `gmail.modify` and/or `drive` for the selected services. The provisioned owner

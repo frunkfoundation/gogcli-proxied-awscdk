@@ -28,7 +28,7 @@
           <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code></li>
         </ul>
         <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Keep <strong>External</strong> and <strong>Testing</strong>. Under <strong>Test users</strong>, add the accounts you want to connect: <span id="testUserEmails"></span>.</p>
-        <p>Gmail and Drive refresh tokens issued in Testing expire after seven days; reconnect with fresh Google consent then. Production is optional for longer-lived connections.</p>
+        <p>Testing normally limits Gmail, Drive, and Calendar authorization to seven days. A Workspace administrator can mark this app Trusted for their organization's users; personal Gmail still follows the Testing limit. Production is optional for longer-lived connections.</p>
         <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Choose <strong>Add or remove scopes</strong>, select these, and save:</p><ul id="serviceDescriptions"></ul>
       </details>
       <details id="clientStep"><summary>3. Create a Web client</summary>
@@ -53,6 +53,7 @@
     </section>
     <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">5. Connect your accounts</h2>
       <p>For each account, choose its services and Connect. Google will ask you to choose that account and approve its permissions. Each account is connected after Google approval and the service checks finish.</p>
+      <p>Calendar is optional. To add it to a connected account, select Calendar, review its API in step 4, then choose <strong>Reconnect / add selected service</strong> under <strong>Connection options</strong> and approve fresh Google consent.</p>
       <p id="connectedCount" role="status"></p>
       <div id="accounts"></div>
       <form id="addAccountsForm"><label for="newEmails">Add accounts</label>

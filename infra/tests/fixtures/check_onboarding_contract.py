@@ -8,14 +8,17 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 LAMBDA = Path(__file__).resolve().parents[2] / "lambda/google_proxy"
 sys.path.insert(0, str(LAMBDA))
 import onboarding
 from onboarding_auth import OwnerAuth
+from onboarding_google import GoogleClient
 from onboarding_operations import OnboardingService
 from onboarding_services import requested_scopes
 from test_onboarding_lifecycle import MemoryStore
@@ -24,11 +27,6 @@ SESSION = "gogcli-proxy-contract"
 PROJECT = "jayj-gogcli-full-access"
 EMAIL = "jay@frunkholdings.ltd"
 CALLS = []
-
-
-class GoogleFixture:
-    def authorization_url(self, *args):
-        return "https://accounts.google.com/o/oauth2/v2/auth?offline-fixture=1"
 
 
 class OwnerFixture:
@@ -44,7 +42,7 @@ class OwnerFixture:
 
 
 STORE = MemoryStore()
-SERVICE = OnboardingService(STORE, GoogleFixture(), "https://example.invalid/google-callback")
+SERVICE = OnboardingService(STORE, GoogleClient(None), "https://example.invalid/google-callback")
 onboarding.get_service = lambda: SERVICE
 onboarding.get_auth = lambda: OwnerFixture()
 
@@ -85,6 +83,21 @@ def check(code):
     browser("eval", "(() => { " + code + "; return 'passed'; })()")
 
 
+def intercept_google():
+    # Installed agent-browser 0.9.0 ignores CLI --body; its daemon accepts response.
+    directory = os.getenv("AGENT_BROWSER_SOCKET_DIR") or (str(Path(os.environ["XDG_RUNTIME_DIR"]) / "agent-browser")
+                if os.getenv("XDG_RUNTIME_DIR") else str(Path.home() / ".agent-browser"))
+    command = {"id": "offline-google", "action": "route", "url": "https://accounts.google.com/**",
+               "response": {"body": '{"offlineGoogle":true}', "contentType": "application/json"}}
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(10)
+        connection.connect(str(Path(directory) / (SESSION + ".sock")))
+        connection.sendall((json.dumps(command) + "\n").encode())
+        result = json.loads(connection.makefile().readline())
+    if not result["success"]:
+        raise AssertionError(result)
+
+
 def latest():
     return STORE.get("ACCOUNT#" + EMAIL)["latest_operation_id"]
 
@@ -93,7 +106,7 @@ def main():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     url = f"http://127.0.0.1:{server.server_port}/onboarding/"
     os.environ["ONBOARDING_BASE_URL"] = url
-    for email in ("jay.jakosky@gmail.com", EMAIL):
+    for email in ("jay.jakosky@gmail.com", EMAIL, "treasurer@longmonttheatre.org"):
         SERVICE.save_account("fixture", email, {"projectId": PROJECT, "services": ["gmail", "drive"]})
     installed = SERVICE.account("fixture", "jay.jakosky@gmail.com")
     STORE.put({**installed, "connection_status": "connected", "credential_revision": "fixture-installed",
@@ -101,8 +114,8 @@ def main():
                "installed_project_id": PROJECT, "verifications": {"gmail": {"status": "succeeded", "verified_at": 1760000000}}})
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        browser("network", "route", "https://accounts.google.com/**", "--body", '{"offlineGoogle":true}')
         browser("open", url)
+        intercept_google()
         browser("wait", "#accounts article")
         check("""
           if(document.querySelector('#confirmStep #apiConfirmations')!==document.querySelector('#apiConfirmations'))
@@ -111,6 +124,25 @@ def main():
           if(!document.querySelector('#connectAccounts')?.disabled) throw Error('step 5 must wait for Web client and API review');
           if([...document.querySelectorAll('.connect-account')].some(button=>!button.disabled))
             throw Error('consent is enabled before Google setup');
+          const cards=[...document.querySelectorAll('.account')];
+          if(cards.some(card=>!card.querySelector('[data-service="calendar"]')))
+            throw Error('Calendar selection unavailable');
+          if(cards.some(card=>card.querySelector('[data-service="calendar"]').checked))
+            throw Error('Calendar auto-expanded existing selections');
+          const link=[...document.querySelectorAll('#apiLinks a')].find(link=>link.textContent.includes('Calendar'));
+          if(!link || new URL(link.href).pathname!=='/apis/library/calendar-json.googleapis.com')
+            throw Error('Calendar API link does not target actual Google library');
+          cards.find(card=>card.dataset.email==='jay@frunkholdings.ltd').querySelector('[data-service="calendar"]').click();
+          document.querySelector('#refresh').click();
+        """)
+        browser("wait", "200")
+        check("""
+          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
+          if(!card.querySelector('[data-service="calendar"]').checked) throw Error('refresh lost Calendar draft');
+          card.querySelector('[data-service="calendar"]').click();
+          const draft=drafts.get('jay@frunkholdings.ltd');
+          if(JSON.stringify(draft.services)!==JSON.stringify(['gmail','drive'])) throw Error('Calendar deselect changed Gmail/Drive');
+          document.querySelector('[data-email="jay@frunkholdings.ltd"] [data-service="calendar"]').click();
         """)
         web_json = {"web": {"client_id": "actual-imported-fixture-client", "client_secret": "offline-fixture-secret",
                             "project_id": PROJECT, "redirect_uris": [SERVICE.callback_url]}}
@@ -133,14 +165,25 @@ def main():
         browser("wait", "200")
         check("""
           const status=document.querySelector('#projectSaveStatus').textContent;
-          if(!status.includes('Gmail') || !status.includes('Drive') || status.includes('Google setup complete'))
+          if(!status.includes('Gmail') || !status.includes('Drive') || !status.includes('Calendar') || status.includes('Google setup complete'))
             throw Error('unchecked APIs lack specific next-action guidance: '+status);
           if(!document.querySelector('#connectAccounts').disabled) throw Error('unchecked APIs enabled connection');
         """)
         if any(item["path"].endswith("/setup") or item["path"].endswith("/enrollments") for item in CALLS):
             raise AssertionError("incomplete API review submitted setup or started enrollment")
         check("""
-          document.querySelectorAll('#confirmStep #apiConfirmations input').forEach(input=>input.click());
+          document.querySelectorAll('#confirmStep #apiConfirmations input').forEach(input=>{if(input.dataset.service!=='calendar')input.click();});
+          document.querySelector('#saveProject').click();
+        """)
+        browser("wait", "200")
+        check("""
+          if(!document.querySelector('#projectSaveStatus').textContent.includes('Calendar')) throw Error('missing Calendar review lacks named guidance');
+          if(!document.querySelector('[data-email="jay@frunkholdings.ltd"] .connect-account').disabled) throw Error('missing Calendar API allows consent');
+        """)
+        if any(item["path"].endswith("/setup") or item["path"].endswith("/enrollments") for item in CALLS):
+            raise AssertionError("missing Calendar API submitted review or consent")
+        check("""
+          document.querySelector('#confirmStep [data-service="calendar"]').click();
           document.querySelector('#saveProject').click();
         """)
         if any(item["path"].endswith("/enrollments") for item in CALLS):
@@ -169,6 +212,14 @@ def main():
           card.querySelector('.connect-account').click()
         """)
         browser("wait", "--url", "https://accounts.google.com/**")
+        check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('Google consent was not intercepted')")
+        enrollment = CALLS[-1]
+        if enrollment["body"]["services"] != ["gmail", "drive", "calendar"]:
+            raise AssertionError("explicit Calendar selection did not reach account enrollment")
+        consent_url = browser("get", "url").strip()
+        consent_scopes = parse_qs(urlparse(consent_url).query)["scope"][0].split()
+        if set(consent_scopes) != set(requested_scopes(["gmail", "drive", "calendar"])):
+            raise AssertionError("Google consent omitted selected Calendar scope")
         first = latest()
         browser("open", url)
         browser("wait", "#accounts article")
@@ -233,9 +284,21 @@ def main():
         browser("wait", "--url", "https://accounts.google.com/**")
         if CALLS[-1]["body"]["ownerAccessEnabled"]:
             raise AssertionError("reconnect restored withdrawn caller access from an old draft")
+        browser("open", url)
+        browser("wait", "#accounts article")
+        check("""
+          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='treasurer@longmonttheatre.org');
+          card.querySelector('[data-service="calendar"]').click();
+          document.querySelector('[data-email="treasurer@longmonttheatre.org"] [data-service="calendar"]').click();
+          document.querySelector('[data-email="treasurer@longmonttheatre.org"] .connect-account').click();
+        """)
+        browser("wait", "--url", "https://accounts.google.com/**")
+        consent_scopes = parse_qs(urlparse(browser("get", "url").strip()).query)["scope"][0].split()
+        if CALLS[-1]["body"]["services"] != ["gmail", "drive"] or set(consent_scopes) != set(requested_scopes(["gmail", "drive"])):
+            raise AssertionError("Calendar deselection changed Gmail/Drive enrollment or consent scopes")
         if any(item["status"] >= 400 for item in CALLS):
             raise AssertionError(f"browser sent an incompatible command: {CALLS}")
-        print("Passed real HTTP/service DOM contracts: pre-upload setup, Web JSON import, incomplete API guidance, saved API review, step 5 keyboard handoff and Google consent, service evidence, parallel checks, reload/Continue same operation, new-session restart, cancellation/fresh consent, withdrawn access preserved during repair.")
+        print("Passed real HTTP/service DOM contracts: Calendar opt-in, API library and review gating, draft refresh, selected consent scopes and deselection, Web JSON import, step 5 handoff, parallel checks, Continue/restart/cancellation recovery, withdrawn access preserved.")
     finally:
         browser("close")
         server.shutdown()

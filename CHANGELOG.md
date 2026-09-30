@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Proxy: add opt-in Calendar consent, revision-bound API review, service verification, and caller access alongside Gmail and Drive without changing existing account selections.
+
 - Setup: review API confirmations after Web-client upload, show saved readiness and specific missing requirements, and provide an explicit step 5 handoff to account consent.
 
 - Setup: prepare the shared Google project before account connections, remove duplicate setup controls, and show Google revocation only for installed connections.

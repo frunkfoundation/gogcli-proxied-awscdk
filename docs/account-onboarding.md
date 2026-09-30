@@ -27,8 +27,8 @@ project for each email address.
 Review the existing project using the page's project-specific Console links.
 Keep working settings; the values below are suggestions for missing fields.
 
-1. **Enable APIs.** In the selected project, open **Gmail API** and **Google Drive
-   API** for the services you want. Choose **Enable**. If Google shows **Manage**,
+1. **Enable APIs.** In the selected project, open **Gmail API**, **Google Drive
+   API**, or **Google Calendar API** for the services you want. Choose **Enable**. If Google shows **Manage**,
    that API is already enabled.
 2. **Review Branding, Audience, and Data Access.** Use these fields:
 
@@ -39,7 +39,7 @@ Keep working settings; the values below are suggestions for missing fields.
    | Contact Information → Email address / Developer contact information | `jay.jakosky@gmail.com`, or your existing monitored contact address |
    | Audience → User type | **External**, so personal Gmail and accounts from different organizations can connect |
    | Publishing status | **Testing** works now; keep it and add the intended accounts under **Test users** |
-   | Data Access → Add or remove scopes | `openid`, `email`, plus `https://www.googleapis.com/auth/gmail.modify` for Gmail and `https://www.googleapis.com/auth/drive` for Drive |
+   | Data Access → Add or remove scopes | `openid`, `email`, plus `https://www.googleapis.com/auth/gmail.modify` for Gmail, `https://www.googleapis.com/auth/drive` for Drive, and `https://www.googleapis.com/auth/calendar` for Calendar when selected |
 
    If Google opens its initial **Get started** wizard, use the same App
    Information, Audience, and Contact Information values above. Choose **Next**
@@ -50,10 +50,12 @@ Keep working settings; the values below are suggestions for missing fields.
    or a path). Keep existing optional logo, homepage, privacy-policy, and terms
    settings; do not invent URLs. Follow any verification requirements Google
    actually displays. Publishing does not itself complete verification.
-   Add each intended account's exact email under **Test users**. Gmail and Drive
-   refresh tokens issued while **Testing** expire after seven days; reconnect with
-   fresh Google consent when they expire. Having only one personal Gmail account
-   does not exempt its Gmail/Drive scopes from that rule.
+   Add each intended account's exact email under **Test users**. Gmail, Drive, and Calendar
+   refresh tokens issued while **Testing** normally expire after seven days.
+   Google documents a Workspace administrator's **Trusted** override for their
+   organization's users; it does not cover personal Gmail or other organizations
+   automatically. See [Google's app-state overview](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
+   Reconnect with fresh Google consent when authorization expires.
 
    **In production** is optional for longer-lived connections. If you choose that
    later, Google requires valid app name, support email, homepage URL, and privacy
@@ -108,13 +110,24 @@ repair, access, disconnect, and Google revocation under **Connection options**.
 
 Start with `jay.jakosky@gmail.com`. Add the other addresses individually or paste
 a comma/newline-separated list. Eight is the initial target; more are supported.
-Choose Gmail, Drive, or both. New accounts default to both. Identity permissions
+Choose any combination of Gmail, Drive, and Calendar. New accounts default to
+Gmail and Drive; Calendar is opt-in. Existing accounts keep their selected and
+installed services. To add Calendar, enable Google Calendar API in step 1, add
+its scope in step 2, check its API confirmation and save in step 4, then select
+Calendar for the account and choose **Reconnect / add selected service** under
+**Connection options**. Approve Calendar in fresh Google consent. Identity permissions
 are `openid` and `email`; selected service scopes are:
 
 | Service | Requested permission | Access, subject to proxy policy |
 | --- | --- | --- |
 | Gmail | `https://www.googleapis.com/auth/gmail.modify` | Read, send, label, and modify mail |
 | Drive | `https://www.googleapis.com/auth/drive` | Read and manage existing Drive files |
+| Calendar | `https://www.googleapis.com/auth/calendar` | Read, create, change, share, and delete calendars and events |
+
+Calendar requests full Calendar access, including calendar sharing and deletion;
+it is not limited to reading events. The page requires only the API confirmations
+needed by accounts' selected services, so leaving Calendar unselected does not
+block a Gmail/Drive connection.
 
 These grants do not include every Google service or all Gmail settings commands.
 The proxy's caller and account policies can narrow operations. Google permission
@@ -136,9 +149,10 @@ its last check and timestamp. Failed reconnects are shown separately and preserv
 the installed connection until a replacement passes validation.
 
 Checks refresh saved authorization and make read-only requests: Gmail profile
-and at most one message ID; Drive identity and at most one file ID. Empty
-collections pass. Checks do not read message bodies or file contents, send mail,
-or change Google data. The server checks its verifier identity; a CLI check
+and at most one message ID; Drive identity and at most one file ID; Calendar
+`calendarList` with `maxResults=1` and `fields=items/id`, returning at most one
+calendar ID. Empty collections pass. Checks do not read message bodies, file
+contents, or event details, send mail, or change Google data. The server checks its verifier identity; a CLI check
 additionally proves the actual caller's access.
 
 - If Google never returns, use the account's consent continuation/restart action.

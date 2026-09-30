@@ -56,7 +56,7 @@ function renderProject() {
   $('publishingConfirmed').checked = saved.publishingConfirmed === true;
   $('apiLinks').replaceChildren(); $('apiConfirmations').replaceChildren(); $('serviceDescriptions').replaceChildren();
   snapshot.serviceOptions.forEach(service => {
-    const link = element('a', 'Open ' + service.label + ' API ↗', $('apiLinks')); link.dataset.console = 'https://console.cloud.google.com/apis/library/' + service.name + '.googleapis.com'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    const link = element('a', 'Open ' + service.label + ' API ↗', $('apiLinks')); link.dataset.console = 'https://console.cloud.google.com/apis/library/' + service.apiName; link.target = '_blank'; link.rel = 'noopener noreferrer';
     const label = element('label', '', $('apiConfirmations')); label.className = 'check';
     const input = element('input', '', label); input.type = 'checkbox'; input.dataset.service = service.name; input.checked = saved.apiConfirmed?.[service.name] === true;
     label.append(document.createTextNode(service.label + ' API is enabled')); input.addEventListener('change', markProjectDirty);
@@ -177,7 +177,7 @@ $('saveProject').addEventListener('click', async () => {
 $('addAccountsForm').addEventListener('submit', async event => {
   event.preventDefault(); const emails = [...new Set($('newEmails').value.split(/[,\n]+/).map(email => email.trim().toLowerCase()).filter(Boolean))];
   if (!emails.length || emails.some(email => email.length > 254 || !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))) { message('addStatus', 'Enter valid emails separated by commas or new lines.', true); return; }
-  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { projectId: snapshot.defaultProjectId, services: snapshot.serviceOptions.map(service => service.name) });
+  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { projectId: snapshot.defaultProjectId, services: ['gmail', 'drive'] });
     $('newEmails').value = ''; message('addStatus', 'Added.'); await loadSetup();
   } catch (error) { message('addStatus', error.message, true); }
 });

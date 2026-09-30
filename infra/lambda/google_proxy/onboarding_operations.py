@@ -5,7 +5,7 @@ import re
 import time
 
 from onboarding_google import GoogleClient, validate_web_client
-from onboarding_services import (DEFAULT_SERVICES, KNOWN_ACCOUNTS, SERVICE_OPTIONS, account_projection,
+from onboarding_services import (DEFAULT_SERVICES, KNOWN_ACCOUNTS, SCOPES_BY_SERVICE, SERVICE_OPTIONS, account_projection,
                                  content_hash, public_operation, selected_services)
 from onboarding_store import Store, WorkflowError, digest, new_id
 
@@ -85,7 +85,7 @@ class OnboardingService:
         if not client or body.get("clientRevision") != client["revision"]:
             raise WorkflowError(409, "project_revision_changed", "Reload the project's current Web client before saving its review.")
         confirmed = body.get("apiConfirmed", {})
-        if not isinstance(confirmed, dict) or any(name not in DEFAULT_SERVICES or not isinstance(value, bool) for name, value in confirmed.items()):
+        if not isinstance(confirmed, dict) or any(name not in SCOPES_BY_SERVICE or not isinstance(value, bool) for name, value in confirmed.items()):
             raise WorkflowError(400, "invalid_confirmation", "Confirm the selected service APIs with true or false values.")
         changes = {"publishing_confirmed": body.get("publishingConfirmed") is True, "api_confirmed": confirmed}
         # Revision precondition is checked by DynamoDB, not only by the earlier read.
