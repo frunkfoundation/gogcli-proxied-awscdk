@@ -7,7 +7,7 @@ import subprocess
 import threading
 from http.server import HTTPServer
 
-from onboarding_page import CALLS, Handler, STATE
+from onboarding_page import CALLS, Handler, PROJECT, STATE
 
 SESSION = "gogcli-proxy-fixture"
 
@@ -23,12 +23,38 @@ def check(code):
 
 
 def main():
+    STATE["projects"].append({"projectId": "another-project", "clientRevision": "other-revision"})
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}/onboarding/"
     try:
         browser("open", url)
         browser("wait", "#accounts article")
+        check(f"""
+          const app=document.querySelector('#appName'), client=document.querySelector('#webClientName');
+          if(!app?.readOnly || app.value!=={PROJECT!r} || !client?.readOnly || client.value!=={(PROJECT + ' web client')!r})
+            throw Error('required Google names lack project-specific suggestions');
+          if(!document.querySelector('#clientStep').textContent.includes('Web application') ||
+             !document.querySelector('#clientStep').textContent.includes('Authorized JavaScript origins') ||
+             !document.querySelector('#audienceStep').textContent.includes('User support email') ||
+             !document.querySelector('#audienceStep').textContent.includes('Developer contact information') ||
+             !document.querySelector('#serviceDescriptions').textContent.includes('openid'))
+            throw Error('Google setup fields and values are missing');
+          document.querySelector('#projectId').value='another-project';
+          document.querySelector('#projectId').dispatchEvent(new Event('change'));
+          if(client.value!=='another-project web client' || app.value!=='another-project')
+            throw Error('suggested names did not follow the selected project');
+          if(document.querySelector('#callbackUrl').value!=={STATE['callbackUrl']!r})
+            throw Error('project choice changed the registered callback');
+          Object.defineProperty(navigator, 'clipboard', {{configurable:true, value:{{writeText:async value=>{{window.fixtureCopied=value;}}}}}});
+          document.querySelector('#copyWebClientName').click()
+        """)
+        browser("wait", "100")
+        check(f"""
+          if(window.fixtureCopied!=='another-project web client') throw Error('copy used a stale suggested name');
+          document.querySelector('#projectId').value={PROJECT!r};
+          document.querySelector('#projectId').dispatchEvent(new Event('change'))
+        """)
         check("""
           const cards=document.querySelectorAll('.account');
           if(cards.length!==3) throw Error('expected three saved accounts, no blank rows');
@@ -102,10 +128,10 @@ def main():
         browser("wait", "#accounts article")
         check("if(!document.querySelectorAll('.account')[1].textContent.includes('Checking each selected service')) throw Error('reopen lost durable progress')")
         browser("set", "viewport", "390", "844")
-        check("if(document.documentElement.scrollWidth>innerWidth) throw Error('mobile horizontal overflow')")
+        check("document.querySelectorAll('#projectGuide details').forEach(step=>step.open=true); if(document.documentElement.scrollWidth>innerWidth) throw Error('mobile horizontal overflow')")
         browser("press", "Tab")
         check("if(document.activeElement===document.body) throw Error('keyboard focus missing')")
-        print("Passed: invalid drafts, independent refresh, reset after save, installed/attempt distinction, selected services/access, parallel accounts, pasted emails, durable reopen, mobile, keyboard and consent restart checks.")
+        print("Passed: required Google fields, project-specific suggested names and copy, stable callback, invalid drafts, independent refresh, reset after save, installed/attempt distinction, selected services/access, parallel accounts, pasted emails, durable reopen, expanded mobile steps, keyboard and consent restart checks.")
     finally:
         browser("close")
         server.shutdown()

@@ -29,19 +29,31 @@
       <label for="projectId">Selected existing project</label><select id="projectId"></select>
       <p id="projectContext" class="small"></p><p id="credentialStatus" class="notice" role="status"></p>
       <details id="apisStep"><summary>1. Enable the selected APIs</summary>
+        <p><strong>Project:</strong> use the selected project above for every Console step.</p>
         <p>Open each service you selected. Keep it enabled if the Console shows “Manage”; otherwise choose “Enable”.</p><div id="apiLinks"></div>
         <div id="apiConfirmations"></div>
       </details>
       <details id="audienceStep"><summary>2. Review audience, branding, and permissions</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a> and review the name and contact emails.</p>
-        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Review External and In production for durable use. Testing grants can expire after seven days.</p>
-        <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a> and review these requested permissions:</p><ul id="serviceDescriptions"></ul>
+        <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. Supply these fields when setting up the application; keep existing names and monitored contact emails when already configured.</p>
+        <label for="appName">App name — suggested value, based on the selected project ID</label><div class="copy"><input id="appName" readonly><button id="copyAppName" type="button">Copy app name</button></div><p id="appNameStatus" role="status"></p>
+        <ul>
+          <li><strong>User support email:</strong> select <code>jay.jakosky@gmail.com</code> if offered in the dropdown, or another eligible email you monitor.</li>
+          <li><strong>Developer contact information / Contact Information email:</strong> <code>jay.jakosky@gmail.com</code> is an acceptable monitored contact.</li>
+        </ul>
+        <p>If Google shows Get started, use these name and contact values and choose External in the initial setup. At Finish, review the Google API Services: User Data Policy, select “I agree” if you agree, then choose Create.</p>
+        <p class="small">If Google asks for Authorized domains, use <code>k-rae.com</code> for this callback. Keep existing homepage, privacy policy, terms, and logo settings; follow any requirements Google actually presents.</p>
+        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a> and review these settings:</p>
+        <ul><li><strong>User type / Audience:</strong> External.</li><li><strong>Publishing status:</strong> In production for durable use. Choose Publish app if the status is Testing.</li><li><strong>Test users (only while Testing):</strong> add each account you intend to authorize. Saved accounts: <span id="testUserEmails"></span>. Testing grants can expire after seven days.</li></ul>
+        <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Under <strong>Add or remove scopes</strong>, select these requested permissions and save:</p><ul id="serviceDescriptions"></ul>
         <p>Identity permissions identify the Google account. Google consent and access for your tools are separate. Publishing does not complete Google's verification; follow any actual Google or administrator requirement.</p>
       </details>
       <details id="clientStep"><summary>3. Prepare a Web client and register its callback</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a>. Use a Web application client in this project, then save this exact Authorized redirect URI:</p>
-        <label for="callbackUrl">Exact Google callback address</label><div class="copy"><input id="callbackUrl" readonly><button id="copyCallback" type="button">Copy callback</button></div><p id="copyStatus" role="status"></p>
-        <p>Download the Web client's JSON after saving the callback. A previous Desktop client served local software and cannot supply this hosted callback.</p>
+        <p><a data-console="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a>. Open an existing Web client or choose Create client, then supply these fields. Keep an existing client's name; this suggestion is for a new client.</p>
+        <p><strong>Application type:</strong> Web application.</p>
+        <label for="webClientName">Name — suggested value, based on the selected project ID</label><div class="copy"><input id="webClientName" readonly><button id="copyWebClientName" type="button">Copy client name</button></div><p id="webClientNameStatus" role="status"></p>
+        <label for="callbackUrl">Authorized redirect URIs — add this exact Google callback address</label><div class="copy"><input id="callbackUrl" readonly><button id="copyCallback" type="button">Copy callback</button></div><p id="copyStatus" role="status"></p>
+        <p><strong>Authorized JavaScript origins (optional):</strong> leave blank for a new client; this application uses server redirects. Keep existing entries when reusing a client.</p>
+        <p>Choose Create for a new client or Save for an existing client, then download the Web client's JSON. A previous Desktop client served local software and cannot supply this hosted callback.</p>
         <form id="credentialsForm"><label for="credentialsFile">Downloaded Web application client JSON</label><input id="credentialsFile" type="file" accept=".json,application/json" required><button id="importCredentials" type="submit">Upload Google client</button></form>
         <p id="uploadStatus" role="status" aria-live="polite"></p>
       </details>

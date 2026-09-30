@@ -1,9 +1,12 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import onboarding
 from onboarding_auth import AuthError, OwnerAuth
+from onboarding_google import GoogleClient
+from onboarding_operations import OnboardingService
+from test_onboarding_lifecycle import MemoryStore
 
 
 class BoundaryTests(unittest.TestCase):
@@ -66,3 +69,57 @@ class CallbackRecoveryTests(unittest.TestCase):
             self.assertEqual(303, response['statusCode'])
             self.assertEqual('https://api.example/prd/onboarding/?recovery=consent-incomplete', response['headers']['Location'])
             self.assertNotIn('private-', str(response))
+
+
+class ClientImportTests(unittest.TestCase):
+    def setUp(self):
+        self.store = MemoryStore()
+        self.http = Mock()
+        self.service = OnboardingService(self.store, GoogleClient(self.http),
+            'https://app.example/onboarding/oauth/google/callback')
+        self.document = {'web': {'client_id': 'example.apps.googleusercontent.com', 'project_id': 'project-one',
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
+            'client_secret': 'synthetic-secret', 'redirect_uris': [self.service.callback_url]}}
+        env = patch.dict('os.environ', {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/',
+                                      'GOOGLE_EXISTING_PROJECTS': '[]'})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def upload(self):
+        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
+            auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
+            return onboarding.handler({'path': '/onboarding/v1/projects/project-one/oauth-client',
+                'httpMethod': 'PUT', 'body': json.dumps(self.document)}, None)
+
+    def test_google_download_import_uses_canonical_runtime_endpoints(self):
+        for endpoint in ('https://accounts.google.com/o/oauth2/auth', 'https://accounts.google.com/o/oauth2/v2/auth'):
+            with self.subTest(endpoint=endpoint):
+                self.document['web']['auth_uri'] = endpoint
+                result = self.upload()
+                self.assertEqual(200, result['statusCode'], result['body'])
+                self.assertTrue(next(p for p in json.loads(result['body'])['projects']
+                                     if p['projectId'] == 'project-one')['clientConfigured'])
+                self.assertNotIn('synthetic-secret', result['body'])
+                client = self.store.secret_get(self.store.get('CLIENT#project-one')['secret_ref'])
+                url = self.service.google.authorization_url(client, self.service.callback_url,
+                    'state', 'verifier', 'nonce', 'jay@example.com', ['drive'])
+                self.assertTrue(url.startswith('https://accounts.google.com/o/oauth2/v2/auth?'))
+                self.http.post.return_value = Mock(status_code=200, json=lambda: {})
+                self.service.google.exchange(client, self.service.callback_url, 'code', 'verifier')
+                self.assertEqual('https://oauth2.googleapis.com/token', self.http.post.call_args.args[0])
+
+    def test_untrusted_endpoint_import_is_rejected_without_saving(self):
+        for key in ('auth_uri', 'token_uri'):
+            original = self.document['web'][key]
+            for endpoint in ('https://evil.example/oauth', 'http://accounts.google.com/o/oauth2/auth',
+                             'https://accounts.google.com/o/oauth2/auth?redirect=evil', None, []):
+                with self.subTest(key=key, endpoint=endpoint):
+                    self.document['web'][key] = endpoint
+                    result = self.upload()
+                    self.assertEqual(400, result['statusCode'], result['body'])
+                    self.assertEqual('invalid client', json.loads(result['body'])['title'])
+                    self.assertFalse(self.store.secrets)
+                    self.assertFalse(self.store.items)
+            self.document['web'][key] = original

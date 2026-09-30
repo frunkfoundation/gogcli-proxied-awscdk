@@ -24,24 +24,56 @@ different Workspace organizations. Each account approves its own access. An
 organization may require administrator approval. You do not need a new Google
 project for each email address.
 
-Review the existing project using the page's project-specific Console links:
+Review the existing project using the page's project-specific Console links.
+Keep working settings; the values below are suggestions for missing fields.
 
-1. Enable the **Gmail API** and **Google Drive API** for the selected services.
-   If Google shows **Manage**, that API is already enabled.
-2. Review branding, **External** audience, and data access. Use production
-   publishing for durable personal use. Google's Testing mode ordinarily limits
-   these refresh tokens to seven days. Page confirmations record your review;
-   they do not independently inspect Google's settings.
-3. Add or reuse a **Web application** OAuth client in that project. The recorded
-   Desktop client served local software; keep it if it is still needed.
-4. Register this exact **Authorized redirect URI** on the Web client:
+1. **Enable APIs.** In the selected project, open **Gmail API** and **Google Drive
+   API** for the services you want. Choose **Enable**. If Google shows **Manage**,
+   that API is already enabled.
+2. **Review Branding, Audience, and Data Access.** Use these fields:
+
+   | Google field | Acceptable value for the default project |
+   | --- | --- |
+   | App name | Keep the current name, or use `jayj-gogcli-full-access` |
+   | User support email | `jay.jakosky@gmail.com` if available in Google's dropdown; otherwise choose an eligible address you monitor |
+   | Contact Information → Email address / Developer contact information | `jay.jakosky@gmail.com`, or your existing monitored contact address |
+   | Audience → User type | **External**, so personal Gmail and accounts from different organizations can connect |
+   | Publishing status | **In production** for durable use; use **Publish app** if it is currently Testing |
+   | Data Access → Add or remove scopes | `openid`, `email`, plus `https://www.googleapis.com/auth/gmail.modify` for Gmail and `https://www.googleapis.com/auth/drive` for Drive |
+
+   If Google opens its initial **Get started** wizard, use the same App
+   Information, Audience, and Contact Information values above. Choose **Next**
+   after each section. Under **Finish**, review the Google API Services User
+   Data Policy and, if you agree, check its agreement box and choose **Create**.
+
+   If Google asks for an **Authorized domain**, use `k-rae.com` (without `https://`
+   or a path). Keep existing optional logo, homepage, privacy-policy, and terms
+   settings; do not invent URLs. Follow any verification requirements Google
+   actually displays. Publishing does not itself complete verification.
+   If you temporarily keep **Testing**, add each intended account's exact email
+   under **Test users**. Testing grants ordinarily expire after seven days.
+3. **Prepare a Web client.** Open **Clients**, choose **Create client** (or
+   **Create credentials → OAuth client ID**), and fill these fields. You may
+   instead edit an existing Web application client in the selected project.
+
+   | Google field | Value |
+   | --- | --- |
+   | Application type | **Web application** |
+   | Name | `jayj-gogcli-full-access web client` |
+   | Authorized JavaScript origins | Leave empty for this server-side redirect flow; this field is optional |
+   | Authorized redirect URIs → Add URI | The exact permanent callback below |
 
    ```text
    https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback
    ```
 
-5. Download the Web client's JSON and upload it on the owner page. Confirm the
-   setup for that saved client revision. Replacing a client requires a new review.
+   The client name is only a Console label. For another selected project, use
+   `<project ID> web client`; the page supplies the exact suggested name to copy.
+   The recorded Desktop client served local software; keep it if still needed.
+4. **Save and import.** Choose **Create** or **Save**, download that Web client's
+   JSON, and upload it on the owner page. Use Google's downloaded file unchanged.
+   Then review the enabled APIs and publishing status and choose **Save reviewed
+   settings** on the page. Confirmations apply to that saved client revision.
 
 This callback uses a permanent project-owned hostname. Keep the same Web client
 and callback when replacing the underlying API; do not register an AWS-generated

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Setup: accept Google-downloaded Web client JSON using its standard authorization URL while keeping runtime endpoints fixed.
+
+- Setup: show Google Console field names and suggested project-specific values, including a copyable Web-client name and the permanent callback.
+
 - Proxy: publish setup, Google/owner callbacks, and CLI access on a retained custom domain so API replacement does not change registered OAuth URLs.
 
 - Proxy: stabilize owner account setup for Gmail and Drive with existing-project guidance, independent installed/attempt status, revision-bound configuration, account-level recovery, and explicit caller access and disconnect controls.

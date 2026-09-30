@@ -29,6 +29,8 @@ function choices(select, selected) {
 }
 function renderProject() {
   const saved = project(); if (!saved) return; reviewedProjectRevision = saved.clientRevision;
+  $('appName').value = saved.projectId; $('webClientName').value = saved.projectId + ' web client';
+  $('testUserEmails').textContent = snapshot.accounts.map(account => account.email).join(', ') || 'add each intended Google account email';
   $('projectContext').textContent = saved.recordedClientType === 'desktop' ? 'Recorded Desktop setup in ' + saved.projectId + '. This does not prove hosted configuration or Google settings.' : 'Console links open ' + saved.projectId + '.';
   message('credentialStatus', saved.clientConfigured ? 'Hosted Web client imported. Publishing and API settings below are your saved confirmations.' : 'A hosted Web client is needed before connecting accounts.');
   $('publishingConfirmed').checked = saved.publishingConfirmed === true;
@@ -40,6 +42,7 @@ function renderProject() {
     label.append(document.createTextNode('I checked that ' + service.label + ' API is enabled.')); input.addEventListener('change', markProjectDirty);
     element('li', service.label + ': ' + service.description + ' Requested permission: ' + service.scope, $('serviceDescriptions'));
   });
+  element('li', 'Account identity: openid and email.', $('serviceDescriptions'));
   document.querySelectorAll('[data-console]').forEach(link => { const url = new URL(link.dataset.console); url.searchParams.set('project', saved.projectId); link.href = url.href; });
   for (const id of ['apisStep', 'audienceStep', 'clientStep', 'confirmStep']) $(id).open = false;
   $(saved.clientConfigured ? saved.publishingConfirmed ? 'apisStep' : 'confirmStep' : 'apisStep').open = true;
@@ -153,6 +156,9 @@ $('addAccountsForm').addEventListener('submit', async event => {
 });
 async function copy(value, status, fallback) { try { await navigator.clipboard.writeText(value); message(status, 'Copied.'); } catch (_) { if (fallback) { fallback.focus(); fallback.select(); } message(status, 'Select and copy the text above.'); } }
 $('copyCallback').addEventListener('click', () => copy($('callbackUrl').value, 'copyStatus', $('callbackUrl')));
+for (const [buttonId, inputId, statusId] of [['copyAppName', 'appName', 'appNameStatus'], ['copyWebClientName', 'webClientName', 'webClientNameStatus']]) {
+  $(buttonId).addEventListener('click', () => copy($(inputId).value, statusId, $(inputId)));
+}
 $('copyAdmin').addEventListener('click', () => copy($('adminInstructions').textContent, 'adminStatus'));
 $('credentialsForm').addEventListener('submit', async event => {
   event.preventDefault(); const file = $('credentialsFile').files[0]; if (!file) return; $('importCredentials').disabled = true;

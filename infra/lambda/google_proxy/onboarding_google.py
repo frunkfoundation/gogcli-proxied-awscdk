@@ -17,7 +17,9 @@ def validate_web_client(document, callback):
         raise WorkflowError(400, "invalid_client", "Upload a Google Web application client JSON file.")
     if not isinstance(web.get("redirect_uris"), list) or callback not in web["redirect_uris"]:
         raise WorkflowError(400, "callback_mismatch", "Register the exact hosted callback in this Web client.")
-    if web.get("token_uri", TOKEN_URI) != TOKEN_URI or web.get("auth_uri", AUTH_URI) != AUTH_URI:
+    # Google's downloaded client JSON uses the older official authorization URL.
+    # Runtime requests use the fixed canonical endpoints, never uploaded URLs.
+    if web.get("token_uri", TOKEN_URI) != TOKEN_URI or web.get("auth_uri", AUTH_URI) not in (AUTH_URI, "https://accounts.google.com/o/oauth2/auth"):
         raise WorkflowError(400, "invalid_client", "Use Google's standard authorization and token endpoints.")
     if not isinstance(web.get("project_id"), str) or not web["project_id"].strip():
         raise WorkflowError(400, "invalid_client", "The Web client must identify its Google project.")
