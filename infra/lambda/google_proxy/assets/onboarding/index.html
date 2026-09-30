@@ -6,64 +6,56 @@
   <link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
 </head>
 <body><main>
-  <header><p class="eyebrow">Your remote account manager</p><h1>Connect and manage Google accounts</h1>
-    <p>Connect Gmail and Drive, check saved connections, and control access for your tools. Saved progress continues when you close this page.</p>
-  </header>
-  <p id="pageStatus" class="notice" role="status" aria-live="polite">Checking your owner session…</p>
+  <header><h1>Connect and manage Google accounts</h1></header>
+  <p id="pageStatus" class="notice" role="status" aria-live="polite">Loading…</p>
   <p id="recoveryStatus" class="notice" role="status" hidden></p>
-  <a id="loginLink" class="button" hidden>Sign in as the owner</a>
-  <button id="refresh" type="button">Refresh saved progress</button>
+  <a id="loginLink" class="button" hidden>Sign in</a>
+  <button id="refresh" type="button">Refresh</button>
   <div id="guide" hidden>
     <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
       <p id="connectedCount" role="status"></p>
-      <p class="small">Previous Desktop setups are context only. A connection below needs its own remote authorization. Check results show the time of the last read, not continuous monitoring.</p>
       <div id="accounts"></div>
       <form id="addAccountsForm"><label for="newEmails">Add accounts</label>
-        <textarea id="newEmails" rows="3" placeholder="One email, or paste emails separated by commas or new lines" autocomplete="off"></textarea>
-        <button type="submit">Save new accounts</button>
+        <textarea id="newEmails" rows="3" placeholder="Emails, separated by commas or new lines" autocomplete="off"></textarea>
+        <button type="submit">Add</button>
         <p id="addStatus" role="status" aria-live="polite"></p>
       </form>
     </section>
-    <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Prepare the shared Google application</h2>
-      <p>One External application can connect personal Gmail and different Workspace organizations. An organization's administrator may restrict it.</p>
-      <label for="projectId">Selected existing project</label><select id="projectId"></select>
-      <p id="projectContext" class="small"></p><p id="credentialStatus" class="notice" role="status"></p>
-      <details id="apisStep"><summary>1. Enable the selected APIs</summary>
-        <p><strong>Project:</strong> use the selected project above for every Console step.</p>
-        <p>Open each service you selected. Keep it enabled if the Console shows “Manage”; otherwise choose “Enable”.</p><div id="apiLinks"></div>
+    <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Google setup</h2>
+      <label for="projectId">Google Cloud project</label><select id="projectId"></select>
+      <p id="credentialStatus" class="notice" role="status"></p>
+      <details id="apisStep"><summary>1. Enable APIs</summary>
+        <p>Open each API and choose <strong>Enable</strong>. If it shows <strong>Manage</strong>, it is already enabled.</p><div id="apiLinks"></div>
         <div id="apiConfirmations"></div>
       </details>
-      <details id="audienceStep"><summary>2. Review audience, branding, and permissions</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. Supply these fields when setting up the application; keep existing names and monitored contact emails when already configured.</p>
-        <label for="appName">App name — suggested value, based on the selected project ID</label><div class="copy"><input id="appName" readonly><button id="copyAppName" type="button">Copy app name</button></div><p id="appNameStatus" role="status"></p>
+      <details id="audienceStep"><summary>2. Set up branding, audience, and scopes</summary>
+        <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. If Google shows <strong>Get started</strong>, enter these values, choose <strong>External</strong>, agree to the policy, and choose <strong>Create</strong>.</p>
+        <label for="appName">App name</label><div class="copy"><input id="appName" readonly><button id="copyAppName" type="button">Copy app name</button></div><p id="appNameStatus" role="status"></p>
         <ul>
-          <li><strong>User support email:</strong> select <code>jay.jakosky@gmail.com</code> if offered in the dropdown, or another eligible email you monitor.</li>
-          <li><strong>Developer contact information / Contact Information email:</strong> <code>jay.jakosky@gmail.com</code> is an acceptable monitored contact.</li>
+          <li><strong>User support email:</strong> <code>jay.jakosky@gmail.com</code></li>
+          <li><strong>Developer contact information:</strong> <code>jay.jakosky@gmail.com</code></li>
+          <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code></li>
         </ul>
-        <p>If Google shows Get started, use these name and contact values and choose External in the initial setup. At Finish, review the Google API Services: User Data Policy, select “I agree” if you agree, then choose Create.</p>
-        <p class="small">If Google asks for Authorized domains, use <code>k-rae.com</code> for this callback. Keep existing homepage, privacy policy, terms, and logo settings; follow any requirements Google actually presents.</p>
-        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a> and review these settings:</p>
-        <ul><li><strong>User type / Audience:</strong> External.</li><li><strong>Publishing status:</strong> In production for durable use. Choose Publish app if the status is Testing.</li><li><strong>Test users (only while Testing):</strong> add each account you intend to authorize. Saved accounts: <span id="testUserEmails"></span>. Testing grants can expire after seven days.</li></ul>
-        <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Under <strong>Add or remove scopes</strong>, select these requested permissions and save:</p><ul id="serviceDescriptions"></ul>
-        <p>Identity permissions identify the Google account. Google consent and access for your tools are separate. Publishing does not complete Google's verification; follow any actual Google or administrator requirement.</p>
+        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. User type: <strong>External</strong>. If the status is <strong>Testing</strong>, choose <strong>Publish app</strong>.</p>
+        <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Choose <strong>Add or remove scopes</strong>, select these, and save:</p><ul id="serviceDescriptions"></ul>
       </details>
-      <details id="clientStep"><summary>3. Prepare a Web client and register its callback</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a>. Open an existing Web client or choose Create client, then supply these fields. Keep an existing client's name; this suggestion is for a new client.</p>
-        <p><strong>Application type:</strong> Web application.</p>
-        <label for="webClientName">Name — suggested value, based on the selected project ID</label><div class="copy"><input id="webClientName" readonly><button id="copyWebClientName" type="button">Copy client name</button></div><p id="webClientNameStatus" role="status"></p>
-        <label for="callbackUrl">Authorized redirect URIs — add this exact Google callback address</label><div class="copy"><input id="callbackUrl" readonly><button id="copyCallback" type="button">Copy callback</button></div><p id="copyStatus" role="status"></p>
-        <p><strong>Authorized JavaScript origins (optional):</strong> leave blank for a new client; this application uses server redirects. Keep existing entries when reusing a client.</p>
-        <p>Choose Create for a new client or Save for an existing client, then download the Web client's JSON. A previous Desktop client served local software and cannot supply this hosted callback.</p>
-        <form id="credentialsForm"><label for="credentialsFile">Downloaded Web application client JSON</label><input id="credentialsFile" type="file" accept=".json,application/json" required><button id="importCredentials" type="submit">Upload Google client</button></form>
+      <details id="clientStep"><summary>3. Create a Web client</summary>
+        <p><a data-console="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a> and choose <strong>Create client</strong>.</p>
+        <p><strong>Application type:</strong> Web application</p>
+        <label for="webClientName">Name</label><div class="copy"><input id="webClientName" readonly><button id="copyWebClientName" type="button">Copy client name</button></div><p id="webClientNameStatus" role="status"></p>
+        <p><strong>Authorized JavaScript origins:</strong> leave blank.</p>
+        <label for="callbackUrl">Authorized redirect URIs → Add URI</label><div class="copy"><input id="callbackUrl" readonly><button id="copyCallback" type="button">Copy callback</button></div><p id="copyStatus" role="status"></p>
+        <p>Choose <strong>Create</strong>, download the client JSON, and upload it here.</p>
+        <form id="credentialsForm"><label for="credentialsFile">Client JSON</label><input id="credentialsFile" type="file" accept=".json,application/json" required><button id="importCredentials" type="submit">Upload</button></form>
         <p id="uploadStatus" role="status" aria-live="polite"></p>
       </details>
-      <details id="confirmStep"><summary>4. Save your reviewed settings for this client</summary>
-        <label class="check"><input id="publishingConfirmed" type="checkbox"> I reviewed Audience and this application is In production.</label>
-        <p class="small">These are your confirmations, not an independent check of Google Console. Importing another client requires review again.</p><button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
+      <details id="confirmStep"><summary>4. Save reviewed settings</summary>
+        <label class="check"><input id="publishingConfirmed" type="checkbox"> Publishing status is In production</label>
+        <button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
       </details>
-      <details><summary>Advanced project choice</summary><p>Use another recorded project only when your organization requires it. Account options can select a prepared project independently.</p><button id="saveDefault" type="button">Use selected project for new accounts</button><p id="defaultStatus" role="status"></p></details>
-      <details><summary>Administrator instructions for a Google policy block</summary><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy administrator instructions</button><p id="adminStatus" role="status"></p></details>
+      <details><summary>Default project for new accounts</summary><button id="saveDefault" type="button">Use selected project</button><p id="defaultStatus" role="status"></p></details>
+      <details><summary>Blocked by a Workspace administrator?</summary><p>Send them this:</p><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy</button><p id="adminStatus" role="status"></p></details>
     </section>
-    <details><summary>Advanced: use the CLI</summary><p>Build this repository with <code>make build</code>. Configure the proxy endpoint, authorized AWS profile, and owner-provided API key in your gog configuration. Google credentials stay on the server.</p><p id="callerIdentity" class="small"></p><pre id="cliConfig"></pre><p>Run <code>bin/gog auth doctor --check</code> for bounded Gmail and Drive reads as your actual caller. A server check establishes only that verifier's access.</p></details>
+    <details><summary>Use the CLI</summary><p>Build with <code>make build</code>, then merge this into the file shown by <code>bin/gog config path</code>:</p><pre id="cliConfig"></pre><p id="callerIdentity" class="small"></p><p>Test with <code>bin/gog auth doctor --check</code>.</p></details>
   </div>
 </main></body></html>

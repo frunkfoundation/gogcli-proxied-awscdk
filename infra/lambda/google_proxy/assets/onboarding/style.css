@@ -7,7 +7,7 @@ h1 { font-size: clamp(30px, 5vw, 42px); letter-spacing: -1px; margin: 8px 0 16px
 h2 { font-size: 22px; }
 p, li { line-height: 1.6; }
 #projectGuide li { overflow-wrap: anywhere; }
-.eyebrow { font-size: 13px; color: #4c627e; font-weight: 650; margin: 0; }
+.notice:empty { display: none; }
 a { color: #174c9b; text-underline-offset: 3px; }
 details, section { background: white; border: 1px solid #ccd6e1; border-radius: 12px; margin: 16px 0; padding: 20px 24px; }
 summary { font-size: 18px; font-weight: 650; cursor: pointer; line-height: 1.5; }

@@ -56,9 +56,19 @@ def main():
           document.querySelector('#projectId').dispatchEvent(new Event('change'))
         """)
         check("""
+          document.querySelector('#clientStep').open=true;
+          document.querySelectorAll('.account')[0].querySelector('details').open=true;
+          window.dispatchEvent(new Event('focus'))
+        """)
+        browser("wait", "200")
+        check("""
+          if(!document.querySelector('#clientStep').open || !document.querySelectorAll('.account')[0].querySelector('details').open)
+            throw Error('returning to the page collapsed the section in use')
+        """)
+        check("""
           const cards=document.querySelectorAll('.account');
           if(cards.length!==3) throw Error('expected three saved accounts, no blank rows');
-          if(!cards[0].textContent.includes('Saved connection: connected') ||
+          if(!cards[0].textContent.includes('Status: connected') ||
              !cards[0].textContent.includes('Choose this exact Google account'))
             throw Error('failed replacement hid installed access or recovery');
           if(cards[0].querySelector('button').textContent!=='Check saved connection')
@@ -131,7 +141,7 @@ def main():
         check("document.querySelectorAll('#projectGuide details').forEach(step=>step.open=true); if(document.documentElement.scrollWidth>innerWidth) throw Error('mobile horizontal overflow')")
         browser("press", "Tab")
         check("if(document.activeElement===document.body) throw Error('keyboard focus missing')")
-        print("Passed: required Google fields, project-specific suggested names and copy, stable callback, invalid drafts, independent refresh, reset after save, installed/attempt distinction, selected services/access, parallel accounts, pasted emails, durable reopen, expanded mobile steps, keyboard and consent restart checks.")
+        print("Passed: required Google fields, open sections kept on refocus, project-specific suggested names and copy, stable callback, invalid drafts, independent refresh, reset after save, installed/attempt distinction, selected services/access, parallel accounts, pasted emails, durable reopen, expanded mobile steps, keyboard and consent restart checks.")
     finally:
         browser("close")
         server.shutdown()

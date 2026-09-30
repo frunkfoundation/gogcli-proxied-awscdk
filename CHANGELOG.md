@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Setup: cut explanatory caveats from the owner page to direct instructions, and keep open Google setup steps and account options open when the page refreshes or regains focus.
+
 - Setup: accept Google-downloaded Web client JSON using its standard authorization URL while keeping runtime endpoints fixed.
 
 - Setup: show Google Console field names and suggested project-specific values, including a copyable Web-client name and the permanent callback.

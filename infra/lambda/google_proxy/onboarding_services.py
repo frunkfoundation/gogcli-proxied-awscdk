@@ -6,9 +6,9 @@ from onboarding_store import WorkflowError
 
 SERVICE_OPTIONS = [
     {"name": "gmail", "label": "Gmail", "scope": "https://www.googleapis.com/auth/gmail.modify",
-     "description": "Read, send, label, and change mail, as permitted by caller policy."},
+     "description": "Read, send, label, and change mail."},
     {"name": "drive", "label": "Google Drive", "scope": "https://www.googleapis.com/auth/drive",
-     "description": "Read and change existing Drive files, as permitted by caller policy and transfer limits."},
+     "description": "Read and change existing Drive files."},
 ]
 IDENTITY_SCOPES = ["openid", "email"]
 SCOPES_BY_SERVICE = {item["name"]: item["scope"] for item in SERVICE_OPTIONS}
