@@ -174,8 +174,20 @@ func loadProxyConfig(ctx context.Context) (proxyConfig, error) {
 	}
 
 	if region == "" {
-		// For custom domains, users must set AWS_REGION or AWS_DEFAULT_REGION.
-		return proxyConfig{}, &ProxyConfigError{Missing: []string{"AWS_REGION (or AWS_DEFAULT_REGION)"}}
+		var opts []func(*awsconfig.LoadOptions) error
+		if awsProfile != "" {
+			opts = append(opts, awsconfig.WithSharedConfigProfile(awsProfile))
+		}
+
+		awsCfg, loadErr := awsconfig.LoadDefaultConfig(ctx, opts...)
+		if loadErr != nil {
+			return proxyConfig{}, &ProxyConfigError{Invalid: []string{"AWS configuration"}, Cause: loadErr}
+		}
+		region = awsCfg.Region
+	}
+
+	if region == "" {
+		return proxyConfig{}, &ProxyConfigError{Missing: []string{"AWS region (profile, AWS_REGION, or AWS_DEFAULT_REGION)"}}
 	}
 
 	return proxyConfig{

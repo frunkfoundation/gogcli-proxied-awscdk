@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,6 +63,9 @@ func (s *stubSigner) SignHTTP(_ context.Context, credentials aws.Credentials, r 
 }
 
 func TestLoadProxyConfig_MissingEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
 	t.Setenv(envProxyBaseURL, "")
 	t.Setenv(envProxyAPIKey, "")
 
@@ -128,6 +132,33 @@ func TestLoadProxyConfig_UsesProfileEnvFallback(t *testing.T) {
 	}
 	if got.AWSProfile != "from-env" {
 		t.Fatalf("aws profile = %q", got.AWSProfile)
+	}
+}
+
+func TestLoadProxyConfig_CustomDomainUsesSelectedProfileRegion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg-config"))
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_PROFILE", "default")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(home, "credentials"))
+	sharedConfig := filepath.Join(home, "aws-config")
+	t.Setenv("AWS_CONFIG_FILE", sharedConfig)
+	if err := os.WriteFile(sharedConfig, []byte("[default]\nregion = us-west-2\n[profile proxy]\nregion = us-east-2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.NewConfigStore(proxyTestLayout(t)).Write(config.File{
+		ProxyBaseURL: "https://gp.example.com/prd/", ProxyAPIKey: "cfg-key", AWSProfile: "proxy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadProxyConfig(context.Background())
+	if err != nil {
+		t.Fatalf("loadProxyConfig: %v", err)
+	}
+	if got.Region != "us-east-2" {
+		t.Fatalf("region = %q; want selected profile region us-east-2", got.Region)
 	}
 }
 

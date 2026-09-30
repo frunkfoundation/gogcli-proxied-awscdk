@@ -16,6 +16,32 @@ Plan: [proxy-stabilization.md](proxy-stabilization.md)
 - Additional live simulation: Developer identity and workload boundary allow the
   five intended route families; both deny inventory POST, Calendar, and onboarding.
 
+## Permanent address follow-up
+
+- Infrastructure source: `e811a48d`; deployed to the same production stack.
+- Fixed hostname: `gp-039168171bf05570eadba6a8.k-rae.com`, in the existing
+  `k-rae.com` hosted zone. Regional ACM certificate is issued; API Gateway
+  domain is available, with `/prd` mapped to the existing stage.
+- Certificate, custom domain, and alias have Retain deletion/replacement policy.
+  API/table identifiers and existing account records were preserved.
+- Production owner provider 29 (`krae-gogcli-proxy-prd-web`) on
+  `https://auth.k-rae.com/` now registers only the exact permanent owner callback;
+  the app launch URL points to the permanent setup page. Client credentials,
+  owner group, scopes, and issuer were preserved; discovery/JWKS and redirect
+  read-back passed. Actual owner sign-in still requires the owner's browser.
+- HTTPS asset checks, secure login redirect, browser sign-in/Refresh rendering,
+  no JavaScript errors, and signed admission-denial checks passed on the custom
+  domain. Read-only account checks confirm eight saved records, zero connections.
+- Eight infrastructure tests, the full Go googleapi suite, and repository-local
+  lint (zero issues) passed. Documentation and generated skill checks passed. The CLI
+  resolves the signing region from its selected AWS profile for custom domains;
+  a real shared-config-parser regression covers profile selection.
+- Real source-built CLI inventory, with AWS region environment variables unset,
+  reaches HTTP 403 through the custom domain; separate signed checks verify the
+  expected unenrolled-account denial. Local configuration uses the custom domain.
+  Register the permanent Google
+  callback displayed on the page before completing the first Google consent.
+
 ## Enrollment roster
 
 Jay supplied the remaining addresses on 2026-09-30. This is eight distinct
