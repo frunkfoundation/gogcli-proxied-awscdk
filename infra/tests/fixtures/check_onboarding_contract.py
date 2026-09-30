@@ -74,8 +74,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def browser(*args):
-    return subprocess.run(["agent-browser", "--session", SESSION, *args],
-                          text=True, capture_output=True, check=True).stdout
+    result = subprocess.run(["agent-browser", "--session", SESSION, *args],
+                            text=True, capture_output=True)
+    if result.returncode:
+        raise AssertionError(result.stderr or result.stdout)
+    return result.stdout
 
 
 def check(code):
@@ -90,10 +93,6 @@ def main():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     url = f"http://127.0.0.1:{server.server_port}/onboarding/"
     os.environ["ONBOARDING_BASE_URL"] = url
-    client_ref = STORE.secret_put("clients/fixture", {"client_id": "actual-imported-fixture-client"})
-    STORE.put({"pk": "CLIENT#" + PROJECT, "project_id": PROJECT, "revision": "fixture-revision",
-               "client_id": "actual-imported-fixture-client", "secret_ref": client_ref,
-               "publishing_confirmed": True, "api_confirmed": {"gmail": True, "drive": True}})
     for email in ("jay.jakosky@gmail.com", EMAIL):
         SERVICE.save_account("fixture", email, {"projectId": PROJECT, "services": ["gmail", "drive"]})
     installed = SERVICE.account("fixture", "jay.jakosky@gmail.com")
@@ -106,6 +105,57 @@ def main():
         browser("open", url)
         browser("wait", "#accounts article")
         check("""
+          if(document.querySelector('#confirmStep #apiConfirmations')!==document.querySelector('#apiConfirmations'))
+            throw Error('API confirmations must follow Web client upload in step 4');
+          if(document.querySelector('#apisStep #apiConfirmations')) throw Error('step 1 repeats step 4 review');
+          if(!document.querySelector('#connectAccounts')?.disabled) throw Error('step 5 must wait for Web client and API review');
+          if([...document.querySelectorAll('.connect-account')].some(button=>!button.disabled))
+            throw Error('consent is enabled before Google setup');
+        """)
+        web_json = {"web": {"client_id": "actual-imported-fixture-client", "client_secret": "offline-fixture-secret",
+                            "project_id": PROJECT, "redirect_uris": [SERVICE.callback_url]}}
+        check("""
+          document.querySelector('#clientStep').open=true;
+          const files=new DataTransfer();
+          files.items.add(new File([JSON.stringify(%s)],'offline-google-web.json',{type:'application/json'}));
+          document.querySelector('#credentialsFile').files=files.files;
+          document.querySelector('#credentialsForm').requestSubmit();
+        """ % json.dumps(web_json))
+        browser("wait", "200")
+        if STORE.get("CLIENT#" + PROJECT)["client_id"] != "actual-imported-fixture-client":
+            raise AssertionError("Web JSON did not reach the real owner import handler")
+        check("""
+          if(!document.querySelector('#confirmStep').open) throw Error('upload did not open API review');
+          if([...document.querySelectorAll('#confirmStep #apiConfirmations input')].some(input=>input.checked))
+            throw Error('upload retained unreviewed API confirmations');
+          document.querySelector('#saveProject').click();
+        """)
+        browser("wait", "200")
+        check("""
+          const status=document.querySelector('#projectSaveStatus').textContent;
+          if(!status.includes('Gmail') || !status.includes('Drive') || status.includes('Google setup complete'))
+            throw Error('unchecked APIs lack specific next-action guidance: '+status);
+          if(!document.querySelector('#connectAccounts').disabled) throw Error('unchecked APIs enabled connection');
+        """)
+        if any(item["path"].endswith("/setup") or item["path"].endswith("/enrollments") for item in CALLS):
+            raise AssertionError("incomplete API review submitted setup or started enrollment")
+        check("""
+          document.querySelectorAll('#confirmStep #apiConfirmations input').forEach(input=>input.click());
+          document.querySelector('#saveProject').click();
+        """)
+        if any(item["path"].endswith("/enrollments") for item in CALLS):
+            raise AssertionError("Google setup created an enrollment before the account consent action")
+        browser("wait", "200")
+        check("""
+          if(!document.querySelector('#projectSaveStatus').textContent.includes('Google setup complete'))
+            throw Error('saved API review does not mark Google setup complete');
+          if(document.querySelector('#connectAccounts').disabled) throw Error('reviewed APIs did not enable step 5');
+          document.querySelector('#connectAccounts').click();
+          const first=[...document.querySelectorAll('.account .connect-account')].find(button=>!button.disabled);
+          if(document.activeElement!==first || first.closest('.account').dataset.email!=='jay@frunkholdings.ltd')
+            throw Error('step 5 did not focus first ready unconnected account');
+        """)
+        check("""
           if(!document.querySelector('#adminInstructions').textContent.includes('actual-imported-fixture-client')) throw Error('administrator client ID does not match imported client');
           const cards=[...document.querySelectorAll('.account')];
           const installed=cards.find(card=>card.dataset.email==='jay.jakosky@gmail.com');
@@ -116,7 +166,7 @@ def main():
         check("""
           const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
           if(card.querySelector('button').disabled) throw Error('real A verification blocked B');
-          card.querySelector('button').click()
+          card.querySelector('.connect-account').click()
         """)
         browser("wait", "--url", "https://accounts.google.com/**")
         first = latest()
@@ -185,7 +235,7 @@ def main():
             raise AssertionError("reconnect restored withdrawn caller access from an old draft")
         if any(item["status"] >= 400 for item in CALLS):
             raise AssertionError(f"browser sent an incompatible command: {CALLS}")
-        print("Passed real HTTP/service DOM contracts: imported client, service evidence, parallel checks, reload/Continue same operation, new-session restart, cancellation/fresh consent, withdrawn access preserved during repair.")
+        print("Passed real HTTP/service DOM contracts: pre-upload setup, Web JSON import, incomplete API guidance, saved API review, step 5 keyboard handoff and Google consent, service evidence, parallel checks, reload/Continue same operation, new-session restart, cancellation/fresh consent, withdrawn access preserved during repair.")
     finally:
         browser("close")
         server.shutdown()

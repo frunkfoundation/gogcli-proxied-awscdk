@@ -42,6 +42,12 @@ def main():
             throw Error('connected account lost Google revocation');
           if(!(document.querySelector('#projectGuide').compareDocumentPosition(document.querySelector('#accounts')) & Node.DOCUMENT_POSITION_FOLLOWING))
             throw Error('shared setup must precede account connections');
+          if(!document.querySelector('#confirmStep #apiConfirmations') || document.querySelector('#apisStep #apiConfirmations'))
+            throw Error('review must follow client upload');
+          if(document.querySelector('#connectAccounts').disabled) throw Error('saved review does not enable step 5');
+          document.querySelector('#connectAccounts').click();
+          if(document.activeElement!==fresh.querySelector('.connect-account'))
+            throw Error('step 5 lost keyboard handoff to ready account');
         """)
         STATE["projects"][0]["clientConfigured"] = False
         check("document.querySelector('#refresh').click()")
@@ -50,6 +56,7 @@ def main():
           const fresh=document.querySelectorAll('.account')[1];
           if(!fresh.querySelector('button').disabled || !fresh.textContent.includes('Complete Google setup above'))
             throw Error('unprepared account should wait for shared setup');
+          if(!document.querySelector('#connectAccounts').disabled) throw Error('step 5 bypasses missing Web client');
           if(!fresh.querySelector('details select')) throw Error('advanced project selection disappeared');
         """)
         STATE["projects"][0]["clientConfigured"] = True

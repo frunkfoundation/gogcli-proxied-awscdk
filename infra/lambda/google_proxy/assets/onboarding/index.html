@@ -18,7 +18,6 @@
       <p id="credentialStatus" class="notice" role="status"></p>
       <details id="apisStep"><summary>1. Enable APIs</summary>
         <p>Open each API and choose <strong>Enable</strong>. If it shows <strong>Manage</strong>, it is already enabled.</p><div id="apiLinks"></div>
-        <div id="apiConfirmations"></div>
       </details>
       <details id="audienceStep"><summary>2. Set up branding, audience, and scopes</summary>
         <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. If Google shows <strong>Get started</strong>, enter these values, choose <strong>External</strong>, agree to the policy, and choose <strong>Create</strong>.</p>
@@ -42,14 +41,18 @@
         <form id="credentialsForm"><label for="credentialsFile">Client JSON</label><input id="credentialsFile" type="file" accept=".json,application/json" required><button id="importCredentials" type="submit">Upload</button></form>
         <p id="uploadStatus" role="status" aria-live="polite"></p>
       </details>
-      <details id="confirmStep"><summary>4. Save reviewed settings</summary>
+      <details id="confirmStep"><summary>4. Review APIs and save settings</summary>
+        <p>After uploading the Web client, confirm the APIs you enabled in step 1 for the services your accounts will use. Saving these settings prepares the project; each account still needs Google consent in step 5.</p>
+        <div id="apiConfirmations"></div>
         <label class="check"><input id="publishingConfirmed" type="checkbox"> In production (optional; leave unchecked for Testing)</label>
         <button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
       </details>
+      <button id="connectAccounts" type="button" aria-describedby="connectStatus" disabled>Connect accounts</button><p id="connectStatus" role="status" aria-live="polite"></p>
       <details><summary>Default project for new accounts</summary><button id="saveDefault" type="button">Use selected project</button><p id="defaultStatus" role="status"></p></details>
       <details><summary>Blocked by a Workspace administrator?</summary><p>Send them this:</p><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy</button><p id="adminStatus" role="status"></p></details>
     </section>
-    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
+    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">5. Connect your accounts</h2>
+      <p>For each account, choose its services and Connect. Google will ask you to choose that account and approve its permissions. Each account is connected after Google approval and the service checks finish.</p>
       <p id="connectedCount" role="status"></p>
       <div id="accounts"></div>
       <form id="addAccountsForm"><label for="newEmails">Add accounts</label>

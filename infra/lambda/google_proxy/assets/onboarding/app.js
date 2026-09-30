@@ -27,11 +27,32 @@ const time = value => value ? new Date(typeof value === 'number' ? value * 1000 
 function choices(select, selected) {
   snapshot.projects.forEach(item => { const option = element('option', item.projectId, select); option.value = item.projectId; }); select.value = selected;
 }
+function requiredServices(saved) {
+  const accounts = snapshot.accounts.map(draftFor).filter(draft => draft.projectId === saved.projectId);
+  return accounts.length ? [...new Set(accounts.flatMap(draft => draft.services))] : snapshot.serviceOptions.map(service => service.name);
+}
+const serviceLabels = names => names.map(name => snapshot.serviceOptions.find(service => service.name === name)?.label || name).join(' and ');
+const missingAPIs = saved => requiredServices(saved).filter(name => saved.apiConfirmed?.[name] !== true);
+function setupStatus(saved) {
+  if (!saved.clientConfigured) return 'Upload a Web client in step 3, then review APIs in step 4 before connecting accounts.';
+  const missing = missingAPIs(saved);
+  return missing.length ? 'Confirm ' + serviceLabels(missing) + ' API access in step 4 and save before connecting accounts.' : 'Google setup complete. Next: connect your accounts.';
+}
+function connectionTarget() {
+  return [...$('accounts').querySelectorAll('.connect-account')].find(node => !node.disabled && node.dataset.project === $('projectId').value);
+}
+function renderSetupStatus() {
+  const saved = project(); if (!saved) return;
+  const ready = saved.clientConfigured && !missingAPIs(saved).length;
+  message('credentialStatus', setupStatus(saved));
+  $('connectAccounts').disabled = !ready || !connectionTarget();
+  message('connectStatus', !ready ? setupStatus(saved) : connectionTarget() ? 'Next: choose an account below to start Google consent.' : snapshot.accounts.length ? 'No accounts are ready for new Google consent in this project. Review their connection status and options in step 5.' : 'Add an account in step 5 to start Google consent.');
+}
 function renderProject() {
   const saved = project(); if (!saved) return; reviewedProjectRevision = saved.clientRevision;
   $('appName').value = saved.projectId; $('webClientName').value = saved.projectId + ' web client';
   $('testUserEmails').textContent = snapshot.accounts.map(account => account.email).join(', ');
-  message('credentialStatus', !saved.clientConfigured ? 'Complete these steps before connecting accounts.' : 'Web client uploaded. Confirm selected APIs, save settings, then connect.');
+  message('projectSaveStatus', '');
   $('publishingConfirmed').checked = saved.publishingConfirmed === true;
   $('apiLinks').replaceChildren(); $('apiConfirmations').replaceChildren(); $('serviceDescriptions').replaceChildren();
   snapshot.serviceOptions.forEach(service => {
@@ -46,6 +67,7 @@ function renderProject() {
   $('saveProject').disabled = !saved.clientConfigured;
   $('adminInstructions').textContent = 'Please allow Google OAuth client ' + (saved.clientId || '(upload the client JSON first)') + ' in project ' + saved.projectId + ' with scopes: ' + snapshot.serviceOptions.map(service => service.scope).join(', ') + ', openid, email.';
   projectDirty = false;
+  renderSetupStatus();
 }
 function openNextStep() { const saved = project(); $(saved?.clientConfigured ? 'confirmStep' : 'apisStep').open = true; }
 function markProjectDirty() { projectDirty = true; message('projectSaveStatus', 'Unsaved changes.'); }
@@ -84,8 +106,9 @@ function renderAccounts() {
     const selected = snapshot.projects.find(item => item.projectId === draft.projectId);
     const needsSetup = !selected?.clientConfigured || draft.services.some(name => !selected?.apiConfirmed?.[name]);
     const prepare = needsSetup && (!installed || op?.phase === 'authorizing') && !account.recovery_available && !canContinue(op);
-    if (prepare) status.textContent = 'Complete Google setup above for this project.';
+    if (prepare) status.textContent = 'Complete Google setup above for this project. ' + setupStatus(selected || { projectId: draft.projectId });
     const primary = element('button', op?.phase === 'authorizing' ? canContinue(op) ? 'Continue Google consent' : 'Restart Google consent' : installed ? 'Check saved connection' : account.recovery_available ? 'Retry saved authorization' : draft.ownerAccessEnabled ? 'Connect and enable my tools' : 'Connect Google only', row); primary.type = 'button'; primary.disabled = prepare || pending.has(account.email) || (active(op) && op.phase !== 'authorizing');
+    if (op?.phase === 'authorizing' || (!installed && !account.recovery_available)) { primary.className = 'connect-account'; primary.dataset.project = draft.projectId; }
     primary.addEventListener('click', () => act(account, op?.phase === 'authorizing' ? 'enrollments' : installed ? 'verifications' : account.recovery_available ? 'recoveries' : 'enrollments', status));
     const secondary = element('details', '', row); secondary.open = openOptions.has(account.email); element('summary', installed ? 'Connection options' : 'Advanced options', secondary);
     const projectLabel = element('label', 'Google project (advanced)', secondary); const select = element('select', '', projectLabel); choices(select, draft.projectId); select.addEventListener('change', () => { draft.projectId = select.value; draft.dirty = true; renderAccounts(); });
@@ -96,6 +119,7 @@ function renderAccounts() {
     if (installed || account.connection_status === 'disconnecting') button(secondary, 'Disconnect', () => { if (confirm('Disconnect ' + account.email + '? Your Google data is not affected.')) act(account, 'connection', status); });
     if (installed) { const google = element('a', 'Revoke at Google ↗', secondary); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer'; }
   });
+  renderSetupStatus();
 }
 function button(parent, text, action) { const node = element('button', text, parent); node.type = 'button'; node.addEventListener('click', action); return node; }
 async function act(account, action, status, restart = false) {
@@ -136,12 +160,18 @@ async function loadSetup() {
 }
 $('refresh').addEventListener('click', loadSetup);
 $('projectId').addEventListener('change', renderProject);
+$('connectAccounts').addEventListener('click', () => { const target = connectionTarget(); if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); } });
 $('publishingConfirmed').addEventListener('change', markProjectDirty);
 $('saveDefault').addEventListener('click', async () => { try { await request('setup', 'PUT', { defaultProjectId: $('projectId').value }); message('defaultStatus', 'Saved.'); await loadSetup(); } catch (error) { message('defaultStatus', error.message, true); } });
 $('saveProject').addEventListener('click', async () => {
   try { const apiConfirmed = {}; $('apiConfirmations').querySelectorAll('input').forEach(input => { apiConfirmed[input.dataset.service] = input.checked; });
+    const missing = requiredServices(project()).filter(name => apiConfirmed[name] !== true);
+    if (missing.length) {
+      message('projectSaveStatus', 'Confirm ' + serviceLabels(missing) + ' API access before saving. Enable the missing APIs in step 1, then check them here.', true);
+      $('confirmStep').open = true; $('apiConfirmations').querySelector('[data-service="' + missing[0] + '"]').focus(); return;
+    }
     await request('projects/' + encodeURIComponent(project().projectId) + '/setup', 'PUT', { clientRevision: reviewedProjectRevision, publishingConfirmed: $('publishingConfirmed').checked, apiConfirmed });
-    projectDirty = false; await loadSetup(); message('projectSaveStatus', 'Saved.');
+    projectDirty = false; await loadSetup(); message('projectSaveStatus', setupStatus(project()));
   } catch (error) { message('projectSaveStatus', error.message, true); }
 });
 $('addAccountsForm').addEventListener('submit', async event => {
@@ -165,7 +195,7 @@ $('credentialsForm').addEventListener('submit', async event => {
     if (!data?.web || data.installed) throw new Error('Choose a Web application client, not a Desktop client.');
     if (data.web.project_id !== project().projectId) throw new Error('This client belongs to another project. Select that project above.');
     if (!data.web.redirect_uris?.includes($('callbackUrl').value)) throw new Error('The client is missing the redirect URI above. Add it, save, and download the JSON again.');
-    await request('projects/' + encodeURIComponent(project().projectId) + '/oauth-client', 'PUT', data); projectDirty = false; await loadSetup(); message('uploadStatus', 'Uploaded. Finish step 4.'); $('confirmStep').open = true;
+    await request('projects/' + encodeURIComponent(project().projectId) + '/oauth-client', 'PUT', data); projectDirty = false; await loadSetup(); message('uploadStatus', 'Web client saved. Next: review APIs in step 4.'); $('confirmStep').open = true;
   } catch (error) { message('uploadStatus', error.message, true); }
   finally { $('importCredentials').disabled = false; $('credentialsFile').value = ''; }
 });

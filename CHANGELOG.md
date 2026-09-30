@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Setup: review API confirmations after Web-client upload, show saved readiness and specific missing requirements, and provide an explicit step 5 handoff to account consent.
+
 - Setup: prepare the shared Google project before account connections, remove duplicate setup controls, and show Google revocation only for installed connections.
 
 - Setup: allow Google Testing applications to connect without a production confirmation; retain API checks and explain test-user setup and seven-day refresh-token expiry.

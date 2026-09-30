@@ -77,11 +77,18 @@ Keep working settings; the values below are suggestions for missing fields.
    The client name is only a Console label. For another selected project, use
    `<project ID> web client`; the page supplies the exact suggested name to copy.
    The recorded Desktop client served local software; keep it if still needed.
-4. **Save and import.** Choose **Create** or **Save**, download that Web client's
-   JSON, and upload it on the owner page. Use Google's downloaded file unchanged.
-   Then confirm the enabled APIs and choose **Save reviewed settings** on the
-   page. Leave the optional **In production** checkbox unchecked for Testing.
-   Confirmations apply to that saved client revision.
+   Choose **Create** or **Save**, download that Web client's JSON, and upload it
+   in step 3 on the owner page. Use Google's downloaded file unchanged.
+4. **Review the imported client.** In step 4, check the enabled service APIs and
+   choose **Save reviewed settings**. Leave the optional **In production** checkbox
+   unchecked for Testing. The page names missing confirmations beside this action.
+   These confirmations belong to the imported client revision; uploading a
+   replacement asks for this review again.
+5. **Connect your accounts.** When setup is ready, choose **Connect your accounts**
+   to move to the first account's connection button. Choose **Connect and enable
+   my tools**, select that exact account at Google, and approve access. The page
+   checks authorization and the selected services before reporting it connected.
+   Completing shared setup alone leaves the connected-account count unchanged.
 
 This callback uses a permanent project-owned hostname. Keep the same Web client
 and callback when replacing the underlying API; do not register an AWS-generated
