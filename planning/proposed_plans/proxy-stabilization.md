@@ -25,7 +25,7 @@ Completion has two separately reported gates:
 
 The 2026-09-30 read-only audit established:
 
-- Source repository: `/Users/jay/Projects/_archive/dot-projects-20260227/gogcli-proxy`.
+- Source repository: `/Users/jay/Projects/gogcli-proxy`.
 - Working branch: `update/gogcli-v0.42.0`.
 - The fork already incorporates upstream gogcli v0.42.0. An upstream update is not a prerequisite for this work.
 - Production: K-Rae account `968138089939`, region `us-east-2`, stack `GogcliGoogleProxyApi`, stage `prd`.
