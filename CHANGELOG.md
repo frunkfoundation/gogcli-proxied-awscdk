@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Setup: offer the shared gogcli-proxy application, apply it to accounts through an explicit retryable action, and show consent for accounts moving from another app while preserving installed connections.
+
 - Proxy: add opt-in Calendar consent, revision-bound API review, service verification, and caller access alongside Gmail and Drive without changing existing account selections.
 
 - Setup: review API confirmations after Web-client upload, show saved readiness and specific missing requirements, and provide an explicit step 5 handoff to account consent.

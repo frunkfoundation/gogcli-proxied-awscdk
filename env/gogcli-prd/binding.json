@@ -15,6 +15,9 @@
   "deployment_profile": "krae-jdev-dev-prd",
   "existing_google_projects": [
     {
+      "projectId": "gogcli-proxy"
+    },
+    {
       "projectId": "jayj-gogcli-full-access",
       "clientId": "595092033947-ftr72qkm09b48sl0i9o2d8662nhf5chg.apps.googleusercontent.com",
       "clientType": "desktop",

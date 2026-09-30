@@ -8,10 +8,29 @@ The page separates the Google account's authorization, access for your configure
 tools, and its last connection check. A previous local gogcli setup does not mean
 that account is connected to this proxy.
 
-## Use the Google project you already have
+## Use the shared Google application
 
-The default project is `jayj-gogcli-full-access`. Other recorded project contexts
-remain available if an organization needs a different setup:
+The shared application is **gogcli-proxy**, in Google Cloud project `gogcli-proxy`
+(project number `1042630585914`) owned by `kraecollective.com`. Its Web client is
+**gogcli-proxy web client**. Google application creation can be completed with
+assistance separately; the hosted page is for importing the downloaded client,
+reviewing its APIs, and connecting accounts.
+
+Select `gogcli-proxy` on the page and open **Application settings** to upload its
+downloaded Web-client JSON. Review and save the enabled APIs. Then choose
+**Use this app for all accounts** to save the default and each account's project
+choice. Before that explicit action, the previous default and account choices
+remain in effect. This preserves selected services, including optional Calendar,
+and existing connections. A connected account choosing a different app shows
+**Connect with selected app**; its previous connection remains installed until
+the new Google consent and service checks succeed.
+
+If an account's current action blocks the change, the page names that account.
+Already saved choices remain saved. Finish its action and choose
+**Use this app for all accounts** again to apply the remaining choices. Finish
+or discard unsaved account edits before applying the shared app.
+
+Historical project contexts remain available if an organization needs a different setup:
 
 | Account with a previous local setup | Recorded project | Previous client |
 | --- | --- | --- |
@@ -24,7 +43,7 @@ different Workspace organizations. Each account approves its own access. An
 organization may require administrator approval. You do not need a new Google
 project for each email address.
 
-Review the existing project using the page's project-specific Console links.
+Optional **Application settings** contains the page's project-specific Console links.
 Keep working settings; the values below are suggestions for missing fields.
 
 1. **Enable APIs.** In the selected project, open **Gmail API**, **Google Drive
@@ -32,11 +51,11 @@ Keep working settings; the values below are suggestions for missing fields.
    that API is already enabled.
 2. **Review Branding, Audience, and Data Access.** Use these fields:
 
-   | Google field | Acceptable value for the default project |
+   | Google field | Value for the shared application |
    | --- | --- |
-   | App name | Keep the current name, or use `jayj-gogcli-full-access` |
-   | User support email | `jay.jakosky@gmail.com` if available in Google's dropdown; otherwise choose an eligible address you monitor |
-   | Contact Information → Email address / Developer contact information | `jay.jakosky@gmail.com`, or your existing monitored contact address |
+   | App name | `gogcli-proxy` |
+   | User support email | `jay@kraecollective.com` |
+   | Contact Information → Email address / Developer contact information | `jay@kraecollective.com` |
    | Audience → User type | **External**, so personal Gmail and accounts from different organizations can connect |
    | Publishing status | **Testing** works now; keep it and add the intended accounts under **Test users** |
    | Data Access → Add or remove scopes | `openid`, `email`, plus `https://www.googleapis.com/auth/gmail.modify` for Gmail, `https://www.googleapis.com/auth/drive` for Drive, and `https://www.googleapis.com/auth/calendar` for Calendar when selected |
@@ -46,8 +65,9 @@ Keep working settings; the values below are suggestions for missing fields.
    after each section. Under **Finish**, review the Google API Services User
    Data Policy and, if you agree, check its agreement box and choose **Create**.
 
-   If Google asks for an **Authorized domain**, use `k-rae.com` (without `https://`
-   or a path). Keep existing optional logo, homepage, privacy-policy, and terms
+   If Google asks for an **Authorized domain**, use `k-rae.com` for the application's
+   callback (without `https://` or a path). The project's organization owner is
+   `kraecollective.com`; it does not change this callback domain. Keep existing optional logo, homepage, privacy-policy, and terms
    settings; do not invent URLs. Follow any verification requirements Google
    actually displays. Publishing does not itself complete verification.
    Add each intended account's exact email under **Test users**. Gmail, Drive, and Calendar
@@ -68,7 +88,7 @@ Keep working settings; the values below are suggestions for missing fields.
    | Google field | Value |
    | --- | --- |
    | Application type | **Web application** |
-   | Name | `jayj-gogcli-full-access web client` |
+   | Name | `gogcli-proxy web client` |
    | Authorized JavaScript origins | Leave empty for this server-side redirect flow; this field is optional |
    | Authorized redirect URIs → Add URI | The exact permanent callback below |
 

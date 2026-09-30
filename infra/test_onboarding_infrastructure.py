@@ -137,7 +137,7 @@ class InfrastructureContractTests(unittest.TestCase):
         onboarding = next(value['Properties'] for value in functions.values() if value['Properties']['Handler'] == 'onboarding.handler')
         self.assertEqual(self.binding['client_role_arn'], onboarding['Environment']['Variables']['ONBOARDING_OWNER_CALLER_ARN'])
         projects = json.loads(onboarding['Environment']['Variables']['GOOGLE_EXISTING_PROJECTS'])
-        self.assertEqual({item['projectId'] for item in projects}, {'jayj-gogcli-full-access', 'jay-fhl-gogcli-full-access', 'gogcli-ltc-treasurer-full'})
+        self.assertEqual({item['projectId'] for item in projects}, {'gogcli-proxy', 'jayj-gogcli-full-access', 'jay-fhl-gogcli-full-access', 'gogcli-ltc-treasurer-full'})
         self.assertNotIn('GOOGLE_EXISTING_PROJECT', onboarding['Environment']['Variables'])
         self.assertEqual(set(proxy['Environment']['Variables']['GOG_DEFAULT_SCOPES'].split(',')), {'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/drive'})
         self.assertIn('ONBOARDING_TABLE', proxy['Environment']['Variables'])

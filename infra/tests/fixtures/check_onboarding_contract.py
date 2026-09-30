@@ -102,6 +102,90 @@ def latest():
     return STORE.get("ACCOUNT#" + EMAIL)["latest_operation_id"]
 
 
+def shared_app_handoff(url):
+    new_project, new_client = "gogcli-proxy", "new-shared-web-client"
+    os.environ["GOOGLE_EXISTING_PROJECTS"] = json.dumps([{"projectId": new_project}])
+    emails = ("jay.jakosky@gmail.com", EMAIL, "treasurer@longmonttheatre.org")
+    for email in emails[:2]:
+        account = SERVICE.account("fixture", email)
+        STORE.terminal(STORE.get("OP#" + account["active_operation"]), {"phase": "failed", "status": "failed"}, 1760000000)
+    # A separate shared-app scenario: saved accounts select Gmail/Drive only.
+    SERVICE.save_account("fixture", EMAIL, {"projectId": PROJECT, "services": ["gmail", "drive"]})
+    original = {email: SERVICE.account("fixture", email) for email in emails}
+    browser("open", url)
+    browser("wait", "#accounts article")
+    document = {"web": {"project_id": new_project, "client_id": new_client, "client_secret": "offline-new-app-secret",
+                         "redirect_uris": [SERVICE.callback_url]}}
+    check("""
+      document.querySelector('#projectId').value='gogcli-proxy';
+      document.querySelector('#projectId').dispatchEvent(new Event('change'));
+      const files=new DataTransfer();
+      files.items.add(new File([JSON.stringify(%s)],'offline-shared-web.json',{type:'application/json'}));
+      document.querySelector('#credentialsFile').files=files.files;
+      document.querySelector('#credentialsForm').requestSubmit();
+    """ % json.dumps(document))
+    browser("wait", "200")
+    check("document.querySelectorAll('#apiConfirmations input').forEach(input=>{if(input.dataset.service!=='calendar')input.click();}); document.querySelector('#saveProject').click()")
+    browser("wait", "200")
+    check("if(!document.querySelector('#projectSaveStatus').textContent.includes('Google setup complete')) throw Error('Gmail/Drive-only shared app review required optional Calendar')")
+    before = len(CALLS)
+    check("""
+      document.querySelector('[data-email="jay@frunkholdings.ltd"] [data-service="calendar"]').click();
+      document.querySelector('#saveDefault').click();
+    """)
+    browser("wait", "200")
+    if len(CALLS) != before:
+        raise AssertionError("shared app action submitted over unsaved account draft")
+    check("if(!document.querySelector('#defaultStatus').textContent.toLowerCase().includes('unsaved')) throw Error('unsaved draft lacks actionable guidance')")
+    browser("open", url)
+    browser("wait", "#accounts article")
+    check("document.querySelector('#projectId').value='gogcli-proxy'; document.querySelector('#projectId').dispatchEvent(new Event('change')); document.querySelector('#saveDefault').click()")
+    browser("wait", "500")
+    for email in emails[:2]:
+        account = SERVICE.account("fixture", email)
+        if account["selected_project_id"] != new_project:
+            raise AssertionError("shared app choice did not retarget existing account: " + email)
+        if account["requested_services"] != original[email]["requested_services"]:
+            raise AssertionError("shared app choice changed selected services")
+    installed = SERVICE.account("fixture", emails[0])
+    if installed["credential_revision"] != original[emails[0]]["credential_revision"] or installed["installed_project_id"] != PROJECT or installed["desired_owner_access"]:
+        raise AssertionError("shared app choice replaced installed credentials or restored owner access")
+    if SERVICE.account("fixture", emails[2])["selected_project_id"] != PROJECT:
+        raise AssertionError("shared app choice bypassed active-operation fence")
+    if not any(item["method"] == "PUT" and item["path"].endswith("treasurer%40longmonttheatre.org") and item["status"] == 409 for item in CALLS):
+        raise AssertionError("busy account did not exercise the real metadata conflict contract")
+    check("""
+      const status=document.querySelector('#defaultStatus').textContent;
+      if(!status.includes('treasurer@longmonttheatre.org') || !/retry|again|finish/i.test(status))
+        throw Error('partial shared app choice lacks account-specific retry guidance: '+status);
+    """)
+    busy = SERVICE.account("fixture", emails[2])
+    STORE.terminal(STORE.get("OP#" + busy["active_operation"]), {"phase": "failed", "status": "failed"}, 1760000000)
+    check("document.querySelector('#refresh').click()")
+    browser("wait", "200")
+    check("document.querySelector('#saveDefault').click()")
+    browser("wait", "500")
+    if any(SERVICE.account("fixture", email)["selected_project_id"] != new_project for email in emails):
+        raise AssertionError("shared app retry did not persist all account choices")
+    check("document.querySelector('#newEmails').value='new-shared@example.com'; document.querySelector('#addAccountsForm').requestSubmit()")
+    browser("wait", "200")
+    if SERVICE.account("fixture", "new-shared@example.com")["selected_project_id"] != new_project:
+        raise AssertionError("new account did not inherit shared app choice")
+    browser("open", url)
+    browser("wait", "#accounts article")
+    check("""
+      const card=document.querySelector('[data-email="jay.jakosky@gmail.com"]');
+      if(!card.querySelector('.connect-account') || card.querySelector('.connect-account').disabled)
+        throw Error('installed legacy account lacks visible new-app consent action');
+      card.querySelector('.connect-account').click();
+    """)
+    browser("wait", "--url", "https://accounts.google.com/**")
+    check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('new app consent was not intercepted')")
+    consent = parse_qs(urlparse(browser("get", "url").strip()).query)
+    if consent["client_id"] != [new_client] or CALLS[-1]["body"]["ownerAccessEnabled"]:
+        raise AssertionError("new app handoff used legacy client or restored withdrawn owner access")
+
+
 def main():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     url = f"http://127.0.0.1:{server.server_port}/onboarding/"
@@ -298,6 +382,8 @@ def main():
             raise AssertionError("Calendar deselection changed Gmail/Drive enrollment or consent scopes")
         if any(item["status"] >= 400 for item in CALLS):
             raise AssertionError(f"browser sent an incompatible command: {CALLS}")
+        shared_app_handoff(url)
+        print("Passed shared-app handoff: real new-client import/review, unsaved-draft guard, partial account PUT conflict/retry, retained services/installed revision/owner access, inherited new-account choice, legacy-account primary consent with new client.")
         print("Passed real HTTP/service DOM contracts: Calendar opt-in, API library and review gating, draft refresh, selected consent scopes and deselection, Web JSON import, step 5 handoff, parallel checks, Continue/restart/cancellation recovery, withdrawn access preserved.")
     finally:
         browser("close")

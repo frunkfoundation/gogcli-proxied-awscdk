@@ -34,6 +34,8 @@ def main():
         check("if(document.querySelectorAll('.account')[1].querySelector('button').textContent==='Prepare Google setup') throw Error('Testing project was blocked from consent')")
         check("""
           const connected=document.querySelectorAll('.account')[0], fresh=document.querySelectorAll('.account')[1];
+          if(document.querySelector('#appSettings')?.open!==false || document.querySelector('#saveDefault').textContent!=='Use this app for all accounts')
+            throw Error('advanced application settings or shared app action is unclear');
           if([...fresh.querySelectorAll('details button')].some(button=>button.textContent==='Google setup'))
             throw Error('account options repeat shared Google setup');
           if(fresh.querySelector('a[href="https://myaccount.google.com/connections"]'))
@@ -192,10 +194,36 @@ def main():
         browser("open", url)
         browser("wait", "#accounts article")
         check("if(!document.querySelectorAll('.account')[1].textContent.includes('Checking each selected service')) throw Error('reopen lost durable progress')")
+        for account in STATE["accounts"]:
+            account.pop("latest_operation", None)
+        STATE["projects"][1].update(clientConfigured=True, apiConfirmed={"gmail": True, "drive": True, "calendar": True})
+        original_services = {account["email"]: account["requested_services"][:] for account in STATE["accounts"]}
+        browser("open", url)
+        browser("wait", "#accounts article")
+        check("document.querySelector('#projectId').value='another-project'; document.querySelector('#projectId').dispatchEvent(new Event('change')); document.querySelector('#saveDefault').click()")
+        browser("wait", "500")
+        if any(account["selected_project_id"] != "another-project" or account["requested_services"] != original_services[account["email"]] for account in STATE["accounts"]):
+            raise AssertionError("shared app action did not preserve every saved service selection")
+        if STATE["accounts"][0]["installed_project_id"] != PROJECT:
+            raise AssertionError("shared app choice changed installed credentials")
+        STATE["accounts"][0]["recovery_available"] = True
+        browser("open", url)
+        browser("wait", "#accounts article")
+        check("if(document.querySelectorAll('.account')[0].querySelector('button').textContent!=='Retry saved authorization') throw Error('new app selection hid installed authorization recovery')")
+        STATE["accounts"][0]["recovery_available"] = False
+        check("document.querySelector('#refresh').click()")
+        browser("wait", "200")
+        check("""
+          const primary=document.querySelectorAll('.account')[0].querySelector('.connect-account');
+          if(primary?.textContent!=='Connect with selected app') throw Error('legacy installed account hides new-app consent');
+          document.querySelector('#connectAccounts').click();
+          if(document.activeElement!==primary) throw Error('handoff skipped legacy installed account new-app consent');
+        """)
         browser("set", "viewport", "390", "844")
         check("document.querySelectorAll('#projectGuide details').forEach(step=>step.open=true); if(document.documentElement.scrollWidth>innerWidth) throw Error('mobile horizontal overflow')")
         browser("press", "Tab")
         check("if(document.activeElement===document.body) throw Error('keyboard focus missing')")
+        print("Passed shared-app page contracts: compact application settings, all-account service preservation, legacy credentials retained, visible new-app consent and keyboard handoff.")
         print("Passed: required Google fields, open sections kept on refocus, project-specific suggested names and copy, stable callback, invalid drafts, independent refresh, reset after save, installed/attempt distinction, selected services/access, parallel accounts, pasted emails, durable reopen, expanded mobile steps, keyboard and consent restart checks.")
     finally:
         browser("close")

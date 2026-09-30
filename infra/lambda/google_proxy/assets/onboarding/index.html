@@ -12,10 +12,13 @@
   <a id="loginLink" class="button" hidden>Sign in</a>
   <button id="refresh" type="button">Refresh</button>
   <div id="guide" hidden>
-    <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Google setup</h2>
-      <p>Prepare this Google project once, then connect your accounts below. Use the same project for each account unless you need a different one.</p>
+    <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Google application</h2>
+      <p>Choose the application your accounts will connect to, then approve each account's Google consent below.</p>
       <label for="projectId">Google Cloud project</label><select id="projectId"></select>
       <p id="credentialStatus" class="notice" role="status"></p>
+      <button id="saveDefault" type="button" aria-describedby="appChoiceStatus defaultStatus" disabled>Use this app for all accounts</button><p id="appChoiceStatus" role="status"></p><p id="defaultStatus" role="status" aria-live="polite"></p>
+      <details id="appSettings"><summary>Application settings</summary>
+      <p>Upload the downloaded Web client and review its APIs here. Open the Google setup directions when you need to change the application.</p>
       <details id="apisStep"><summary>1. Enable APIs</summary>
         <p>Open each API and choose <strong>Enable</strong>. If it shows <strong>Manage</strong>, it is already enabled.</p><div id="apiLinks"></div>
       </details>
@@ -23,9 +26,9 @@
         <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. If Google shows <strong>Get started</strong>, enter these values, choose <strong>External</strong>, agree to the policy, and choose <strong>Create</strong>.</p>
         <label for="appName">App name</label><div class="copy"><input id="appName" readonly><button id="copyAppName" type="button">Copy app name</button></div><p id="appNameStatus" role="status"></p>
         <ul>
-          <li><strong>User support email:</strong> <code>jay.jakosky@gmail.com</code></li>
-          <li><strong>Developer contact information:</strong> <code>jay.jakosky@gmail.com</code></li>
-          <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code></li>
+          <li><strong>User support email:</strong> <code>jay@kraecollective.com</code></li>
+          <li><strong>Developer contact information:</strong> <code>jay@kraecollective.com</code></li>
+          <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code> for this application's callback</li>
         </ul>
         <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Keep <strong>External</strong> and <strong>Testing</strong>. Under <strong>Test users</strong>, add the accounts you want to connect: <span id="testUserEmails"></span>.</p>
         <p>Testing normally limits Gmail, Drive, and Calendar authorization to seven days. A Workspace administrator can mark this app Trusted for their organization's users; personal Gmail still follows the Testing limit. Production is optional for longer-lived connections.</p>
@@ -47,9 +50,9 @@
         <label class="check"><input id="publishingConfirmed" type="checkbox"> In production (optional; leave unchecked for Testing)</label>
         <button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
       </details>
-      <button id="connectAccounts" type="button" aria-describedby="connectStatus" disabled>Connect accounts</button><p id="connectStatus" role="status" aria-live="polite"></p>
-      <details><summary>Default project for new accounts</summary><button id="saveDefault" type="button">Use selected project</button><p id="defaultStatus" role="status"></p></details>
       <details><summary>Blocked by a Workspace administrator?</summary><p>Send them this:</p><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy</button><p id="adminStatus" role="status"></p></details>
+      </details>
+      <button id="connectAccounts" type="button" aria-describedby="connectStatus" disabled>Connect accounts</button><p id="connectStatus" role="status" aria-live="polite"></p>
     </section>
     <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">5. Connect your accounts</h2>
       <p>For each account, choose its services and Connect. Google will ask you to choose that account and approve its permissions. Each account is connected after Google approval and the service checks finish.</p>
