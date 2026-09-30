@@ -17,19 +17,19 @@ func TestVersionStringVariants(t *testing.T) {
 	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
 
 	version, commit, date = "v1", "", ""
-	if got := VersionString(); got != "v1" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0]" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", ""
-	if got := VersionString(); got != "v1 (abc)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (abc)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "", "2025-01-01"
-	if got := VersionString(); got != "v1 (2025-01-01)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", "2025-01-01"
-	if got := VersionString(); got != "v1 (abc 2025-01-01)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (abc 2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestVersionStringUsesModuleVersionFallback(t *testing.T) {
 		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
 	}
 
-	if got := VersionString(); got != "v1.2.3" {
+	if got := VersionString(); got != "gogcli-proxy v1.2.3 [upstream v0.42.0]" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
@@ -57,7 +57,7 @@ func TestVersionStringPrefersInjectedVersion(t *testing.T) {
 		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
 	}
 
-	if got := VersionString(); got != "v9.9.9" {
+	if got := VersionString(); got != "gogcli-proxy v9.9.9 [upstream v0.42.0]" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }

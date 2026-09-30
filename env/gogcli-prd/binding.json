@@ -12,5 +12,23 @@
   "oidc_client_id": "krae-gogcli-proxy-prd-web",
   "owner_group": "gogcli-proxy-prd-owners",
   "client_role_arn": "arn:aws:iam::968138089939:role/JayDeveloperFromJdev",
-  "deployment_profile": "krae-jdev-dev-prd"
+  "deployment_profile": "krae-jdev-dev-prd",
+  "existing_google_projects": [
+    {
+      "projectId": "jayj-gogcli-full-access",
+      "clientId": "595092033947-ftr72qkm09b48sl0i9o2d8662nhf5chg.apps.googleusercontent.com",
+      "clientType": "desktop",
+      "email": "jay.jakosky@gmail.com"
+    },
+    {
+      "projectId": "jay-fhl-gogcli-full-access",
+      "clientType": "desktop",
+      "email": "jay@frunkholdings.ltd"
+    },
+    {
+      "projectId": "gogcli-ltc-treasurer-full",
+      "clientType": "desktop",
+      "email": "treasurer@longmonttheatre.org"
+    }
+  ]
 }

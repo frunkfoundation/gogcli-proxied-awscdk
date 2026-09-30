@@ -29,19 +29,15 @@ func TestHelpSnapshot_Auth(t *testing.T) {
 	out := captureHelpOutput(t, "auth", "--help")
 	requireHelpContains(t, out,
 		"\n  add",
-		"\n  credentials",
-		"\n  tokens",
+		"\n  list",
+		"\n  doctor",
 		"\n  alias",
 	)
 }
 
-func TestHelpSnapshot_AuthImport(t *testing.T) {
-	out := captureHelpOutput(t, "auth", "import", "--help")
-	requireHelpContains(t, out,
-		"required refresh token",
-		"requires a refresh-token source",
-		"optional access token",
-	)
+func TestHelpSnapshot_ManagedAuthDoctor(t *testing.T) {
+	out := captureHelpOutput(t, "auth", "doctor", "--help")
+	requireHelpContains(t, out, "--check", "--services", "through the proxy")
 }
 
 func TestHelpSnapshot_DocsUpdate(t *testing.T) {

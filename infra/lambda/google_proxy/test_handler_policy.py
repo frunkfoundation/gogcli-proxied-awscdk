@@ -32,7 +32,7 @@ class PolicyEngineTests(unittest.TestCase):
         return handler._normalize_policy_document(doc, source=source, source_rank=source_rank)
 
     def test_default_deny_when_no_rule_matches(self):
-        policy = handler._merge_policy_documents(
+        policy = handler._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -58,7 +58,7 @@ class PolicyEngineTests(unittest.TestCase):
         self.assertEqual("default_effect", decision["reason"])
 
     def test_allows_matching_read_rule(self):
-        policy = handler._merge_policy_documents(
+        policy = handler._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -85,7 +85,7 @@ class PolicyEngineTests(unittest.TestCase):
         self.assertEqual("gmail-read", decision["rule_id"])
 
     def test_deny_mutation_by_higher_priority(self):
-        policy = handler._merge_policy_documents(
+        policy = handler._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -114,7 +114,7 @@ class PolicyEngineTests(unittest.TestCase):
         self.assertEqual("deny-mutations", decision["rule_id"])
 
     def test_forbidden_query_key_blocks(self):
-        policy = handler._merge_policy_documents(
+        policy = handler._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -137,10 +137,10 @@ class PolicyEngineTests(unittest.TestCase):
         )
         decision = handler._evaluate_policy(policy, self._ctx(query_keys=["uploadtype"]))
         self.assertEqual("deny", decision["effect"])
-        self.assertEqual("default_effect", decision["source"])
+        self.assertEqual("default", decision["source"])
 
     def test_domain_constraint(self):
-        policy = handler._merge_policy_documents(
+        policy = handler._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -196,7 +196,7 @@ class PolicyEngineTests(unittest.TestCase):
             source="account",
             source_rank=2,
         )
-        policy = handler._merge_policy_documents([default_doc, account_doc])
+        policy = handler._compose_policy_documents([default_doc, account_doc])
         decision = handler._evaluate_policy(policy, self._ctx())
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("account-deny", decision["rule_id"])

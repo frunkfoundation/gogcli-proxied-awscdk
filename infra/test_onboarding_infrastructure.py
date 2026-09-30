@@ -10,9 +10,8 @@ from aws_cdk.assertions import Match, Template
 from stacks.google_proxy_api_substack import GoogleProxyApiStack
 
 
-def unbundled_function(scope, identifier, *, entry, index, handler, bundling=None, **kwargs):
-    return lambda_.Function(scope, identifier, code=lambda_.Code.from_inline('def handler(event, context): pass'),
-                            handler=index.removesuffix('.py') + '.' + handler, **kwargs)
+def unbundled_asset(entry):
+    return lambda_.Code.from_inline('def handler(event, context): pass')
 
 
 class InfrastructureContractTests(unittest.TestCase):
@@ -20,8 +19,8 @@ class InfrastructureContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.binding = json.loads((Path(__file__).resolve().parents[1] / 'env/gogcli-prd/binding.json').read_text())
         app = App()
-        with patch('stacks.google_proxy_api_substack.PythonFunction', unbundled_function), \
-                patch('stacks.onboarding_resources.PythonFunction', unbundled_function):
+        with patch('stacks.google_proxy_api_substack.python_asset', unbundled_asset), \
+                patch('stacks.onboarding_resources.python_asset', unbundled_asset):
             stack = GoogleProxyApiStack(app, 'Contract', stage_name=cls.binding['stage'],
                 ssm_prefix=cls.binding['ssm_prefix'], binding=cls.binding,
                 env=Environment(account=cls.binding['account_id'], region=cls.binding['region']))
@@ -55,7 +54,7 @@ class InfrastructureContractTests(unittest.TestCase):
             self.assertTrue(properties['RoleName'].startswith(self.binding['role_prefix'] + '-'))
             self.assertEqual(self.binding['permissions_boundary_arn'], properties['PermissionsBoundary'])
 
-    def test_secret_deletion_is_limited_to_temporary_onboarding_parameters(self):
+    def test_secret_deletion_is_limited_to_account_lifecycle_and_temporary_parameters(self):
         deletion_resources = []
         for policy in self.template.find_resources('AWS::IAM::Policy').values():
             for statement in policy['Properties']['PolicyDocument']['Statement']:
@@ -63,7 +62,7 @@ class InfrastructureContractTests(unittest.TestCase):
                 if 'ssm:DeleteParameter' in ([actions] if isinstance(actions, str) else actions):
                     deletion_resources.extend(statement['Resource'])
         prefix = f"arn:aws:ssm:{self.binding['region']}:{self.binding['account_id']}:parameter{self.binding['ssm_prefix']}/onboarding/"
-        self.assertEqual({prefix + name + '/*' for name in ('candidates', 'callbacks', 'attempts', 'owner-logins')}, set(deletion_resources))
+        self.assertEqual({prefix + name + '/*' for name in ('candidates', 'callbacks', 'attempts', 'owner-logins')} | {prefix.replace('/onboarding/', '/google/accounts/*'), prefix.replace('/onboarding/', '/policy/account/*')}, set(deletion_resources))
         for policy in self.template.find_resources('AWS::IAM::Policy').values():
             for statement in policy['Properties']['PolicyDocument']['Statement']:
                 actions = statement['Action']
@@ -93,6 +92,8 @@ class InfrastructureContractTests(unittest.TestCase):
         functions = self.template.find_resources('AWS::Lambda::Function')
         onboarding = next(value['Properties'] for value in functions.values()
             if value['Properties']['Handler'] == 'onboarding.handler')
+        self.assertEqual('python3.11', onboarding['Runtime'])
+        self.assertEqual(['x86_64'], onboarding['Architectures'])
         variables = onboarding['Environment']['Variables']
         self.assertEqual(self.binding['oidc_issuer'], variables['ONBOARDING_OIDC_ISSUER'])
         self.assertEqual(self.binding['oidc_client_id'], variables['ONBOARDING_OIDC_CLIENT_ID'])
@@ -106,6 +107,37 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertTrue(base_parts[-1].endswith('/' + self.binding['stage'] + '/onboarding/'))
         stage_keys = set(self.template.find_resources('AWS::ApiGateway::Stage'))
         self.assertFalse(any(key in json.dumps(variables) for key in stage_keys))
+
+    def test_inventory_and_services_have_bounded_runtime_bindings(self):
+        functions = self.template.find_resources('AWS::Lambda::Function')
+        proxy = next(value['Properties'] for value in functions.values() if value['Properties']['Handler'] == 'handler.handler')
+        onboarding = next(value['Properties'] for value in functions.values() if value['Properties']['Handler'] == 'onboarding.handler')
+        self.assertEqual(self.binding['client_role_arn'], onboarding['Environment']['Variables']['ONBOARDING_OWNER_CALLER_ARN'])
+        projects = json.loads(onboarding['Environment']['Variables']['GOOGLE_EXISTING_PROJECTS'])
+        self.assertEqual({item['projectId'] for item in projects}, {'jayj-gogcli-full-access', 'jay-fhl-gogcli-full-access', 'gogcli-ltc-treasurer-full'})
+        self.assertNotIn('GOOGLE_EXISTING_PROJECT', onboarding['Environment']['Variables'])
+        self.assertEqual(set(proxy['Environment']['Variables']['GOG_DEFAULT_SCOPES'].split(',')), {'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/drive'})
+        self.assertIn('ONBOARDING_TABLE', proxy['Environment']['Variables'])
+        self.assertIn('ONBOARDING_SETUP_URL', proxy['Environment']['Variables'])
+        outputs = self.template.to_json()['Outputs']
+        self.assertNotIn('ProxyInvokeArn', outputs)
+        arns = outputs['ProxyInvokeArns']['Value']['Fn::Join'][1]
+        text = ''.join(part if isinstance(part, str) else '<api>' for part in arns)
+        for suffix in ('prd/*/gmail/*', 'prd/*/drive/v3/*', 'prd/*/upload/drive/v3/*', 'prd/*/resumable/upload/drive/v3/*', 'prd/GET/proxy/v1/accounts'):
+            self.assertIn(suffix, text)
+
+    def test_account_ceiling_and_verifier_service_access_are_owned_and_narrow(self):
+        statements = [statement for policy in self.template.find_resources('AWS::IAM::Policy').values()
+            for statement in policy['Properties']['PolicyDocument']['Statement']]
+        write_resources = [resource for statement in statements
+            if 'ssm:PutParameter' in ([statement['Action']] if isinstance(statement['Action'], str) else statement['Action'])
+            for resource in statement['Resource']]
+        self.assertTrue(any('/policy/account/*' in resource for resource in write_resources))
+        invoke_resources = [resource for statement in statements if statement['Action'] == 'execute-api:Invoke' for resource in statement['Resource']]
+        rendered = json.dumps(invoke_resources)
+        for endpoint in ('/gmail/v1/users/me/profile', '/gmail/v1/users/me/messages', '/drive/v3/about', '/drive/v3/files'):
+            self.assertIn(endpoint, rendered)
+        self.assertNotIn('/upload/', rendered)
 
 
 if __name__ == '__main__':

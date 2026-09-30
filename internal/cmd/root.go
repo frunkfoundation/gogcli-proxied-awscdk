@@ -34,14 +34,14 @@ type RootFlags struct {
 	Color               string `help:"Color output: auto|always|never" default:"${color}"`
 	Home                string `name:"home" help:"Override gogcli config/data/state/cache root (equivalent to GOG_HOME)"`
 	Account             string `help:"Account email or alias for proxy Google API commands" aliases:"acct" short:"a"`
-	Client              string `help:"OAuth client name (selects stored credentials + token bucket)" default:"${client}"`
+	Client              string `help:"Upstream OAuth client selector; unused by managed proxy account calls" default:"${client}"`
 	AccessToken         string `help:"Upstream direct-token option; unsupported for proxy Google API commands" env:"GOG_ACCESS_TOKEN"`
-	QuotaProject        string `help:"Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC)" env:"GOG_QUOTA_PROJECT"`
+	QuotaProject        string `help:"Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy)" env:"GOG_QUOTA_PROJECT"`
 	EnableCommands      string `help:"Comma-separated list of enabled command prefixes; dot paths allowed (restricts CLI)" default:"${enabled_commands}"`
 	EnableCommandsExact string `name:"enable-commands-exact" help:"Comma-separated list of exact enabled commands; dot paths allowed and parent commands do not enable children" default:"${enabled_commands_exact}"`
 	DisableCommands     string `help:"Comma-separated list of disabled commands; dot paths allowed" default:"${disabled_commands}"`
 	GmailNoSend         bool   `help:"Block Gmail send operations (agent safety)" default:"${gmail_no_send}"`
-	ReadOnly            bool   `name:"readonly" help:"Block mutating API requests at runtime; auth add also requests read-only OAuth scopes" default:"${readonly}"`
+	ReadOnly            bool   `name:"readonly" help:"Block mutating Google API requests at runtime" default:"${readonly}"`
 	JSON                bool   `help:"Output JSON to stdout (best for scripting)" default:"${json}" aliases:"machine" short:"j"`
 	Plain               bool   `help:"Output stable, parseable text to stdout (TSV; no colors)" default:"${plain}" aliases:"tsv" short:"p"`
 	WrapUntrusted       bool   `name:"wrap-untrusted" help:"In JSON/raw output, wrap fetched text fields in external untrusted-content markers" default:"${wrap_untrusted}"`
@@ -54,6 +54,7 @@ type RootFlags struct {
 	diagnostics         io.Writer
 	authOperations      app.AuthOperations
 	configStoreResolver func() (*config.ConfigStore, error)
+	inventoryReader     func() (googleapi.AccountInventory, error)
 	authMode            googleapi.AuthMode
 }
 
@@ -63,19 +64,19 @@ type CLI struct {
 	Version kong.VersionFlag `help:"Print version and exit"`
 
 	// Action-first desire paths.
-	Send     GmailSendCmd     `cmd:"" name:"send" help:"Send an email (alias for 'gmail send')"`
-	Ls       DriveLsCmd       `cmd:"" name:"ls" aliases:"list" help:"List Drive files (alias for 'drive ls')"`
-	Search   DriveSearchCmd   `cmd:"" name:"search" aliases:"find" help:"Search Drive files (alias for 'drive search')"`
-	Open     OpenCmd          `cmd:"" name:"open" aliases:"browse" help:"Print a best-effort web URL for a Google URL/ID (offline)"`
-	Download DriveDownloadCmd `cmd:"" name:"download" aliases:"dl" help:"Download a Drive file (alias for 'drive download')"`
-	Upload   DriveUploadCmd   `cmd:"" name:"upload" aliases:"up,put" help:"Upload a file to Drive (alias for 'drive upload')"`
-	Login    AuthAddCmd       `cmd:"" name:"login" help:"Authorize and store a refresh token (alias for 'auth add')"`
-	Logout   AuthRemoveCmd    `cmd:"" name:"logout" help:"Remove a stored refresh token (alias for 'auth remove')"`
-	Status   AuthStatusCmd    `cmd:"" name:"status" aliases:"st" help:"Show auth/config status (alias for 'auth status')"`
-	Me       PeopleMeCmd      `cmd:"" name:"me" help:"Show your profile (alias for 'people me')"`
-	Whoami   PeopleMeCmd      `cmd:"" name:"whoami" aliases:"who-am-i" help:"Show your profile (alias for 'people me')"`
+	Send     GmailSendCmd         `cmd:"" name:"send" help:"Send an email (alias for 'gmail send')"`
+	Ls       DriveLsCmd           `cmd:"" name:"ls" aliases:"list" help:"List Drive files (alias for 'drive ls')"`
+	Search   DriveSearchCmd       `cmd:"" name:"search" aliases:"find" help:"Search Drive files (alias for 'drive search')"`
+	Open     OpenCmd              `cmd:"" name:"open" aliases:"browse" help:"Print a best-effort web URL for a Google URL/ID (offline)"`
+	Download DriveDownloadCmd     `cmd:"" name:"download" aliases:"dl" help:"Download a Drive file (alias for 'drive download')"`
+	Upload   DriveUploadCmd       `cmd:"" name:"upload" aliases:"up,put" help:"Upload a file to Drive (alias for 'drive upload')"`
+	Login    ManagedAuthAddCmd    `cmd:"" name:"login" help:"Show where to connect an account (alias for 'auth add')"`
+	Logout   ManagedAuthRemoveCmd `cmd:"" name:"logout" help:"Show where to remove remote access (alias for 'auth remove')"`
+	Status   ManagedAuthStatusCmd `cmd:"" name:"status" aliases:"st" help:"Show auth/config status (alias for 'auth status')"`
+	Me       PeopleMeCmd          `cmd:"" name:"me" help:"Show your profile (alias for 'people me')"`
+	Whoami   PeopleMeCmd          `cmd:"" name:"whoami" aliases:"who-am-i" help:"Show your profile (alias for 'people me')"`
 
-	Auth          AuthCmd               `cmd:"" help:"Auth and credentials"`
+	Auth          AuthCmd               `cmd:"" help:"Managed Google accounts and proxy access"`
 	Backup        BackupCmd             `cmd:"" help:"Encrypted Google account backups"`
 	Batch         BatchCmd              `cmd:"" help:"Build and submit persisted Google Docs, Slides, Forms, and Sheets request batches"`
 	Groups        GroupsCmd             `cmd:"" aliases:"group" help:"Cloud Identity Groups (Workspace only)"`
@@ -87,7 +88,7 @@ type CLI struct {
 	Maps          MapsCmd               `cmd:"" aliases:"map" help:"Google Maps"`
 	Classroom     ClassroomCmd          `cmd:"" aliases:"class" help:"Google Classroom"`
 	Time          TimeCmd               `cmd:"" help:"Local time utilities"`
-	Update        UpdateCmd             `cmd:"" help:"Check gogcli release status"`
+	Update        UpdateCmd             `cmd:"" help:"Show source-update instructions for this proxy fork"`
 	Gmail         GmailCmd              `cmd:"" aliases:"mail,email" help:"Gmail"`
 	Chat          ChatCmd               `cmd:"" help:"Google Chat"`
 	Contacts      ContactsCmd           `cmd:"" aliases:"contact" help:"Google Contacts"`
@@ -187,6 +188,15 @@ func executeWithRuntime(args []string, runtime *app.Runtime) (err error) {
 		return runtime.Config, nil
 	}
 
+	cli.inventoryReader = func() (googleapi.AccountInventory, error) {
+		store, readErr := cli.configStoreResolver()
+		if readErr != nil {
+			return googleapi.AccountInventory{}, readErr
+		}
+		inventoryContext := googleapi.WithAuthDependencies(context.Background(), googleapi.AuthDependencies{ReadConfig: store.Read})
+		return managedInventory(inventoryContext, managedDefaultTimeout)
+	}
+
 	// Treat automatic JSON as an ambient default, like the parser's environment
 	// and config-backed defaults. Locked flags run afterwards and therefore remain
 	// authoritative when a profile fixes json to false or plain to true.
@@ -241,13 +251,6 @@ func executeWithRuntime(args []string, runtime *app.Runtime) (err error) {
 	cli.configStoreResolver = func() (*config.ConfigStore, error) {
 		return commandConfigStore(runtimeContext)
 	}
-	readCredentials := func(client string) (config.ClientCredentials, error) {
-		store, resolveErr := commandOAuthCredentialsStore(runtimeContext)
-		if resolveErr != nil {
-			return config.ClientCredentials{}, resolveErr
-		}
-		return store.Read(client)
-	}
 	openTokens := func() (secrets.Store, error) {
 		return runtime.Auth.OpenSecretsStore()
 	}
@@ -267,11 +270,11 @@ func executeWithRuntime(args []string, runtime *app.Runtime) (err error) {
 		Mode:       cli.authMode,
 	}
 	ctx = googleapi.WithAuthDependencies(ctx, authDependencies)
+	cli.inventoryReader = func() (googleapi.AccountInventory, error) { return managedInventory(ctx, managedDefaultTimeout) }
 	composeRuntimeGoogleServices(runtime, googleapi.NewFactory(authDependencies, googleapi.FactoryOptions{
 		PhotosBaseURL:       os.Getenv("GOG_PHOTOS_BASE_URL"),
 		PhotosPickerBaseURL: os.Getenv("GOG_PHOTOS_PICKER_BASE_URL"),
 	}))
-	ctx = authclient.WithCredentialsReader(ctx, readCredentials)
 	ctx = authclient.WithSecretsStoreOpener(ctx, openTokens)
 	ctx = authclient.WithEmailReferenceUpdater(ctx, updateEmailReferences)
 	ctx = authclient.WithClientResolver(ctx, resolveClient)

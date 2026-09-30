@@ -1,6 +1,6 @@
 ---
 name: gog-youtube
-description: "YouTube operations through gog."
+description: "YouTube command reference in the managed gogcli proxy fork."
 ---
 
 # YouTube
@@ -10,10 +10,17 @@ description: "YouTube operations through gog."
 Use `gog` for YouTube operations. Read `../gog/SKILL.md` first for shared auth,
 output, safety, and live-write rules.
 
+## Deployment authorization
+
+This service exists in upstream command support but is not enrolled by this deployment’s Gmail/Drive setup. Use it only after deliberate server configuration and separate verification; command help is not evidence of permission.
+
+Google credentials stay on the server. Do not start local OAuth or request tokens.
+Use the hosted owner page via `gog auth manage` for setup and recovery.
+
 ## Safe start
 
 ```bash
-gog auth list --check --json --no-input
+gog auth list --json --no-input
 gog schema youtube --json
 gog --readonly --account user@example.com youtube --help
 ```

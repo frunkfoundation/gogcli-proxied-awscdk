@@ -190,7 +190,7 @@ func TestConfigCmd_ConcurrentMutationsPreserveAliases(t *testing.T) {
 		{
 			name: "keyring",
 			run: func(ctx context.Context, flags *RootFlags) error {
-				return (&AuthKeyringCmd{Backend: "file"}).Run(ctx, flags)
+				return (&ConfigSetCmd{Key: "keyring_backend", Value: "file"}).Run(ctx, flags)
 			},
 		},
 	}
@@ -275,7 +275,7 @@ func TestConfigCmd_DryRunLeavesConfigAndLockUntouched(t *testing.T) {
 		{
 			name: "keyring",
 			run: func(ctx context.Context, flags *RootFlags) error {
-				return (&AuthKeyringCmd{Backend: "file"}).Run(ctx, flags)
+				return (&ConfigSetCmd{Key: "keyring_backend", Value: "file"}).Run(ctx, flags)
 			},
 		},
 	}
@@ -357,25 +357,6 @@ func TestConfigSetRedactsSensitiveValues(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestRemoveDomainMappings_NoMatchLeavesConfigAbsent(t *testing.T) {
-	t.Parallel()
-
-	configDir := filepath.Join(t.TempDir(), "config")
-	ctx := withTestRuntime(newCmdOutputContext(t, io.Discard, io.Discard), func(runtime *app.Runtime) {
-		runtime.Config = config.NewConfigStore(config.Layout{ConfigDir: configDir})
-	})
-	removed, err := removeDomainMappings(ctx, "work")
-	if err != nil {
-		t.Fatalf("remove domain mappings: %v", err)
-	}
-	if len(removed) != 0 {
-		t.Fatalf("removed unexpected domains: %v", removed)
-	}
-	if _, err := os.Stat(filepath.Join(configDir, "config.json")); !os.IsNotExist(err) {
-		t.Fatalf("unchanged domain cleanup created config file: %v", err)
 	}
 }
 

@@ -28,7 +28,7 @@ gog docs (doc) cell-style --row=INT --col=INT <docId> [flags]
 | `--border-left` | `string` |  | Left border; overrides --border-all |
 | `--border-right` | `string` |  | Right border; overrides --border-all |
 | `--border-top` | `string` |  | Top border; overrides --border-all |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--col` | `int` |  | 1-based column number |
 | `--col-span` | `int64` | 1 | Number of columns to style |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
@@ -50,8 +50,8 @@ gog docs (doc) cell-style --row=INT --col=INT <docId> [flags]
 | `--padding-right` | `string` |  | Right cell padding; overrides --padding-all |
 | `--padding-top` | `string` |  | Top cell padding; overrides --padding-all |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--row` | `int` |  | 1-based row number |
 | `--row-span` | `int64` | 1 | Number of rows to style |

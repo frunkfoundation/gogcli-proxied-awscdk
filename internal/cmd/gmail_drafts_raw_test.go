@@ -353,7 +353,7 @@ func TestGmailDraftsRawDirectTokenRequiresAccount(t *testing.T) {
 	for _, operation := range []string{"create", "update"} {
 		args := append(rawDraftArgs(operation, path), "--access-token", "invalid-token")
 		result := executeWithGmailTestService(t, args, svc)
-		if result.err == nil || !strings.Contains(result.err.Error(), "explicit --account") {
+		if result.err == nil || !strings.Contains(result.err.Error(), "unsupported") {
 			t.Fatalf("direct token: %v", result.err)
 		}
 	}

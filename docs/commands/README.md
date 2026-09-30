@@ -2,7 +2,7 @@
 
 Every `gog` command has a generated docs page. The source of truth is the live CLI schema; run `make docs-commands` after changing command names, flags, help text, aliases, or arguments.
 
-Generated pages: 775.
+Generated pages: 759.
 
 ## Top-level Commands
 
@@ -11,7 +11,7 @@ Generated pages: 775.
 - [gog analytics](gog-analytics.md) - Google Analytics
 - [gog api](gog-api.md) - Google Discovery APIs and generic method calls
 - [gog appscript](gog-appscript.md) - Google Apps Script
-- [gog auth](gog-auth.md) - Auth and credentials
+- [gog auth](gog-auth.md) - Managed Google accounts and proxy access
 - [gog backup](gog-backup.md) - Encrypted Google account backups
 - [gog batch](gog-batch.md) - Build and submit persisted Google Docs, Slides, Forms, and Sheets request batches
 - [gog calendar](gog-calendar.md) - Google Calendar
@@ -27,8 +27,8 @@ Generated pages: 775.
 - [gog gmail](gog-gmail.md) - Gmail
 - [gog groups](gog-groups.md) - Cloud Identity Groups (Workspace only)
 - [gog keep](gog-keep.md) - Google Keep (Workspace only)
-- [gog login](gog-login.md) - Authorize and store a refresh token (alias for 'auth add')
-- [gog logout](gog-logout.md) - Remove a stored refresh token (alias for 'auth remove')
+- [gog login](gog-login.md) - Show where to connect an account (alias for 'auth add')
+- [gog logout](gog-logout.md) - Show where to remove remote access (alias for 'auth remove')
 - [gog ls](gog-ls.md) - List Drive files (alias for 'drive ls')
 - [gog maps](gog-maps.md) - Google Maps
 - [gog mcp](gog-mcp.md) - Run a typed, allowlisted MCP server over stdio
@@ -47,7 +47,7 @@ Generated pages: 775.
 - [gog status](gog-status.md) - Show auth/config status (alias for 'auth status')
 - [gog tasks](gog-tasks.md) - Google Tasks
 - [gog time](gog-time.md) - Local time utilities
-- [gog update](gog-update.md) - Check gogcli release status
+- [gog update](gog-update.md) - Show source-update instructions for this proxy fork
 - [gog upload](gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
 - [gog version](gog-version.md) - Print version
 - [gog whoami](gog-whoami.md) - Show your profile (alias for 'people me')
@@ -128,35 +128,19 @@ Generated pages: 775.
     - [gog appscript pull](gog-appscript-pull.md) - Pull an Apps Script project into a local directory
     - [gog appscript run](gog-appscript-run.md) - Run a deployed Apps Script function
     - [gog appscript versions](gog-appscript-versions.md) - List versions
-  - [gog auth](gog-auth.md) - Auth and credentials
-    - [gog auth add](gog-auth-add.md) - Authorize a Google Account or Google Workspace account and store a refresh token
-    - [gog auth alias](gog-auth-alias.md) - Manage account aliases
+  - [gog auth](gog-auth.md) - Managed Google accounts and proxy access
+    - [gog auth add](gog-auth-add.md) - Show where to connect a managed Google account
+    - [gog auth alias](gog-auth-alias.md) - Manage local account aliases
       - [gog auth alias list](gog-auth-alias-list.md) - List account aliases
       - [gog auth alias set](gog-auth-alias-set.md) - Set an account alias
       - [gog auth alias unset](gog-auth-alias-unset.md) - Remove an account alias
-    - [gog auth credentials](gog-auth-credentials.md) - Manage OAuth client credentials
-      - [gog auth credentials list](gog-auth-credentials-list.md) - List stored OAuth client credentials
-      - [gog auth credentials remove](gog-auth-credentials-remove.md) - Remove stored OAuth client credentials
-      - [gog auth credentials set](gog-auth-credentials-set.md) - Store OAuth client credentials
-    - [gog auth doctor](gog-auth-doctor.md) - Diagnose auth, keyring, and refresh-token issues
-    - [gog auth import](gog-auth-import.md) - Import a required refresh token and optional current access token non-interactively
-    - [gog auth keep](gog-auth-keep.md) - Configure service account for Google Keep (Workspace only)
-    - [gog auth keyring](gog-auth-keyring.md) - Configure keyring backend
-    - [gog auth list](gog-auth-list.md) - List stored accounts
-    - [gog auth manage](gog-auth-manage.md) - Open interactive accounts manager in browser
-    - [gog auth remove](gog-auth-remove.md) - Remove a stored refresh token
-    - [gog auth service-account](gog-auth-service-account.md) - Configure service account (Workspace only; domain-wide delegation)
-      - [gog auth service-account set](gog-auth-service-account-set.md) - Store a service account key for impersonation
-      - [gog auth service-account status](gog-auth-service-account-status.md) - Show stored service account key status
-      - [gog auth service-account unset](gog-auth-service-account-unset.md) - Remove stored service account key
-    - [gog auth services](gog-auth-services.md) - List supported auth services and scopes
-    - [gog auth setup](gog-auth-setup.md) - Guide Google Cloud, OAuth client, and account setup
-    - [gog auth status](gog-auth-status.md) - Show auth configuration and keyring backend
-    - [gog auth tokens](gog-auth-tokens.md) - Manage stored refresh tokens
-      - [gog auth tokens delete](gog-auth-tokens-delete.md) - Delete a stored refresh token
-      - [gog auth tokens export](gog-auth-tokens-export.md) - Export a refresh token to a file (contains secrets)
-      - [gog auth tokens import](gog-auth-tokens-import.md) - Import a refresh token file into keyring (contains secrets)
-      - [gog auth tokens list](gog-auth-tokens-list.md) - List stored tokens (by key only)
+    - [gog auth doctor](gog-auth-doctor.md) - Diagnose proxy credentials, remote accounts, and caller reads
+    - [gog auth list](gog-auth-list.md) - List this caller's visible remote account connections
+    - [gog auth manage](gog-auth-manage.md) - Show the owner account management page
+    - [gog auth remove](gog-auth-remove.md) - Show where to remove remote account access
+    - [gog auth services](gog-auth-services.md) - Show upstream services and managed enrollment limits
+    - [gog auth setup](gog-auth-setup.md) - Show the owner page for Google account setup
+    - [gog auth status](gog-auth-status.md) - Show proxy configuration and remote inventory access
   - [gog backup](gog-backup.md) - Encrypted Google account backups
     - [gog backup cat](gog-backup-cat.md) - Decrypt one backup shard to stdout
     - [gog backup export](gog-backup-export.md) - Write a local plaintext export
@@ -591,8 +575,8 @@ Generated pages: 775.
     - [gog keep get](gog-keep-get.md) - Get a note
     - [gog keep list](gog-keep-list.md) - List notes
     - [gog keep search](gog-keep-search.md) - Search notes by text (client-side)
-  - [gog login](gog-login.md) - Authorize and store a refresh token (alias for 'auth add')
-  - [gog logout](gog-logout.md) - Remove a stored refresh token (alias for 'auth remove')
+  - [gog login](gog-login.md) - Show where to connect an account (alias for 'auth add')
+  - [gog logout](gog-logout.md) - Show where to remove remote access (alias for 'auth remove')
   - [gog ls](gog-ls.md) - List Drive files (alias for 'drive ls')
   - [gog maps](gog-maps.md) - Google Maps
     - [gog maps directions](gog-maps-directions.md) - Get directions between two locations
@@ -799,8 +783,8 @@ Generated pages: 775.
     - [gog tasks update](gog-tasks-update.md) - Update a task
   - [gog time](gog-time.md) - Local time utilities
     - [gog time now](gog-time-now.md) - Show current time
-  - [gog update](gog-update.md) - Check gogcli release status
-    - [gog update status](gog-update-status.md) - Show installed and latest gogcli release status
+  - [gog update](gog-update.md) - Show source-update instructions for this proxy fork
+    - [gog update status](gog-update-status.md) - Show source-update instructions for this proxy fork
   - [gog upload](gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
   - [gog version](gog-version.md) - Print version
   - [gog whoami](gog-whoami.md) - Show your profile (alias for 'people me')

@@ -24,7 +24,7 @@ gog calendar (cal) update (edit,set) <calendarId> <eventId> [flags]
 | `--all-day` | `bool` |  | All-day event (use date-only in --from/--to) |
 | `--attachment` | `[]string` |  | File attachment URL (can be repeated; replaces all; set empty to clear) |
 | `--attendees` | `string` |  | Comma-separated attendee emails (replaces all; set empty to clear); modifiers: ;optional, ;resource, ;comment=TEXT |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--description` | `string` |  | New description (set empty to clear) |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
@@ -59,8 +59,8 @@ gog calendar (cal) update (edit,set) <calendarId> <eventId> [flags]
 | `--place-region` | `string` |  | Places API region code for location lookup |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
 | `--private-prop` | `[]string` |  | Private extended property (key=value, can be repeated) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--regenerate-meet` | `bool` |  | Replace the event's Google Meet video conference |
 | `--regenerate-zoom` | `bool` |  | Replace the event's Zoom video conference |
 | `--reminder` | `[]string` |  | Custom reminders as method:duration (e.g., popup:30m, email:1d). Can be repeated (max 5). Set empty to restore calendar defaults. |

@@ -57,10 +57,10 @@ class OwnerAuth:
     def session(self, headers):
         token = read_cookie(headers, COOKIE)
         if len(token) < 32 or len(token) > 128:
-            raise AuthError(401, 'login_required', 'Sign in to manage Gmail connections.')
+            raise AuthError(401, 'login_required', 'Sign in to manage Google account connections.')
         item = self.table.get_item(Key={'pk': 'auth-session#' + digest(token)}, ConsistentRead=True).get('Item')
         if not item or item['expires_at'] <= int(time.time()):
-            raise AuthError(401, 'login_required', 'Sign in to manage Gmail connections.')
+            raise AuthError(401, 'login_required', 'Sign in to manage Google account connections.')
         return item
 
     def check_mutation(self, headers, session):

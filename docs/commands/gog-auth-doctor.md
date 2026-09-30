@@ -2,7 +2,7 @@
 
 > Generated from `gog schema --json`. Do not edit this page by hand; run `make docs-commands`.
 
-Diagnose auth, keyring, and refresh-token issues
+Diagnose proxy credentials, remote accounts, and caller reads
 
 ## Usage
 
@@ -20,8 +20,8 @@ gog auth doctor [flags]
 | --- | --- | --- | --- |
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
-| `--check` | `bool` |  | Verify refresh tokens by exchanging for access tokens |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--check` | `bool` |  | Perform minimal service reads as this caller through the proxy |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -34,11 +34,12 @@ gog auth doctor [flags]
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
-| `--timeout` | `time.Duration` | 15s | Per-token check timeout |
+| `--services` | `string` |  | Services to check: gmail,drive (default: account's enrolled supported services) |
+| `--timeout` | `time.Duration` | 15s | Timeout for inventory and each service check |
 | `-v`<br>`--verbose` | `bool` |  | Enable verbose logging |
 | `--version` | `kong.VersionFlag` |  | Print version and exit |
 | `--wrap-untrusted` | `bool` | false | In JSON/raw output, wrap fetched text fields in external untrusted-content markers |

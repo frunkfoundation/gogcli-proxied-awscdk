@@ -22,7 +22,7 @@ gog docs (doc) update <docId> [flags]
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
 | `--at` | `string` |  | Anchor by literal text and replace that matched range |
 | `--batch` | `string` |  | Append requests to a persisted Docs batch instead of submitting |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -41,8 +41,8 @@ gog docs (doc) update <docId> [flags]
 | `--occurrence` | `*int` |  | Use the Nth --at match (1-based; required when --at is ambiguous) |
 | `--pageless` | `bool` |  | Set document to pageless mode |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--replace-range` | `string` |  | Replace UTF-16 Docs API range START:END instead of inserting |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--segment` | `string` |  | Target an exact header, footer, or footnote segment ID |

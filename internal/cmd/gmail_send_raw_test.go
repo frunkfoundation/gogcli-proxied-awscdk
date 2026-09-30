@@ -190,7 +190,7 @@ func TestGmailSendRawDirectTokenRequiresConcreteAccount(t *testing.T) {
 	defer cleanup()
 	ctx := withGmailTestService(newCmdRuntimeIOContext(t, strings.NewReader(testRawSendEML), io.Discard, io.Discard), svc)
 	err := (&GmailSendCmd{RawFile: "-"}).Run(ctx, &RootFlags{AccessToken: "invalid-token"})
-	if err == nil || !strings.Contains(err.Error(), "explicit --account") || sends != 0 {
+	if err == nil || !strings.Contains(err.Error(), "unsupported") || sends != 0 {
 		t.Fatalf("direct-token send: err=%v provider calls=%d", err, sends)
 	}
 }

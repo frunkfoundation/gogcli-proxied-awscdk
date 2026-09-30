@@ -136,6 +136,12 @@ def mint_access_token(account_email: str, cfg: Mapping[str, Any], http: Any, *, 
             raise ProxyError(502, "failed to mint Google access token") from e
 
         if int(getattr(token_resp, "status_code", 0) or 0) != 200:
+            try:
+                revoked = token_resp.json().get("error") == "invalid_grant"
+            except (ValueError, AttributeError, TypeError):
+                revoked = False
+            if revoked:
+                raise ProxyError(401, "refresh_revoked")
             raise ProxyError(502, "failed to mint Google access token")
 
         try:

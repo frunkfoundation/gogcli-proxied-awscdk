@@ -1,77 +1,48 @@
 ---
 title: Overview
 permalink: /
-description: "gog is a single Go CLI for Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Apps Script, Contacts, Tasks, and Workspace admin — built for terminals, scripts, CI, and coding agents."
+description: "The gogcli proxy fork connects Gmail and Drive accounts remotely and enforces caller-specific access on the server."
 ---
 
-## Try it
+## Start with your accounts
 
-After you store an OAuth client and authorize an account ([Quickstart](quickstart.md) walks through the five-minute version), everything is a one-liner.
+[Build this fork](install.md), then use the [hosted owner account page](account-onboarding.md)
+to connect Gmail and Drive. Google credentials stay on the server. The CLI uses
+an authorized AWS caller and usage-plan API key for signed requests.
 
 ```bash
-# Search this week's mail and read a sanitized message body for an agent.
-gog gmail search 'newer_than:7d' --max 10
-gog gmail get <messageId> --sanitize-content --json
-
-# Today's calendar.
-gog calendar events --today
-
-# Workspace user and org-unit management with Admin SDK / domain-wide delegation.
-gog --account admin@example.com admin users create ada@example.com \
-  --first-name Ada --last-name Lovelace --change-password
-gog --account admin@example.com admin orgunits list --type all
-
-# Audit a Drive folder without changing anything.
-gog drive tree --parent <folderId> --depth 2
-gog drive du   --parent <folderId> --max 20 --json
-
-# Edit a Doc, append to a Sheet table, push slides from Markdown.
-gog docs format <docId> --match Status --bold --font-size 18
-gog sheets table append <spreadsheetId> Tasks 'Ship README|done'
-gog slides create-from-markdown "Weekly update" --content-file slides.md
+bin/gog auth list --json
+bin/gog --account jay.jakosky@gmail.com auth doctor --check --json
+bin/gog --account jay.jakosky@gmail.com --readonly drive ls --max 1 --json
 ```
 
-`--json` produces a stable JSON envelope on stdout, `--plain` produces TSV; human progress, prompts, and warnings always go to stderr so pipes stay parseable.
+## What this fork provides
 
-## What gog does
+- Multiple remote Google accounts, with Gmail and Drive selected per account.
+- Independent caller/account permissions enforced at the proxy boundary.
+- Durable connection, verification, and disconnect progress on the owner page.
+- Signed remote inventory and service checks as the actual CLI caller.
+- Stable JSON/plain output and existing gog command safety controls.
 
-- **One binary, every API.** Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Apps Script, Contacts, People, Tasks, Classroom, Chat, Groups, Keep, and Workspace Admin.
-- **Stable output.** `--json` for scripts, `--plain` TSV for `awk`, human output on stderr.
-- **Runtime discovery.** `gog schema --json` exposes command shape, stable exit codes, output modes, and effective safety state.
-- **Multi-account, multi-client.** Many Google accounts and OAuth client projects in one config; OAuth, direct access tokens, ADC, and Workspace service accounts all supported.
-- **One automation contract.** Humans, scripts, CI, and agents use the same commands, with JSON/TSV output, non-interactive operation, stable exit codes, runtime read-only enforcement, untrusted-content wrapping, command guards, and baked safety profiles.
-- **Preview-first audits.** Drive `tree`, `du`, `inventory`; Contacts `dedupe` previews by default and requires explicit `--apply` for guarded merges; raw API JSON dumps never mutate remote state.
-- **Generated reference.** Every command has a docs page, and service-level agent skills are generated from the same `gog schema --json` contract.
+Upstream gogcli implements additional Google commands. Their presence in help
+or the generated reference does not grant this deployment access to those
+services. Additional services require deliberate configuration and verification.
+Bodies are limited to 4 MiB and serialized Lambda responses to 6 MiB; large-file
+transfer is outside this deployment's contract.
 
-The short version is in [Why gog](why-gog.md): workflow-first commands, stdout
-as an API, identity routing, layered safety, and a contract generated from the
-live binary.
+## Documentation
 
-## Pick your path
+- [Quickstart](quickstart.md): build, connect, configure, and check.
+- [Account connections](account-onboarding.md): Google setup, recovery, and removal.
+- [Managed authentication](auth-clients.md): Google authorization and caller access.
+- [Infrastructure](https://github.com/Frunk-Foundation/gogcli-proxied-awscdk/blob/main/infra/README.md): exact deployment bindings and policies.
+- [Safety profiles](safety-profiles.md): local restrictions in addition to proxy policy.
+- [Agent skills](agent-skills.md): generated command guidance.
+- [Command index](commands/): available command and flag reference.
 
-- **Trying it.** [Install](install.md) → [Quickstart](quickstart.md). Five minutes from `brew install` to your first authenticated query.
-- **Understanding the design.** [Why gog](why-gog.md) explains what the project optimizes for and where its boundaries are.
-- **Wiring up automation.** [Automation](automation.md), [Safety Profiles](safety-profiles.md), and [Agent skills](agent-skills.md). Discover the active contract and lock the binary down before handing it to an untrusted caller.
-- **Serving MCP tools.** [MCP server](mcp.md) exposes typed, allowlisted tools for agent clients without a generic command bridge.
-- **Discovering runtime contracts.** [Automation](automation.md) explains root help, schema metadata, safety controls, and stable exit codes.
-- **Polling local events.** [Drive and Docs polling](polling.md) persists cursors and optionally invokes trusted shell hooks.
-- **Persisting auth and state.** [Paths and State](paths.md) covers `GOG_HOME`, per-kind directories, XDG paths, and legacy compatibility.
-- **Running Workspace at scale.** [Auth Clients](auth-clients.md) for service accounts, named OAuth clients, and domain-wide delegation.
-- **Managing Workspace.** [Workspace Admin](workspace-admin.md) covers user creation, cleanup, organizational units, and group administration.
-- **Backing up an account.** [Backup](backup.md) before pointing `gog backup push` at a busy mailbox.
-- **Selecting private Photos media.** [Photos Picker](photos-picker.md) keeps access limited to items the user explicitly chooses.
-- **Managing YouTube.** [YouTube](youtube.md) covers API-key reads, account OAuth, subscriptions, playlists, and mutation safety.
-- **Reading publisher reports.** [AdSense](adsense.md) covers explicit readonly authorization, publisher selection, reporting timezones, and saved reports.
-- **Grouping Docs edits atomically.** [Google Docs request batches](docs-batch.md) covers persisted, revision-locked request queues and explicit recovery modes.
-- **Building Slides with fewer writes.** [Google Slides request batches](slides-batch.md) queues shapes, text, and tables across CLI invocations for one atomic submission.
-- **Building Forms atomically.** [Google Forms request batches](forms-batch.md) queues questions, ordering changes, and settings with a revision guard.
-- **Formatting Sheets with fewer calls.** [Persisted structural batches](sheets-batch-update.md#persisted-structural-batches) reuse one base metadata snapshot and submit queued edits atomically.
-- **Working with many contacts.** [Contacts batches](contacts-batch.md) covers native bulk reads and writes, etags, field masks, and partial-progress recovery.
-- **Managing BigQuery-backed Sheets.** [Connected Sheets](sheets-connected.md) covers opt-in authorization, source creation and status, targeted refreshes, and bounded extract reads.
-- **Verifying real API behavior.** [Live testing](live-testing.md) covers the dedicated-account smoke suite, cleanup, retries, and optional infrastructure.
-- **Looking up a flag.** The [Command Index](commands/) has a generated page for every subcommand.
-- **Comparing Discovery-driven CLIs.** Reproduce the [gog and gws evaluation](gws-comparison.md) instead of relying on a stale feature table.
+## Attribution
 
-## Project
-
-Active development; the [changelog](https://github.com/openclaw/gogcli/blob/main/CHANGELOG.md) tracks what shipped recently. Goals and non-goals live in the [spec](spec.md). Released under the [MIT license](https://github.com/openclaw/gogcli/blob/main/LICENSE). Not affiliated with Google.
+This proxy fork builds on [openclaw/gogcli](https://github.com/openclaw/gogcli)
+and retains its module path and MIT license. Source and changes are in the
+[fork repository](https://github.com/Frunk-Foundation/gogcli-proxied-awscdk).
+It is not affiliated with Google.

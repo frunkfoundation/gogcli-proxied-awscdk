@@ -37,7 +37,6 @@ import (
 	"github.com/openclaw/gogcli/internal/app"
 	"github.com/openclaw/gogcli/internal/config"
 	"github.com/openclaw/gogcli/internal/googleapi"
-	"github.com/openclaw/gogcli/internal/googleauth"
 	"github.com/openclaw/gogcli/internal/secrets"
 )
 
@@ -176,41 +175,7 @@ func TestCommandDependenciesMissingRuntimeFailClosed(t *testing.T) {
 				return err
 			},
 		},
-		{
-			name: "secrets",
-			run: func() error {
-				_, err := openAuthSecretsStore(ctx)
-				return err
-			},
-		},
-		{
-			name: "authorize",
-			run: func() error {
-				_, err := authorizeGoogleAccount(ctx, googleauth.AuthorizeOptions{})
-				return err
-			},
-		},
-		{
-			name: "identity",
-			run: func() error {
-				_, err := fetchAuthIdentity(ctx, "", "", nil, time.Second)
-				return err
-			},
-		},
-		{name: "keychain", run: func() error { return ensureKeychainAccessIfNeeded(ctx) }},
-		{
-			name: "refresh check",
-			run: func() error {
-				return checkAuthRefreshToken(ctx, "", "", nil, time.Second)
-			},
-		},
-		{
-			name: "manual URL",
-			run: func() error {
-				_, err := buildManualAuthURL(ctx, googleauth.AuthorizeOptions{})
-				return err
-			},
-		},
+
 		{
 			name: "zoom",
 			run: func() error {
@@ -247,7 +212,8 @@ func TestResolveKeyringBackendInfoUsesRuntimeOptions(t *testing.T) {
 		KeyringOptions: &options,
 	})
 
-	info, err := resolveKeyringBackendInfo(ctx)
+	runtime, _ := app.FromContext(ctx)
+	info, err := runtimeKeyringBackendInfo(runtime)
 	if err != nil {
 		t.Fatalf("resolveKeyringBackendInfo: %v", err)
 	}
@@ -455,11 +421,8 @@ func TestExecuteRuntimeCapturesADCModeForAccountSelection(t *testing.T) {
 	}
 
 	err := executeWithRuntime([]string{"drive", "ls"}, runtime)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("executeWithRuntime() error = %v, want %v", err, wantErr)
-	}
-	if gotAccount != adcPlaceholderAccount {
-		t.Fatalf("factory account = %q, want %q", gotAccount, adcPlaceholderAccount)
+	if err == nil || !strings.Contains(err.Error(), "ADC is unsupported") || gotAccount != "" {
+		t.Fatalf("managed ADC reached account client: %q, %v", gotAccount, err)
 	}
 }
 

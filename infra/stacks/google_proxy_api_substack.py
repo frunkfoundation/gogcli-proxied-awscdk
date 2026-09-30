@@ -1,4 +1,6 @@
+import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -9,8 +11,11 @@ from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
-from aws_cdk.aws_lambda_python_alpha import BundlingOptions, PythonFunction
+from .python_asset import python_asset
 from constructs import Construct
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lambda" / "google_proxy"))
+from onboarding_services import SCOPES_BY_SERVICE
 
 
 @dataclass(frozen=True)
@@ -51,13 +56,12 @@ class GoogleProxyApi(Construct):
         )
         proxy_logs.grant_write(proxy_role)
 
-        proxy_fn = PythonFunction(
+        proxy_fn = lambda_.Function(
             self,
             "GoogleProxyHandler",
-            entry=str(lambda_entry),
-            bundling=BundlingOptions(asset_excludes=["__pycache__", "test_*.py"]),
-            index="handler.py",
-            handler="handler",
+            code=python_asset(lambda_entry),
+            handler="handler.handler",
+            architecture=lambda_.Architecture.X86_64,
             runtime=lambda_.Runtime.PYTHON_3_11,
             function_name=f"{props.role_prefix}-proxy",
             role=proxy_role,
@@ -77,32 +81,7 @@ class GoogleProxyApi(Construct):
                 # Defaults can be overridden per-account via SSM JSON.
                 "GOG_DEFAULT_SCOPES": os.getenv(
                     "GOG_DEFAULT_SCOPES",
-                    ",".join(
-                        [
-                            "https://www.googleapis.com/auth/gmail.readonly",
-                            "https://www.googleapis.com/auth/gmail.labels",
-                            "https://www.googleapis.com/auth/gmail.settings.basic",
-                            "https://www.googleapis.com/auth/gmail.modify",
-                            "https://www.googleapis.com/auth/calendar",
-                            "https://www.googleapis.com/auth/drive",
-                            "https://www.googleapis.com/auth/documents",
-                            "https://www.googleapis.com/auth/spreadsheets",
-                            "https://www.googleapis.com/auth/tasks",
-                            "https://www.googleapis.com/auth/chat.bot",
-                            "https://www.googleapis.com/auth/classroom.courses.readonly",
-                            "https://www.googleapis.com/auth/classroom.rosters.readonly",
-                            "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
-                            "https://www.googleapis.com/auth/classroom.coursework.students.readonly",
-                            "https://www.googleapis.com/auth/script.projects",
-                            "https://www.googleapis.com/auth/forms.body",
-                            "https://www.googleapis.com/auth/forms.responses.readonly",
-                            "https://www.googleapis.com/auth/keep.readonly",
-                            "https://www.googleapis.com/auth/cloud-identity.groups.readonly",
-                            "https://www.googleapis.com/auth/contacts.readonly",
-                            "https://www.googleapis.com/auth/directory.readonly",
-                            "https://www.googleapis.com/auth/userinfo.email",
-                        ]
-                    ),
+                    ",".join(SCOPES_BY_SERVICE.values()),
                 ),
             },
         )
@@ -247,4 +226,9 @@ class GoogleProxyApiStack(Stack):
 
         CfnOutput(self, "ProxyBaseUrl", value=api.api.url)
         CfnOutput(self, "ApiKeyId", value=api.api_key.key_id)
-        CfnOutput(self, "ProxyInvokeArn", value=api.api.arn_for_execute_api("*", "/gmail/*", stage_name))
+        CfnOutput(self, "ProxyInvokeArns", value=json.dumps([
+            api.api.arn_for_execute_api(method, path, stage_name)
+            for method, path in (("*", "/gmail/*"), ("*", "/drive/v3/*"),
+                ("*", "/upload/drive/v3/*"), ("*", "/resumable/upload/drive/v3/*"),
+                ("GET", "/proxy/v1/accounts"))
+        ]))

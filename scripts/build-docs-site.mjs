@@ -8,19 +8,18 @@ import { stripHtmlTags } from "./html-text.mjs";
 const root = process.cwd();
 const docsDir = path.join(root, "docs");
 const outDir = path.join(root, "dist", "docs-site");
-const repoBase = "https://github.com/openclaw/gogcli";
+const repoBase = "https://github.com/Frunk-Foundation/gogcli-proxied-awscdk";
 const repoEditBase = `${repoBase}/edit/main/docs`;
-const cname = readCname();
-const siteBase = cname ? `https://${cname}` : "";
+const siteBase = "";
 
-const productName = "gog";
-const productTagline = "Google Workspace in your terminal";
+const productName = "gogcli proxy";
+const productTagline = "Your Google accounts, through a managed proxy";
 const productDescription =
-  "A single Go CLI for Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Apps Script, Contacts, Tasks, and Workspace admin — built for terminals, scripts, CI, and coding agents.";
-const brewInstall = "brew install openclaw/tap/gogcli";
+  "Connect Gmail and Drive accounts remotely, retain Google credentials on the server, and enforce caller-specific access.";
+const installCommand = "make build";
 
 const sections = [
-  ["Start", ["index.md", "install.md", "quickstart.md", "auth-clients.md", "workspace-admin.md", "safety-profiles.md"]],
+  ["Start", ["index.md", "install.md", "quickstart.md", "auth-clients.md", "account-onboarding.md", "safety-profiles.md"]],
   ["Gmail", ["gmail-workflows.md", "gmail-autoreply.md", "watch.md", "email-tracking.md", "email-tracking-worker.md"]],
   ["Drive & Files", ["drive-audits.md", "raw-api.md", "raw-audit.md"]],
   ["Photos", ["photos-picker.md"]],
@@ -29,7 +28,7 @@ const sections = [
   ["Docs, Sheets, Slides", ["docs-editing.md", "docs-batch.md", "sedmat.md", "sheets-batch-update.md", "sheets-tables.md", "sheets-formatting.md", "slides-markdown.md", "slides-template-replacement.md", "slides-introspection.md", "slides-text-editing.md", "slides-tables.md", "slides-structure.md"]],
   ["Contacts", ["contacts-dedupe.md", "contacts-json-update.md"]],
   ["Backup", ["backup.md"]],
-  ["Reference", ["dates.md", "spec.md", "RELEASING.md", "commands/README.md"]],
+  ["Reference", ["workspace-admin.md", "dates.md", "spec.md", "RELEASING.md", "commands/README.md"]],
 ];
 
 // Skip these from page generation (internal notes, generated subpages we don't want as their own
@@ -85,7 +84,6 @@ fs.writeFileSync(path.join(outDir, "favicon.svg"), faviconSvg(), "utf8");
 copyStaticAsset("social-card.svg");
 copyStaticAsset("social-card.png");
 fs.writeFileSync(path.join(outDir, ".nojekyll"), "", "utf8");
-if (cname) fs.writeFileSync(path.join(outDir, "CNAME"), cname, "utf8");
 validateLinks(outDir);
 fs.writeFileSync(path.join(outDir, "llms.txt"), llmsTxt(), "utf8");
 console.log(`built docs site: ${path.relative(root, outDir)}`);
@@ -141,7 +139,6 @@ function docsInstallHint() {
   if (typeof installLine !== "undefined") return installLine;
   if (typeof installCmd !== "undefined") return installCmd;
   if (typeof installSnippet !== "undefined") return installSnippet;
-  if (typeof brewInstall !== "undefined") return brewInstall;
   return "";
 }
 
@@ -149,13 +146,6 @@ function pageUrl(origin, outRel) {
   const normalized = outRel === "index.html" ? "" : outRel.replace(/(?:^|\/)index\.html$/, (match) => match === "index.html" ? "" : "/");
   if (!origin) return normalized || "index.html";
   return normalized ? `${origin}/${normalized}` : `${origin}/`;
-}
-
-function readCname() {
-  for (const candidate of [path.join(docsDir, "CNAME"), path.join(root, "CNAME")]) {
-    if (fs.existsSync(candidate)) return fs.readFileSync(candidate, "utf8").trim();
-  }
-  return "";
 }
 
 function copyStaticAsset(name) {
@@ -436,23 +426,23 @@ function homeHero(page) {
   const quickstartRel = pageMap.get("quickstart.md")?.outRel
     ? hrefToOutRel(pageMap.get("quickstart.md").outRel, page.outRel)
     : "quickstart.html";
-  const services = ["Gmail", "Calendar", "Drive", "Docs", "Sheets", "Slides", "Forms", "Contacts", "Tasks", "Apps Script", "Admin"];
+  const services = ["Gmail", "Drive"];
   return `<header class="home-hero">
-        <p class="eyebrow">Google Workspace · One CLI</p>
+        <p class="eyebrow">Gmail and Drive · Managed accounts</p>
         <h1>${escapeHtml(productTagline)}</h1>
         <p class="lede">${escapeHtml(description)}</p>
         <div class="home-cta">
           <a class="btn btn-primary" href="${quickstartRel}">Quickstart</a>
           <a class="btn btn-ghost" href="${repoBase}" rel="noopener">GitHub</a>
-          <div class="home-install" aria-label="Install with Homebrew">
+          <div class="home-install" aria-label="Build this repository">
             <span class="prompt" aria-hidden="true">$</span>
-            <code>${escapeHtml(brewInstall)}</code>
+            <code>${escapeHtml(installCommand)}</code>
           </div>
         </div>
         <div class="home-services" aria-label="Supported services">
           ${services.map((s) => `<span>${escapeHtml(s)}</span>`).join("")}
         </div>
-        <p class="muted"><a href="${installRel}">Other install options →</a></p>
+        <p class="muted"><a href="${installRel}">Build and configure →</a></p>
       </header>`;
 }
 
@@ -542,7 +532,7 @@ function layout({ page, html, toc, prev, next, sectionName }) {
 }
 
 function pageCanonicalUrl(page) {
-  if (!siteBase) return page.outRel;
+  if (!siteBase) return hrefToOutRel(page.outRel, page.outRel);
   if (page.outRel === "index.html") return `${siteBase}/`;
   const rel = page.outRel.endsWith("/index.html") ? page.outRel.slice(0, -"index.html".length) : page.outRel;
   return `${siteBase}/${rel}`;

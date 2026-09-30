@@ -30,7 +30,7 @@ gog gmail (mail,email) drafts (draft) update (edit,set) <draftId> [flags]
 | `--cc` | `string` |  | CC recipients (comma-separated) |
 | `--clear-attachments` | `bool` |  | Remove all attachments from the draft. By default, omitting --attach preserves the draft's existing attachments. |
 | `--clear-reply-context` | `bool` |  | Strip In-Reply-To/References from the draft, making it a standalone message. By default an update preserves the draft's existing reply headers. |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -44,10 +44,10 @@ gog gmail (mail,email) drafts (draft) update (edit,set) <draftId> [flags]
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
 | `--quote` | `bool` |  | Include quoted original message in reply |
 | `--raw-file` | `string` |  | Replace the entire draft with an exact RFC822 message file, or '-' for stdin (cannot be combined with compose flags) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--reply-all` | `bool` |  | Auto-populate recipients from original message (requires --reply-to-message-id or --thread-id) |
 | `--reply-to` | `string` |  | Reply-To header address |
 | `--reply-to-message-id` | `string` |  | Reply to Gmail message ID (sets In-Reply-To/References and thread) |

@@ -21,7 +21,7 @@ gog gmail (mail,email) track setup [flags]
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
 | `--admin-key` | `string` |  | Admin key for /opens (generates one if omitted) |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--db-name` | `string` |  | D1 database name (defaults to worker name) |
 | `--deploy` | `bool` |  | Provision D1 + deploy the worker (requires wrangler) |
@@ -36,8 +36,8 @@ gog gmail (mail,email) track setup [flags]
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `--tracking-key` | `string` |  | Tracking key (base64; generates one if omitted) |

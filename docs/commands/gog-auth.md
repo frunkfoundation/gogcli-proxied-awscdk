@@ -2,7 +2,7 @@
 
 > Generated from `gog schema --json`. Do not edit this page by hand; run `make docs-commands`.
 
-Auth and credentials
+Managed Google accounts and proxy access
 
 ## Usage
 
@@ -16,21 +16,15 @@ gog auth <command> [flags]
 
 ## Subcommands
 
-- [gog auth add](gog-auth-add.md) - Authorize a Google Account or Google Workspace account and store a refresh token
-- [gog auth alias](gog-auth-alias.md) - Manage account aliases
-- [gog auth credentials](gog-auth-credentials.md) - Manage OAuth client credentials
-- [gog auth doctor](gog-auth-doctor.md) - Diagnose auth, keyring, and refresh-token issues
-- [gog auth import](gog-auth-import.md) - Import a required refresh token and optional current access token non-interactively
-- [gog auth keep](gog-auth-keep.md) - Configure service account for Google Keep (Workspace only)
-- [gog auth keyring](gog-auth-keyring.md) - Configure keyring backend
-- [gog auth list](gog-auth-list.md) - List stored accounts
-- [gog auth manage](gog-auth-manage.md) - Open interactive accounts manager in browser
-- [gog auth remove](gog-auth-remove.md) - Remove a stored refresh token
-- [gog auth service-account](gog-auth-service-account.md) - Configure service account (Workspace only; domain-wide delegation)
-- [gog auth services](gog-auth-services.md) - List supported auth services and scopes
-- [gog auth setup](gog-auth-setup.md) - Guide Google Cloud, OAuth client, and account setup
-- [gog auth status](gog-auth-status.md) - Show auth configuration and keyring backend
-- [gog auth tokens](gog-auth-tokens.md) - Manage stored refresh tokens
+- [gog auth add](gog-auth-add.md) - Show where to connect a managed Google account
+- [gog auth alias](gog-auth-alias.md) - Manage local account aliases
+- [gog auth doctor](gog-auth-doctor.md) - Diagnose proxy credentials, remote accounts, and caller reads
+- [gog auth list](gog-auth-list.md) - List this caller's visible remote account connections
+- [gog auth manage](gog-auth-manage.md) - Show the owner account management page
+- [gog auth remove](gog-auth-remove.md) - Show where to remove remote account access
+- [gog auth services](gog-auth-services.md) - Show upstream services and managed enrollment limits
+- [gog auth setup](gog-auth-setup.md) - Show the owner page for Google account setup
+- [gog auth status](gog-auth-status.md) - Show proxy configuration and remote inventory access
 
 ## Flags
 
@@ -38,7 +32,7 @@ gog auth <command> [flags]
 | --- | --- | --- | --- |
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -51,8 +45,8 @@ gog auth <command> [flags]
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `-v`<br>`--verbose` | `bool` |  | Enable verbose logging |

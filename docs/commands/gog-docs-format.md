@@ -26,7 +26,7 @@ gog docs (doc) format <docId> [flags]
 | `--bold` | `bool` |  | Set bold |
 | `--bullet-preset` | `string` |  | Create a list with a Google Docs bullet glyph preset |
 | `--bullets` | `bool` |  | Create a bulleted list with the default disc preset |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--code` | `bool` |  | Apply code style (Courier New + grey background) |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
@@ -62,8 +62,8 @@ gog docs (doc) format <docId> [flags]
 | `--no-underline` | `bool` |  | Clear underline |
 | `--ordered` | `bool` |  | Create a numbered list with the default decimal preset |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--segment` | `string` |  | Target an exact header, footer, or footnote segment ID |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |

@@ -68,7 +68,7 @@ function skillMarkdown(service, command) {
   const example = examples[service] || `gog --readonly --account user@example.com ${service} --help`;
   return `---
 name: gog-${service}
-description: "${title} operations through gog."
+description: "${title} command reference in the managed gogcli proxy fork."
 ---
 
 # ${title}
@@ -78,10 +78,19 @@ description: "${title} operations through gog."
 Use \`gog\` for ${title} operations. Read \`../gog/SKILL.md\` first for shared auth,
 output, safety, and live-write rules.
 
+## Deployment authorization
+
+${["gmail", "drive"].includes(service)
+  ? "This deployment enrolls Gmail and Drive per remote account. Check the selected service and actual caller access before use with `gog --account user@example.com auth doctor --check --json --no-input`."
+  : "This service exists in upstream command support but is not enrolled by this deployment’s Gmail/Drive setup. Use it only after deliberate server configuration and separate verification; command help is not evidence of permission."}
+
+Google credentials stay on the server. Do not start local OAuth or request tokens.
+Use the hosted owner page via \`gog auth manage\` for setup and recovery.
+
 ## Safe start
 
 \`\`\`bash
-gog auth list --check --json --no-input
+gog auth list --json --no-input
 gog schema ${service} --json
 ${example}
 \`\`\`

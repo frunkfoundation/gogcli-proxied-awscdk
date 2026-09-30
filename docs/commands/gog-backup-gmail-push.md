@@ -23,7 +23,7 @@ gog backup gmail push [flags]
 | `--checkpoint-interval` | `time.Duration` | 30m | Max time between checkpoint pushes during fetch; 0 disables time-triggered checkpoints |
 | `--checkpoint-rows` | `int` | 10000 | Gmail messages per encrypted checkpoint chunk; 0 disables row-triggered checkpoints |
 | `--checkpoints` | `bool` | true | Commit and push incomplete encrypted checkpoints during long cached fetches |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--config` | `string` |  | Backup config path |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
@@ -44,8 +44,8 @@ gog backup gmail push [flags]
 | `--no-push` | `bool` |  | Commit locally but do not push to the remote |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
 | `--query` | `string` |  | Gmail query for bounded/test backups |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--recipient` | `[]string` |  | Public age recipient (repeatable) |
 | `--remote` | `string` |  | Backup Git remote URL |
 | `--repo` | `string` |  | Local backup repository path |

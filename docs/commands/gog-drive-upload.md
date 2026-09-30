@@ -20,7 +20,7 @@ gog drive (drv) upload <localPath> [flags]
 | --- | --- | --- | --- |
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--convert` | `bool` |  | Auto-convert to native Google format based on file extension (create only) |
 | `--convert-to` | `string` |  | Convert to a specific Google format: doc\|sheet\|slides (create only) |
@@ -41,8 +41,8 @@ gog drive (drv) upload <localPath> [flags]
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `--parent` | `string` |  | Destination folder ID (create only) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--replace` | `string` |  | Replace the content of an existing Drive file ID (preserves shared link/permissions; unconditional unless --if-version is set) |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |

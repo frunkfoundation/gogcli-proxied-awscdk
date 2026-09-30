@@ -126,11 +126,6 @@ func defaultLayoutForTest(t *testing.T, kinds ...config.PathKind) config.Layout 
 	return layout
 }
 
-func defaultCredentialsStoreForTest(t *testing.T) *config.ClientCredentialsStore {
-	t.Helper()
-	return config.NewClientCredentialsStore(defaultLayoutForTest(t, config.PathKindConfig, config.PathKindData))
-}
-
 func withAuthStore(ctx context.Context, store secrets.Store) context.Context {
 	return withTestRuntime(ctx, func(runtime *app.Runtime) {
 		runtime.Auth.OpenSecretsStore = func() (secrets.Store, error) {
@@ -142,26 +137,6 @@ func withAuthStore(ctx context.Context, store secrets.Store) context.Context {
 			}
 		}
 	})
-}
-
-func withAuthOperations(ctx context.Context, operations app.AuthOperations) context.Context {
-	return withTestRuntime(ctx, func(runtime *app.Runtime) {
-		runtime.Auth = operations
-	})
-}
-
-func runtimeWithAuthStore(store secrets.Store) *app.Runtime {
-	operations := app.AuthOperations{
-		OpenSecretsStore: func() (secrets.Store, error) {
-			return store, nil
-		},
-	}
-	if secretStore, ok := store.(secrets.SecretStore); ok {
-		operations.OpenSecretStore = func() (secrets.SecretStore, error) {
-			return secretStore, nil
-		}
-	}
-	return &app.Runtime{Auth: operations, KeyringOptions: testKeyringOptions()}
 }
 
 func testKeyringOptions() *secrets.OpenOptions {

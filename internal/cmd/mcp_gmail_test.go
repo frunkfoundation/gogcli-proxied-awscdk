@@ -541,7 +541,7 @@ func TestMCPGmailSubprocessSafety(t *testing.T) {
 		force            bool
 	}{
 		{name: "delete confirmation", tool: "gmail_delete_draft", want: "without --force"},
-		{name: "operator force reaches account resolution", tool: "gmail_delete_draft", force: true, want: "missing --account"},
+		{name: "operator force reaches account resolution", tool: "gmail_delete_draft", force: true, want: "proxy config error"},
 		{name: "forced delete dry-run", tool: "gmail_delete_draft", flags: RootFlags{DryRun: true}, force: true, want: `"dry_run":true`},
 		{name: "no send", tool: "gmail_send_draft", flags: RootFlags{GmailNoSend: true}, want: "blocked by --gmail-no-send"},
 		{name: "disabled", tool: "gmail_delete_draft", flags: RootFlags{DisableCommands: "gmail.drafts.delete"}, force: true, want: "is disabled"},

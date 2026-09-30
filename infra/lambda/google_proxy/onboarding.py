@@ -6,7 +6,7 @@ import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 from onboarding_auth import AuthError, OwnerAuth
 
@@ -125,26 +125,44 @@ def dispatch(event):
         return redirect(base_url() + '?' + urlencode({'operation': operation_id}))
     if path == '/onboarding/v1/setup':
         if method == 'GET':
-            data = service.setup(owner)
+            data = service.setup(owner, session['session_id'])
             data['csrfToken'] = session['csrf']
             return response(200, data)
         if method == 'PUT':
             return response(200, service.update_setup(owner, json_body(event)))
-    if method == 'PUT' and path == '/onboarding/v1/oauth-client':
-        return response(200, service.save_client(owner, json_body(event)))
-    if method == 'POST' and path == '/onboarding/v1/enrollments':
-        key = headers.get('idempotency-key', '')
-        if not key or len(key) > 128 or not re.fullmatch(r'[A-Za-z0-9_-]+', key):
-            raise AuthError(400, 'invalid_idempotency_key', 'Provide an Idempotency-Key of at most 128 ASCII letters, digits, underscores or dashes.')
-        result = service.enroll(owner, json_body(event).get('email', ''), key, session['session_id'])
-        return response(202, result, extra={'Location': base_url() + 'v1/operations/' + result['id']})
-    match = re.fullmatch(r'/onboarding/v1/operations/([A-Za-z0-9_-]+)(/(attempts|verifications))?', path)
+    match = re.fullmatch(r'/onboarding/v1/projects/([a-z][a-z0-9-]{4,61}[a-z0-9])/(oauth-client|setup)', path)
+    if match and method == 'PUT':
+        project, action = match.groups()
+        body = json_body(event)
+        data = service.save_client(owner, project, body) if action == 'oauth-client' else service.update_project(owner, project, body)
+        return response(200, data)
+    match = re.fullmatch(r'/onboarding/v1/accounts/([^/]+)(/(enrollments|verifications|recoveries|access|connection))?', path)
     if match:
-        operation_id, _, action = match.groups()
-        if method == 'GET' and not action:
-            return response(200, service.operation(owner, operation_id))
-        if method == 'POST' and action == 'attempts':
-            return response(202, service.attempts(owner, operation_id, session['session_id']))
-        if method == 'POST' and action == 'verifications':
-            return response(202, service.retry(owner, operation_id))
+        email, _, action = match.groups()
+        email = unquote(email)
+        if method == 'PUT' and not action:
+            existed = service.store.get('ACCOUNT#' + email.strip().lower())
+            return response(200 if existed else 201, service.save_account(owner, email, json_body(event)),
+                extra={'Location': base_url() + 'v1/accounts/' + email} if not existed else None)
+        result = None
+        if method == 'POST' and action in ('enrollments', 'verifications', 'recoveries'):
+            key = headers.get('idempotency-key', '')
+            body = json_body(event)
+            if action == 'enrollments':
+                result = service.enroll(owner, email, key, session['session_id'], body)
+            elif action == 'verifications':
+                result = service.verification(owner, email, key)
+            else:
+                result = service.recover(owner, email, key)
+        elif method == 'PUT' and action == 'access':
+            result = service.access(owner, email, json_body(event).get('enabled'))
+        elif method == 'DELETE' and action == 'connection':
+            result = service.disconnect(owner, email)
+            if not result.get('id'):
+                return response(204, '', 'text/plain')
+        if result is not None:
+            return response(202, result, extra={'Location': base_url() + 'v1/operations/' + result['id']})
+    match = re.fullmatch(r'/onboarding/v1/operations/([A-Za-z0-9_-]+)', path)
+    if match and method == 'GET':
+        return response(200, service.operation(owner, match.group(1)))
     raise AuthError(404, 'not_found', 'Route not found.')

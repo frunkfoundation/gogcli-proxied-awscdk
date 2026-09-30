@@ -74,118 +74,6 @@ func TestRequireGroupsAccount_ConsumerBlocked(t *testing.T) {
 	}
 }
 
-func TestRequireGroupsAccount_ExplicitIdentityRequiredForDirectToken(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-	t.Setenv("GOG_AUTH_MODE", "")
-
-	account, err := requireGroupsAccount(&RootFlags{
-		AccessToken: "direct-token",
-		diagnostics: io.Discard,
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if account != "" {
-		t.Fatalf("account = %q, want empty", account)
-	}
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), groupsExplicitAccountMessage) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRequireGroupsAccount_ExplicitIdentityRequiredForADC(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-
-	account, err := requireGroupsAccount(&RootFlags{authMode: googleapi.AuthModeADC})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if account != "" {
-		t.Fatalf("account = %q, want empty", account)
-	}
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), groupsExplicitAccountMessage) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRequireGroupsAccount_ExplicitIdentityRequiredForADCAutoEnv(t *testing.T) {
-	for _, accountEnv := range []string{"auto", "default"} {
-		t.Run(accountEnv, func(t *testing.T) {
-			t.Setenv("GOG_ACCOUNT", accountEnv)
-
-			account, err := requireGroupsAccount(&RootFlags{authMode: googleapi.AuthModeADC})
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if account != "" {
-				t.Fatalf("account = %q, want empty", account)
-			}
-			if ExitCode(err) != 2 || !strings.Contains(err.Error(), groupsExplicitAccountMessage) {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestRequireGroupsAuthAccount_AllowsDirectTokenWithoutIdentity(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-	t.Setenv("GOG_AUTH_MODE", "")
-
-	account, err := requireGroupsAuthAccount(&RootFlags{
-		AccessToken: "direct-token",
-		diagnostics: io.Discard,
-	})
-	if err != nil {
-		t.Fatalf("requireGroupsAuthAccount: %v", err)
-	}
-	if account != accessTokenPlaceholderAccount {
-		t.Fatalf("account = %q, want %q", account, accessTokenPlaceholderAccount)
-	}
-}
-
-func TestRequireGroupsAuthAccount_AllowsADCWithoutIdentity(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-
-	account, err := requireGroupsAuthAccount(&RootFlags{authMode: googleapi.AuthModeADC})
-	if err != nil {
-		t.Fatalf("requireGroupsAuthAccount: %v", err)
-	}
-	if account != adcPlaceholderAccount {
-		t.Fatalf("account = %q, want %q", account, adcPlaceholderAccount)
-	}
-}
-
-func TestRequireGroupsAuthAccount_IgnoresIdentityHintForDirectAuth(t *testing.T) {
-	tests := []struct {
-		name        string
-		authMode    string
-		accessToken string
-		want        string
-	}{
-		{name: "direct token", accessToken: "direct-token", want: accessTokenPlaceholderAccount},
-		{name: "ADC", authMode: "adc", want: adcPlaceholderAccount},
-		{name: "ADC over direct token", authMode: "adc", accessToken: "direct-token", want: adcPlaceholderAccount},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("GOG_ACCOUNT", "person@gmail.com")
-
-			account, err := requireGroupsAuthAccount(&RootFlags{
-				AccessToken: tc.accessToken,
-				diagnostics: io.Discard,
-				authMode:    googleapi.ParseAuthMode(tc.authMode),
-			})
-			if err != nil {
-				t.Fatalf("requireGroupsAuthAccount: %v", err)
-			}
-			if account != tc.want {
-				t.Fatalf("account = %q, want %q", account, tc.want)
-			}
-		})
-	}
-}
-
 func TestGroupsConsumerPreflightSkipsServices(t *testing.T) {
 	ctx := withCloudIdentityTestServiceFactory(
 		newCmdRuntimeOutputContext(t, io.Discard, io.Discard),
@@ -298,5 +186,16 @@ func TestGetRelationType_More(t *testing.T) {
 	}
 	if got := getRelationType("OTHER"); got != "OTHER" {
 		t.Fatalf("unexpected OTHER: %q", got)
+	}
+}
+
+func TestGroupsRequireManagedCallerCredentials(t *testing.T) {
+	for _, flags := range []*RootFlags{{AccessToken: "fixture"}, {authMode: googleapi.AuthModeADC}, {Account: "user@example.com", AccessToken: "fixture"}} {
+		for _, resolve := range []func(*RootFlags) (string, error){requireGroupsAccount, requireGroupsAuthAccount} {
+			account, err := resolve(flags)
+			if err == nil || account != "" || !strings.Contains(err.Error(), "unsupported") {
+				t.Fatalf("groups accepted direct authentication: %q %v", account, err)
+			}
+		}
 	}
 }

@@ -22,7 +22,7 @@ gog contacts (contact) update (edit,set) <resourceName> [flags]
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
 | `--address` | `[]string` |  | Postal address (can be repeated; empty clears all) |
 | `--birthday` | `string` |  | Birthday in YYYY-MM-DD (empty clears) |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--custom` | `[]string` |  | Custom field as key=value (can be repeated; empty clears all) |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
@@ -46,8 +46,8 @@ gog contacts (contact) update (edit,set) <resourceName> [flags]
 | `--org` | `string` |  | Organization/company name (empty clears) |
 | `--phone` | `string` |  | Phone number (empty clears) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--relation` | `[]string` |  | Relation as type=person (can be repeated; empty clears all) |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |

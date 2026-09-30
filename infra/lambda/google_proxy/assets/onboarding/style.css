@@ -28,9 +28,6 @@ button:hover:enabled, .button:hover { background: #113a77; }
 .copy input { flex: 1; min-width: 0; }
 .copy button { flex-shrink: 0; }
 .account { border-top: 1px solid #dce3eb; padding: 16px 0; }
-.account-row { display: flex; gap: 10px; align-items: end; }
-.account-row label { flex: 1; margin: 0; }
-.account-row input { margin-top: 8px; }
 .account-status { margin: 10px 0 0; font-size: 14px; }
 .account-status[data-state="verified"] { color: #246245; }
 .account-status[data-state="failed"], [role=status].error { color: #9b2424; }
@@ -38,4 +35,16 @@ button:hover:enabled, .button:hover { background: #113a77; }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; }
 pre { padding: 16px; background: #f1f4f8; border-radius: 6px; white-space: pre-wrap; line-height: 1.6; }
 [hidden] { display: none !important; }
-@media (max-width: 550px) { main { padding: 24px 16px 48px; } details, section { padding: 16px; } summary { font-size: 16px; } .account-row, .copy { flex-direction: column; align-items: stretch; } .copy button { align-self: start; } }
+@media (max-width: 550px) { main { padding: 24px 16px 48px; } details, section { padding: 16px; } summary { font-size: 16px; } .copy { flex-direction: column; align-items: stretch; } .copy button { align-self: start; } }
+textarea, select { width: 100%; border: 1px solid #8c9db2; border-radius: 6px; padding: 11px 12px; font: inherit; background: white; color: inherit; }
+textarea { resize: vertical; margin-bottom: 12px; }
+.account h3 { overflow-wrap: anywhere; margin: 0 0 8px; }
+.account p { margin: 8px 0; }
+.account details { padding: 12px; }
+.account details button { margin: 12px 8px 12px 0; }
+.account details a { display: block; }
+fieldset { border: 1px solid #dce3eb; border-radius: 6px; padding: 12px; margin: 16px 0; }
+legend { font-size: 14px; font-weight: 600; }
+fieldset label { margin: 8px 0; }
+#apiLinks a { display: block; margin: 10px 0; }
+#adminInstructions { overflow-wrap: anywhere; }

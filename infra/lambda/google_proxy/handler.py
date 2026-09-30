@@ -7,12 +7,14 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from credentials import mint_access_token
 from errors import ProxyError, remaining_seconds
-from policy import _evaluate_policy, _merge_policy_documents, _normalize_policy_document
+from policy import _evaluate_policy, _compose_policy_documents, _normalize_policy_document
 from proxy_http import (
     _build_query_keys, _build_query_string, _extract_account_domain, _get_header,
-    _normalize_email, _read_event_body, _sanitize_outgoing_headers, read_response,
+    _normalize_email, _read_event_body, _sanitize_outgoing_headers, read_response, request_headers,
 )
 from routing import RoutingError, resolve_google_host_and_path
+from urllib.parse import urlsplit
+from inventory import caller_accounts
 
 try:
     import boto3
@@ -91,7 +93,7 @@ def _policy_cache_ttl_seconds() -> int:
         return 30
     if val < 1:
         return 1
-    return val
+    return min(val, 30)
 
 
 def _policy_events_enabled() -> bool:
@@ -131,6 +133,7 @@ def _ssm_get_json(name: str, *, cache_ttl_seconds: int = 60) -> Optional[Dict[st
     if _SSM is None:
         raise ProxyError(500, "ssm client unavailable in runtime")
 
+    cache_ttl_seconds = max(1, min(cache_ttl_seconds, 60))
     now = time.time()
     cached = _CACHE.get(name)
     if cached is not None:
@@ -167,7 +170,15 @@ def _ssm_get_policy_json(name: str) -> Optional[Dict[str, Any]]:
     return _ssm_get_json(name, cache_ttl_seconds=_policy_cache_ttl_seconds())
 
 
+def _validate_allowlist(allow: Mapping[str, Any]) -> None:
+    for key in ("emails", "domains"):
+        values = allow.get(key, [])
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ProxyError(500, "invalid caller account permission")
+
+
 def _is_allowed(allow: Mapping[str, Any], email: str) -> bool:
+    _validate_allowlist(allow)
     email = _normalize_email(email)
     if "*" in [str(x).strip() for x in (allow.get("emails") or []) if x is not None]:
         return True
@@ -199,9 +210,9 @@ def _load_effective_policy(policy_prefix: str, caller_id: str, account_email: st
         if raw is None:
             continue
         docs.append(_normalize_policy_document(raw, source=source, source_rank=rank))
-    if not docs:
+    if not any(doc["source"] == "default" for doc in docs):
         raise ProxyError(403, "policy_not_found")
-    return _merge_policy_documents(docs)
+    return _compose_policy_documents(docs)
 
 
 def _maybe_emit_policy_event(decision: Mapping[str, Any], ctx: Mapping[str, Any], status_code: int) -> None:
@@ -262,30 +273,33 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         max_req = min(int(os.getenv("GOG_MAX_REQUEST_BYTES") or str(4 * 1024 * 1024)), 4 * 1024 * 1024)
         max_resp = int(os.getenv("GOG_MAX_RESPONSE_BYTES") or "5500000")
 
-        headers = event.get("headers") or {}
-        if not isinstance(headers, dict):
-            headers = {}
-
-        account = _normalize_email(_get_header(headers, "X-GOG-Account"))
-        if account == "" or " " in account or "@" not in account:
-            raise ProxyError(400, "missing or invalid X-GOG-Account header")
-
+        headers = request_headers(event)
         caller = _caller_id(event)
         allow_param = f"{ssm_prefix}/allow/{_b64url_nopad(caller)}"
         allow_cfg = _ssm_get_json(allow_param)
-        if allow_cfg is None or not _is_allowed(allow_cfg, account):
+        if allow_cfg is None:
+            raise ProxyError(403, "caller account permission is not configured")
+        _validate_allowlist(allow_cfg)
+        method = str(event.get("httpMethod") or "GET").upper()
+        pp = event.get("pathParameters") or {}
+        proxy = pp.get("proxy") if isinstance(pp, dict) else None
+        path = "/" + str(proxy) if proxy else str(event.get("path") or "/")
+        if path.startswith("/proxy/v1/"):
+            if path != "/proxy/v1/accounts":
+                raise ProxyError(404, "unknown proxy route")
+            if method != "GET":
+                raise ProxyError(405, "method not allowed")
+            return _json_response(200, caller_accounts(allow_cfg, _is_allowed, deadline=deadline))
+        account = _normalize_email(_get_header(headers, "X-GOG-Account"))
+        if re.fullmatch(r"[^\s,@]+@[^\s,@]+", account) is None:
+            raise ProxyError(400, "missing or invalid X-GOG-Account header")
+        if not _is_allowed(allow_cfg, account):
             raise ProxyError(403, "caller not authorized for requested account")
 
         acct_param = f"{ssm_prefix}/google/accounts/{_b64url_nopad(account)}"
         acct_cfg = _ssm_get_json(acct_param)
         if acct_cfg is None:
             raise ProxyError(403, "requested account is not configured in proxy")
-
-        method = str(event.get("httpMethod") or "GET").upper()
-
-        pp = event.get("pathParameters") or {}
-        proxy = pp.get("proxy") if isinstance(pp, dict) else None
-        path = "/" + str(proxy) if proxy else str(event.get("path") or "/")
 
         try:
             host, forward_path = resolve_google_host_and_path(path, _get_header(headers, "X-GOG-Google-Host"))
@@ -298,6 +312,17 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         body_bytes = _read_event_body(event, max_bytes=max_req)
         query_keys = _build_query_keys(event)
+        out_headers = _sanitize_outgoing_headers(headers)
+        prepared = requests.Request(method, url, headers=out_headers, data=body_bytes if body_bytes else None).prepare()
+        destination = urlsplit(prepared.url)
+        # requests canonicalizes escapes; authorization uses exactly that prepared path.
+        try:
+            checked_host, checked_path = resolve_google_host_and_path(destination.path, destination.hostname or "")
+        except RoutingError as e:
+            raise ProxyError(400, str(e)) from e
+        if checked_host != host or checked_path != destination.path:
+            raise ProxyError(400, "ambiguous prepared destination")
+        forward_path = destination.path
         request_id = str((event.get("requestContext") or {}).get("requestId") or "")
         policy_decision = {
             "effect": "allow",
@@ -349,16 +374,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         token = mint_access_token(account, acct_cfg, _HTTP, timeout=remaining_seconds(deadline, limit=20))
 
-        out_headers = _sanitize_outgoing_headers(headers)
-        out_headers["Authorization"] = f"Bearer {token}"
+        prepared.headers["Authorization"] = f"Bearer {token}"
 
         upstream_budget = remaining_seconds(deadline)
         connect_timeout = min(5.0, upstream_budget / 2)
-        resp = _HTTP.request(
-            method,
-            url,
-            headers=out_headers,
-            data=body_bytes if body_bytes else None,
+        resp = _HTTP.send(
+            prepared,
             stream=True,
             allow_redirects=False,
             timeout=(connect_timeout, upstream_budget - connect_timeout),

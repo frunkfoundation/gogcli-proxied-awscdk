@@ -14,14 +14,6 @@ func TestDryRunE2E_CommandsSkipAuthAPIAndFileWrites(t *testing.T) {
 	if err := os.WriteFile(imagePath, []byte("dry-run image placeholder"), 0o644); err != nil {
 		t.Fatalf("write dry-run image: %v", err)
 	}
-	tokenPath := filepath.Join(t.TempDir(), "token.json")
-	if err := os.WriteFile(tokenPath, []byte(`{"email":"user@example.com","refresh_token":"redacted"}`), 0o600); err != nil {
-		t.Fatalf("write dry-run token: %v", err)
-	}
-	serviceAccountPath := filepath.Join(t.TempDir(), "service-account.json")
-	if err := os.WriteFile(serviceAccountPath, []byte(`{"type":"service_account","client_email":"svc@example.com","client_id":"123"}`), 0o600); err != nil {
-		t.Fatalf("write dry-run service account: %v", err)
-	}
 	markdownPath := filepath.Join(t.TempDir(), "slides.md")
 	if err := os.WriteFile(markdownPath, []byte("## Slide\nBody"), 0o600); err != nil {
 		t.Fatalf("write dry-run markdown: %v", err)
@@ -234,42 +226,7 @@ func TestDryRunE2E_CommandsSkipAuthAPIAndFileWrites(t *testing.T) {
 			args: []string{"drive", "bulk", "update-role", "--file", "file123", "--from", "writer", "--to", "reader"},
 			op:   "drive.bulk.update-role",
 		},
-		{
-			name: "auth remove",
-			args: []string{"auth", "remove", "user@example.com"},
-			op:   "auth.remove",
-		},
-		{
-			name: "auth tokens delete",
-			args: []string{"auth", "tokens", "delete", "user@example.com"},
-			op:   "auth.tokens.delete",
-		},
-		{
-			name: "auth tokens import",
-			args: []string{"auth", "tokens", "import", tokenPath},
-			op:   "auth.tokens.import",
-		},
-		{
-			name:    "auth tokens export",
-			args:    []string{"auth", "tokens", "export", "user@example.com", "--out", outputPath("token-export.json")},
-			op:      "auth.tokens.export",
-			outPath: outputPath("token-export.json"),
-		},
-		{
-			name: "auth service account set",
-			args: []string{"auth", "service-account", "set", "user@example.com", "--key", serviceAccountPath},
-			op:   "auth.service-account.set",
-		},
-		{
-			name: "auth service account unset",
-			args: []string{"auth", "service-account", "unset", "user@example.com"},
-			op:   "auth.service-account.unset",
-		},
-		{
-			name: "auth keep",
-			args: []string{"auth", "keep", "user@example.com", "--key", serviceAccountPath},
-			op:   "auth.keep",
-		},
+
 		{
 			name: "admin groups members add",
 			args: []string{"admin", "groups", "members", "add", "group@example.com", "user@example.com"},

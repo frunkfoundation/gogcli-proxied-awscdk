@@ -53,7 +53,10 @@ cdk deploy GogcliGoogleProxyApi \
 ```
 
 CDK bundles the Python runtime and the onboarding HTML, JavaScript, and CSS;
-Docker must be available for packaging. The app uses
+The installed `uv` packages prebuilt Linux x86_64/Python 3.11 wheels; missing
+wheels fail the build rather than using host binaries. Docker is not required.
+Run `infra/.venv/bin/python -m unittest discover -s infra -p test_python_asset.py`
+to check the actual payload, its ELF architecture, and static assets. The app uses
 `CliCredentialsStackSynthesizer`, so it deploys with this explicit Developer
 identity and uses the existing CDK bootstrap asset bucket without assuming
 bootstrap roles.
@@ -65,19 +68,40 @@ The generated CDK outputs in `env/gogcli-prd/access.json` are grouped under
 | --- | --- |
 | `ProxyBaseUrl` | CLI proxy base URL, ending in `/prd/` |
 | `ApiKeyId` | Identifier for the usage-plan key; not its secret value |
-| `ProxyInvokeArn` | Scope for the canonical JDev Gmail invoke binding |
+| `ProxyInvokeArns` | JSON array string of the five exact canonical JDev invocation resources |
 | `SetupUrl` | Published HTTPS owner setup page, ending in `/prd/onboarding/` |
 | `GoogleCallbackUrl` | Exact redirect URI for the Google Web application client |
 | `OwnerCallbackUrl` | Exact Authentik redirect URI |
 | `OnboardingTable` | Persisted checklist and operation metadata table |
 | `OnboardingRoleArn` | Application role used by signed verification reads |
 
-Apply the API-specific Gmail invoke scope through the canonical JDev deployment
-runner to both the Developer identity and created-role boundary. Keep the grant
-limited to this API's `prd` Gmail routes; account enrollment adds explicit email
-allowlist entries for the CLI and verifier.
+The invocation list contains these resource suffixes under this exact API and
+`prd`: `*/gmail/*`, `*/drive/v3/*`, `*/upload/drive/v3/*`,
+`*/resumable/upload/drive/v3/*`, and `GET/proxy/v1/accounts`. Inventory is GET-only;
+this grant does not include onboarding, Calendar, other stages, or generic
+Google HTTP batch routes. Account access and caller/account policy still apply
+after API Gateway accepts a signed request.
 
-## Configure owner login and connect Gmail
+Apply this list through the canonical JDev runner to both the Developer identity
+policy and created-role boundary. Source:
+`/Users/jay/Projects/development/jdevaws/templates/jdev-target-access.yaml`.
+Target: the existing `krae-jdev-access-target` stack in **us-east-1**, account
+`968138089939`, explicit manifest profile `krae-jdev-admin-prd`. Proxy resources
+are in **us-east-2**. Update only K-Rae production:
+
+```bash
+cd /Users/jay/Projects/development/jdevaws
+uv run python scripts/jdev_target_access.py plan production --account k-rae-prd
+JDEV_DEPLOY_CONFIRM=deploy-production uv run python scripts/jdev_target_access.py deploy production --account k-rae-prd
+```
+
+The plural `ApplicationApiInvokeArns` source contract replaces the old singular
+Gmail parameter. Other manifest targets remain disabled. A source change is not
+proof of a deployed binding; inspect stack completion and real signed requests
+after rollout. Do not run a fleet deployment to clear other targets' expected
+baseline-version differences.
+
+## Configure owner login and connect Google accounts
 
 After deploying and generating `access.json`, configure this app on the existing
 Authentik service from the repository root:
@@ -95,14 +119,43 @@ saved back to that catalog and SSM SecureString without being printed. Its final
 read-only checks verify provider discovery, JWKS, the exact callback, and owner
 membership.
 
-Open `SetupUrl` and follow the [remote Gmail account guide](../docs/account-onboarding.md).
-Create a Google **Web application** client with the displayed `GoogleCallbackUrl`,
-publish the consent screen before connecting accounts, and upload the downloaded
-JSON through the owner page. Each account completes Google consent separately.
-Saved authorization is promoted only after candidate refresh and Gmail reads
-pass. The worker then waits at least 65 seconds before checking profile and a
-one-message ID-only listing through the normal signed proxy; an empty mailbox
-passes. Failed verification retains authorization for a retry without consent.
+Open `SetupUrl` and follow the [Google account guide](../docs/account-onboarding.md).
+Reuse the recorded Google project and import a **Web application** client with
+the exact displayed `GoogleCallbackUrl`. The three recorded Desktop/local client
+contexts are historical context, not remote credentials or verified Google
+Console state. Project confirmations are bound to the imported client revision;
+each account chooses a project and Gmail, Drive, or both.
+
+The shared service registry requests `openid` and `email` for identity, plus
+`gmail.modify` and/or `drive` for the selected services. The provisioned owner
+policy allows those services' normal GET/POST/PUT/PATCH/DELETE routes; independent
+account policies and Google permissions narrow what actually succeeds. These
+scopes do not promise permanent Gmail deletion, Gmail settings operations,
+large-file transfers, or content/folder/label filtering.
+
+A fresh candidate refresh and minimal selected-service reads must pass before
+installation. Gmail checks profile and at most one message ID; Drive checks the
+account email and at most one file ID. Empty collections pass. After installation,
+the worker waits at least 65 seconds before repeating those probes through the
+signed proxy as the **verifier role**. Its result records the service, revision,
+principal, and time; it does not prove the actual CLI caller's IAM/policy access.
+Run inventory and the same minimal reads as that caller for acceptance.
+
+Google connection, the latest attempt, and **Allow my tools to use this account**
+are separate facts. That explicit flag controls the concrete
+`binding.client_role_arn` (`ONBOARDING_OWNER_CALLER_ARN` at runtime). Turning it off
+removes the owner's explicit email grant while retaining Google authorization
+and limited verifier access. Reconnect preserves the flag and installed
+connection until a usable replacement passes validation. Durable account state
+survives temporary operation cleanup; recovery uses account-level controls.
+
+Disconnect removes owner/verifier grants and installed credentials through a
+persisted operation. It does not mutate Google content or revoke the shared
+Google application's consent. Removal remains applying for at least 65 seconds
+after the final authorization write. Starting requests fail within the 60-second
+configuration cache bound; an already authorized request may finish within its
+existing 27-second budget. Failures remain retryable and never report a completed
+removal before its writes and propagation window finish.
 
 For the first CLI caller, fetch the usage-plan key using `ApiKeyId` from the
 generated access record:
@@ -116,7 +169,9 @@ Configure `proxy_base_url` from `ProxyBaseUrl`, `proxy_api_key` from the returne
 value, `aws_profile` as `krae-jdev-dev-prd`, and a verified `default_account` in the
 CLI's `config.json`. Run `bin/gog config path` to locate it. Google credentials
 stay on the server; the page's final section and the account guide provide the
-first read-only CLI check.
+first read-only CLI checks. Signed `GET /proxy/v1/accounts` returns only metadata
+for the caller's permitted installed accounts and never reads account credential
+parameters or Google data.
 
 ## SSM Parameters
 
@@ -144,11 +199,21 @@ Notes:
 - `caller_id` comes only from API Gateway's authenticated request identity. Cognito identity IDs take precedence; otherwise `userArn` (or an ARN-valued `caller`) identifies the IAM principal.
 - Assumed-role sessions use a stable role identity: `arn:aws:sts::123456789012:assumed-role/proxy-agent/session-name` becomes `arn:aws:iam::123456789012:role/proxy-agent`. Account, partition, and role remain part of the key; session names cannot grant another role's access. IAM user ARNs remain unchanged.
 - Missing or invalid identities, including a bare `AROA...:session-name` without an ARN, are denied before reading allowlists. There is no `unknown` or session-name fallback.
-- Email/domain matching is case-insensitive. `emails` entries may also be `"*"` to allow any email for that caller.
+- Email/domain matching is case-insensitive. Operator-managed caller documents can use domains or `"*"`; managed owner/verifier access toggles require explicit-email-only grants.
+- If a managed allowlist contains a wildcard/domain grant, account toggles fail with `409 broad_allowlist_requires_operator` instead of silently removing that configuration or claiming one email is revoked.
 
-### Existing assumed-role allowlist and policy migration
+### Runtime identity and account metadata
 
-Before deploying this handler to an existing proxy, create the allowlist and caller-policy parameters under the base64url-encoded stable role identity. The obsolete keys encoded only the STS session name; this handler never reads them. For example, encode `arn:aws:iam::123456789012:role/proxy-agent`, then copy the intended allowlist to `<prefix>/allow/<new_key>` and caller policy to `<policy_prefix>/caller/<new_key>`. Review the combined permissions for that role rather than combining session allowlists automatically. Update any policy `on_match.detail` values or downstream consumers that relied on session names in emitted `caller_id` metadata, and retire the obsolete session-name parameters after rollout.
+Use the stable authenticated role ARN as the caller key. Session-name keys are
+obsolete and are never consulted. Independent consumers need distinct IAM
+principals when their permissions differ; a shared Developer role cannot express
+per-session grants.
+
+DynamoDB retains `CLIENT#<project-id>`, `SETUP`, and `ACCOUNT#<email>` facts.
+`OP#` and scoped idempotency records retain terminal diagnostics for seven days.
+Nonterminal work has explicit recovery/expiry handling rather than disappearing
+through TTL. Queue messages contain operation IDs. Temporary secret references
+stay internal and never enter public account/operation responses.
 
 ### Google Credentials (per account)
 
@@ -193,7 +258,7 @@ Notes:
 - For `service_account`, the proxy impersonates the requested `X-GOG-Account` email (domain-wide delegation subject).
 - For `oauth_refresh`, omit `scopes` unless you know the refresh token was minted with those scopes.
 - Warm Lambda invocations reuse access tokens separately for each account until 60 seconds before their reported expiry. Tokens without a usable expiry are never cached.
-- SSM account configuration is refreshed after its existing 60-second cache TTL. A changed credential configuration or default scope list invalidates that account's cached token when the new configuration is observed.
+- SSM account and allowlist configuration caches cannot exceed 60 seconds. A changed credential configuration or default scope list invalidates that account's cached token when the new configuration is observed.
 
 ## Policy Enforcement (Lambda)
 
@@ -203,13 +268,15 @@ Policy SSM prefix defaults to:
 
 - `<GOG_SSM_PREFIX>/policy` (for example `/gogcli-proxy/policy`)
 
-Policy document lookup order:
+Policy documents:
 
 1. `<policy_prefix>/default`
 2. `<policy_prefix>/caller/<caller_id_enc>`
 3. `<policy_prefix>/account/<email_enc>`
 
-If no policy document exists, requests are denied with `{"error":"policy_not_found"}`.
+A valid default document is required, even when a caller document exists;
+missing default returns `{"error":"policy_not_found"}`. Malformed configured
+documents fail closed. Provisioning creates an empty default-deny document.
 
 ### Policy JSON schema (v1)
 
@@ -224,6 +291,7 @@ If no policy document exists, requests are denied with `{"error":"policy_not_fou
       "priority": 100,
       "match": {
         "methods": ["GET"],
+        "accounts": ["user@frunkholdings.ltd"],
         "hosts": ["gmail.googleapis.com"],
         "path_regex": "^/gmail/v1/users/me/(labels|messages|threads)(/.*)?$",
         "query": {
@@ -256,9 +324,27 @@ If no policy document exists, requests are denied with `{"error":"policy_not_fou
 
 Notes:
 
-- Rules are evaluated by `priority` desc, then source specificity (account > caller > default), then declaration order.
-- First matching rule wins.
-- Unknown keys are rejected (fail closed).
+- Any matching explicit deny in default, caller, or account documents vetoes the request, regardless of priority.
+- The caller document supplies positive permission when present; otherwise the default supplies it. A restrictive caller document cannot inherit unrelated default allows.
+- An account document is an independent ceiling: it must also allow the request. A missing account document adds no ceiling.
+- Within each document, `default_effect` applies when no rule matches. Priority and declaration order choose among equivalent matches, never allow over deny.
+- Optional `match.accounts` contains exact normalized email addresses. An absent or empty list is unconstrained; use explicit addresses for account-dependent permission.
+- Unknown keys fail closed. Policies authorize API operations, not response fields, Gmail label membership, or Drive folder membership.
+
+For an account whitelist, use `default_effect: deny` and explicit allowed paths,
+methods, and hosts. For an account denylist, use `default_effect: allow` plus
+explicit denied operations. Both remain ceilings: an account allow cannot
+create permission denied or absent in the caller document.
+
+This replaces the obsolete shared priority-sorted override semantics. Before
+rollout, inspect actual nonsecret policies and account metadata; explicitly
+convert any configuration relying on account allows overriding caller denies.
+The preflight for this stabilization found no installed remote accounts or
+account policy documents.
+
+Policy caches cannot exceed 30 seconds. Allowlist/account configuration caches
+cannot exceed 60 seconds; environment values may shorten these bounds but cannot
+extend them. Authorization runs before reusing a cached Google token.
 
 ### Policy trigger events (optional)
 
@@ -274,7 +360,7 @@ Trigger failures are logged but do not change allow/deny results.
 
 ## Routing, payloads, and timeouts
 
-`X-GOG-Google-Host` is required and validated against the supported Google API host allowlist, `docs.google.com`, or a valid subdomain of `googleusercontent.com` for Photos Picker media. The original path is preserved, including upload prefixes and API versions. Path-only host inference is obsolete and has been removed. Upgrade clients and the handler together; older clients without the signed host header receive HTTP 400. Proxy authentication/account/routing headers are removed before forwarding, and Google redirects are returned to the client for another signed request.
+`X-GOG-Google-Host` is required and validated against the supported Google API host allowlist, `docs.google.com`, or a valid subdomain of `googleusercontent.com` for Photos Picker media. The original path is preserved, including upload prefixes and API versions. Path-only host inference is obsolete and has been removed. Upgrade clients and the handler together; older clients without the signed host header receive HTTP 400. Proxy authentication/account/routing headers are removed before forwarding, and Google redirects are returned to the client for another signed request. Duplicate routing headers, method overrides, malformed/ambiguous paths, and contradictory query representations fail before token minting or Google forwarding. Policy evaluates the prepared destination and the same repeated query parameters that are sent.
 
 The request body cap is 4 MiB. `GOG_MAX_REQUEST_BYTES` may lower it, but cannot raise it. This leaves room for ordinary API Gateway event/base64 overhead below Lambda's 6 MiB invocation limit. Gmail's upstream 35 MiB raw-message limit does not apply to this proxy; the proxy body cap includes MIME/base64/JSON content transmitted to Google.
 
@@ -282,10 +368,11 @@ Responses have both a streamed raw-body cap (`GOG_MAX_RESPONSE_BYTES`, default 5
 
 Token minting and forwarding share a request budget capped at 27 seconds, or two seconds less than the Lambda invocation's remaining time if shorter. Connect/read timeouts use each phase's remaining budget, token refresh retries are bounded by its refresh deadline, and streamed chunks are checked against the request deadline. Expired budgets return HTTP 504 before starting another phase.
 
-Run the offline Lambda contract and policy checks with the bundled runtime dependencies:
+Run the offline Lambda checks and synthesized infrastructure contracts:
 
 ```bash
-uv run --python 3.11 --with boto3 --with-requirements infra/lambda/google_proxy/requirements.txt python -m unittest discover -s infra/lambda/google_proxy -v
+just proxy-test
+infra/.venv/bin/python -m unittest discover -s infra -p test_onboarding_infrastructure.py
 ```
 
 Maps/Places and public YouTube API-key modes also retain upstream project credentials and do not consume managed-account Google OAuth tokens. These ancillary API-key requests go directly to their provider; account-authenticated Google API requests use the proxy.

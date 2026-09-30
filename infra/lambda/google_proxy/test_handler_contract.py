@@ -18,7 +18,7 @@ class ProxyContractTests(unittest.TestCase):
         self.http.post.side_effect = lambda *args, **kwargs: Mock(status_code=200, json=lambda: {"access_token": f"token-{self.http.post.call_count}", "expires_in": 3600})
         self.payload = b"ok"
         self.headers = {"Content-Type": "application/octet-stream"}
-        self.http.request.side_effect = lambda *args, **kwargs: Mock(status_code=200, headers=self.headers, iter_content=lambda **kwargs: iter([self.payload]))
+        self.http.send.side_effect = lambda *args, **kwargs: Mock(status_code=200, headers=self.headers, iter_content=lambda **kwargs: iter([self.payload]))
         self.env = patch.dict(os.environ, {"GOG_POLICY_ENABLED": "false"})
         self.env.start()
         self.http_patch = patch.object(handler, "_HTTP", self.http)
@@ -69,7 +69,7 @@ class ProxyContractTests(unittest.TestCase):
         self.assertEqual(2, self.http.post.call_count)
         self.account = "agent@example.com"
         self.assertEqual(200, self.invoke()["statusCode"])
-        self.assertEqual("Bearer token-1", self.http.request.call_args.kwargs["headers"]["Authorization"])
+        self.assertEqual("Bearer token-1", self.http.send.call_args.args[0].headers["Authorization"])
 
     def test_config_rotation_invalidates_cached_token(self):
         self.invoke()
@@ -107,18 +107,18 @@ class ProxyContractTests(unittest.TestCase):
         with patch("time.monotonic", side_effect=lambda: clock[0]):
             self.assertEqual(200, self.invoke()["statusCode"])
         self.assertLessEqual(sum(self.http.post.call_args.kwargs["timeout"]), 20)
-        self.assertLessEqual(sum(self.http.request.call_args.kwargs["timeout"]), 7)
+        self.assertLessEqual(sum(self.http.send.call_args.kwargs["timeout"]), 7)
 
     def test_exhausted_lambda_budget_does_not_call_google(self):
         context = Mock(get_remaining_time_in_millis=lambda: 1500)
         self.assertEqual(504, self.invoke(context)["statusCode"])
         self.http.post.assert_not_called()
-        self.http.request.assert_not_called()
+        self.http.send.assert_not_called()
 
     def test_response_closed_on_success_and_size_failure(self):
         response = Mock(status_code=200, headers=self.headers, iter_content=lambda **kwargs: iter([self.payload]))
-        self.http.request.side_effect = None
-        self.http.request.return_value = response
+        self.http.send.side_effect = None
+        self.http.send.return_value = response
         self.invoke()
         response.close.assert_called_once()
         response.close.reset_mock()
@@ -131,13 +131,13 @@ class ProxyContractTests(unittest.TestCase):
             response = self.invoke(body="x" * (4 * 1024 * 1024 + 1))
         self.assertEqual(413, response["statusCode"])
         self.http.post.assert_not_called()
-        self.http.request.assert_not_called()
+        self.http.send.assert_not_called()
 
     def test_original_host_is_forwarded_and_proxy_headers_are_stripped(self):
         response = self.invoke(headers={"X-GOG-Account": self.account, "x-gog-google-host": "analyticsdata.googleapis.com"}, path="/v1beta/properties/123:runReport")
         self.assertEqual(200, response["statusCode"])
-        self.assertEqual("https://analyticsdata.googleapis.com/v1beta/properties/123:runReport", self.http.request.call_args.args[1])
-        forwarded = {key.lower() for key in self.http.request.call_args.kwargs["headers"]}
+        self.assertEqual("https://analyticsdata.googleapis.com/v1beta/properties/123:runReport", self.http.send.call_args.args[0].url)
+        forwarded = {key.lower() for key in self.http.send.call_args.args[0].headers}
         self.assertNotIn("x-gog-google-host", forwarded)
         self.assertNotIn("x-gog-account", forwarded)
 
@@ -145,7 +145,7 @@ class ProxyContractTests(unittest.TestCase):
         response = self.invoke(headers={"X-GOG-Account": self.account})
         self.assertEqual(400, response["statusCode"])
         self.http.post.assert_not_called()
-        self.http.request.assert_not_called()
+        self.http.send.assert_not_called()
 
     def test_service_account_token_reuse_and_account_isolation_with_google_auth(self):
         # Offline integration: use real Google signing/refresh code with an
@@ -193,11 +193,29 @@ class ProxyContractTests(unittest.TestCase):
             yield b"late"
 
         response = Mock(status_code=200, headers=self.headers, iter_content=chunks)
-        self.http.request.side_effect = None
-        self.http.request.return_value = response
+        self.http.send.side_effect = None
+        self.http.send.return_value = response
         with patch("time.monotonic", side_effect=lambda: clock[0]):
             self.assertEqual(504, self.invoke()["statusCode"])
         response.close.assert_called_once()
+
+    def test_prepared_request_preserves_repeated_query_values(self):
+        response = self.invoke(path="/drive/v3/files", headers={"X-GOG-Account": self.account, "X-GOG-Google-Host": "www.googleapis.com"},
+            multiValueQueryStringParameters={"fields": ["id", "name"], "alt": ["media"]},
+            queryStringParameters={"fields": "name", "alt": "media"})
+        self.assertEqual(200, response["statusCode"])
+        request = self.http.send.call_args.args[0]
+        self.assertEqual("https://www.googleapis.com/drive/v3/files?fields=id&fields=name&alt=media", request.url)
+
+    def test_mirrored_gateway_headers_are_unambiguous(self):
+        headers = {"X-GOG-Account": self.account, "X-GOG-Google-Host": "gmail.googleapis.com"}
+        self.assertEqual(200, self.invoke(headers=headers, multiValueHeaders={key: [value] for key, value in headers.items()})["statusCode"])
+
+    def test_policy_receives_prepared_path_not_escaped_unreserved_original(self):
+        policy = handler._compose_policy_documents([handler._normalize_policy_document({"rules": [{"effect": "allow", "match": {"path_regex": "^/gmail/v1/users/me/labels$"}}]}, source="default", source_rank=0)])
+        with patch.dict(os.environ, {"GOG_POLICY_ENABLED": "true"}), patch.object(handler, "_load_effective_policy", return_value=policy):
+            self.assertEqual(200, self.invoke(path="/gmail/v1/users/me/%6cabels")["statusCode"])
+        self.assertEqual("/gmail/v1/users/me/labels", self.http.send.call_args.args[0].path_url)
 
 
 if __name__ == "__main__":

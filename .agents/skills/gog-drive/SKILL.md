@@ -1,6 +1,6 @@
 ---
 name: gog-drive
-description: "Google Drive operations through gog."
+description: "Google Drive command reference in the managed gogcli proxy fork."
 ---
 
 # Google Drive
@@ -10,10 +10,17 @@ description: "Google Drive operations through gog."
 Use `gog` for Google Drive operations. Read `../gog/SKILL.md` first for shared auth,
 output, safety, and live-write rules.
 
+## Deployment authorization
+
+This deployment enrolls Gmail and Drive per remote account. Check the selected service and actual caller access before use with `gog --account user@example.com auth doctor --check --json --no-input`.
+
+Google credentials stay on the server. Do not start local OAuth or request tokens.
+Use the hosted owner page via `gog auth manage` for setup and recovery.
+
 ## Safe start
 
 ```bash
-gog auth list --check --json --no-input
+gog auth list --json --no-input
 gog schema drive --json
 gog --readonly --account user@example.com drive ls --max 20 --json --wrap-untrusted
 ```

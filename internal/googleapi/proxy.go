@@ -25,6 +25,7 @@ import (
 const maxProxyRequestBytes = 4 << 20
 
 var (
+	errInventoryRequestInvalid     = errors.New("invalid managed inventory request")
 	errProxyADCUnsupported         = errors.New("ADC authentication is unsupported by the central OAuth proxy")
 	errProxyAccessTokenUnsupported = errors.New("direct access tokens are unsupported by the central OAuth proxy")
 	errProxyConfigReaderRequired   = errors.New("proxy config reader is required")
@@ -245,6 +246,7 @@ func loadAWSCredentialsProvider(ctx context.Context, region string, profile stri
 // net/http transport does not add Accept-Encoding after signing.
 type apiGatewayProxyTransport struct {
 	Endpoint            string
+	Inventory           bool
 	Base                http.RoundTripper
 	Region              string
 	APIKey              string
@@ -283,7 +285,15 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 	}
 	r.GetBody = req.GetBody
 
-	if t.Endpoint != "" {
+	if t.Inventory {
+		expected := strings.TrimRight(t.Endpoint, "/") + "/proxy/v1/accounts"
+		if r.Method != http.MethodGet || r.URL.String() != expected {
+			return nil, errInventoryRequestInvalid
+		}
+
+		r.Header.Del("X-GOG-Google-Host")
+		r.Header.Del("X-GOG-Account")
+	} else if t.Endpoint != "" {
 		googleHost := strings.ToLower(r.URL.Hostname())
 		if r.URL.Scheme != "https" || r.URL.Port() != "" || r.URL.User != nil || !allowedGoogleHost(googleHost) {
 			return nil, fmt.Errorf("%w: %s", errUnsupportedGoogleURL, r.URL.Redacted())
@@ -313,7 +323,10 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 	}
 
 	r.Header.Set("x-api-key", t.APIKey)
-	r.Header.Set("X-GOG-Account", strings.ToLower(strings.TrimSpace(t.Account)))
+
+	if !t.Inventory {
+		r.Header.Set("X-GOG-Account", strings.ToLower(strings.TrimSpace(t.Account)))
+	}
 
 	payloadHash, err := payloadSHA256Hex(r)
 	if err != nil {

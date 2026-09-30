@@ -1,221 +1,203 @@
-"""Owner-scoped enrollment and durable candidate promotion intents."""
+"""Owner account/project contracts; installed state is independent of expiring attempts."""
+import json
 import os
 import re
-import secrets
 import time
 
-from onboarding_google import GoogleClient, SCOPES, validate_web_client
-from onboarding_store import Store, WorkflowError, account_parameter, digest, new_id
+from onboarding_google import GoogleClient, validate_web_client
+from onboarding_services import (DEFAULT_SERVICES, KNOWN_ACCOUNTS, SERVICE_OPTIONS, account_projection,
+                                 content_hash, public_operation, selected_services)
+from onboarding_store import Store, WorkflowError, digest, new_id
 
 
-def _email(value):
+def email_address(value):
     email = str(value).strip().lower()
     if len(email) > 254 or not re.fullmatch(r"[^\s@/]+@[^\s@/]+\.[^\s@/]+", email):
-        raise WorkflowError(400, "invalid_email", "Enter a valid mailbox email address.")
+        raise WorkflowError(400, "invalid_email", "Enter a valid Google account email address.")
     return email
 
 
-def public_operation(item):
-    result = {key: item[key] for key in ("id", "email", "status", "phase", "error", "error_code", "recovery", "promoted_at", "verified_at") if key in item}
-    return result
+def project_id(value):
+    project = str(value).strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", project):
+        raise WorkflowError(400, "invalid_project", "Enter the Google project ID.")
+    return project
 
 
 class OnboardingService:
     def __init__(self, store, google, callback_url):
         self.store, self.google, self.callback_url = store, google, callback_url
 
-    def setup(self, owner):
-        client = self.store.get("CLIENT") or {}
+    def setup(self, owner, session_id=None):
         config = self.store.get("SETUP") or {}
-        accounts = self.store.accounts()
-        operations = []
-        for account in accounts:
-            op_id = account.get("active_operation") or account.get("operation_id")
-            op = self.store.get("OP#" + op_id) if op_id else None
-            if op and op.get("owner") == owner:
-                operations.append(public_operation(op))
-            elif op_id and not op and account.get("owner") == owner and account.get("terminal_operation_id") == op_id:
-                operations.append(public_operation({**account, "id": op_id}))
-        return {"callbackUrl": self.callback_url, "configured": bool(client),
-            "projectId": client.get("project_id", config.get("project_id", "")),
-            "publishingConfirmed": config.get("publishing_confirmed", False),
-            "emails": config.get("emails", ["jay.jakosky@gmail.com", "jay@frunkholdings.ltd", "treasurer@longmonttheatre.org"] + [""] * 5),
-            "operations": operations, "proxyUrl": os.getenv("GOG_PROXY_URL", "")}
+        contexts = json.loads(os.getenv("GOOGLE_EXISTING_PROJECTS", "[]"))
+        default = config.get("default_project_id", "jayj-gogcli-full-access")
+        records = {item["project_id"]: item for item in self.store.rows("CLIENT#")}
+        context_map = {item["projectId"]: item for item in contexts}
+        projects = []
+        for name in sorted(set(records) | set(context_map) | {default}):
+            record, context = records.get(name, {}), context_map.get(name, {})
+            projects.append({"projectId": name, "clientConfigured": bool(record.get("secret_ref")),
+                "clientRevision": record.get("revision", ""), "clientId": record.get("client_id", ""), "publishingConfirmed": record.get("publishing_confirmed", False),
+                "apiConfirmed": record.get("api_confirmed", {}), "recordedClientType": context.get("clientType", ""),
+                "recordedClientId": context.get("clientId", "")})
+        accounts = {item["email"]: item for item in self.store.accounts() if item.get("owner") == owner}
+        for email in KNOWN_ACCOUNTS:
+            accounts.setdefault(email, {"email": email, "connection_status": "not_connected",
+                "selected_project_id": default, "requested_services": DEFAULT_SERVICES, "desired_owner_access": True})
+        return {"callbackUrl": self.callback_url, "proxyUrl": os.getenv("GOG_PROXY_URL", ""),
+            "setupUrl": os.getenv("ONBOARDING_BASE_URL", ""), "defaultProjectId": default,
+            "ownerCallerArn": os.getenv("ONBOARDING_OWNER_CALLER_ARN", ""), "serviceOptions": SERVICE_OPTIONS,
+            "projects": projects, "accounts": [self.projection(item, session_id) for item in sorted(accounts.values(), key=lambda row: row["email"])]}
 
-    def update_setup(self, owner, body):
-        project = str(body.get("projectId", "")).strip()
-        if project and not re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", project):
-            raise WorkflowError(400, "invalid_project", "Enter the Google project ID.")
-        emails = body.get("emails", [])
-        if not isinstance(emails, list) or any(not isinstance(email, str) for email in emails):
-            raise WorkflowError(400, "invalid_checklist", "Supply the mailbox checklist as a list of email addresses.")
-        emails = [_email(email) if email.strip() else "" for email in emails]
-        for email in emails:
-            if email:
-                self.add_mailbox(owner, email)
-        self.store.put({"pk": "SETUP", "owner": owner, "project_id": project,
-            "publishing_confirmed": body.get("publishingConfirmed") is True, "emails": emails})
-        return self.setup(owner)
-
-    def save_client(self, owner, web_json):
-        client = validate_web_client(web_json, self.callback_url)
-        revision = new_id("cr")
-        ref = self.store.secret_put("clients/" + revision, client)
-        self.store.put({"pk": "CLIENT", "owner": owner, "revision": revision,
-            "project_id": client["project_id"], "secret_ref": ref})
-        return self.setup(owner)
-
-    def add_mailbox(self, owner, email):
-        email = _email(email)
-        existing = self.store.get("ACCOUNT#" + email)
-        if not existing:
-            self.store.put({"pk": "ACCOUNT#" + email, "owner": owner, "email": email}, absent=True)
-        return email
-
-    def enroll(self, owner, email, idempotency_key, session_id):
-        email = self.add_mailbox(owner, email)
-        if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 200:
-            raise WorkflowError(400, "idempotency_required", "Supply an idempotency key.")
-        idem_key = "IDEM#" + digest(owner + ":" + idempotency_key)
-        existing = self.store.get(idem_key)
-        if existing:
-            if existing["email"] != email:
-                raise WorkflowError(409, "idempotency_conflict", "This request key belongs to a different mailbox.")
-            return self.operation(owner, existing["operation_id"])
-        client = self.store.get("CLIENT")
-        if not client:
-            raise WorkflowError(409, "client_required", "Import your Google Web client first.")
-        now, op_id = int(time.time()), new_id()
-        self.store.lock_account(email, op_id, now)
-        try:
-            operation = {"pk": "OP#" + op_id, "id": op_id, "owner": owner, "email": email,
-                "phase": "authorizing", "status": "accepted", "created_at": now, "updated_at": now,
-                "client_revision": client["revision"], "client_ref": client["secret_ref"],
-                "candidate_ref": self.store.prefix + "/onboarding/candidates/" + op_id,
-                "callback_ref": self.store.prefix + "/onboarding/callbacks/" + op_id}
-            self.store.put(operation, absent=True)
-            self.store.put({"pk": idem_key, "operation_id": op_id, "email": email}, absent=True)
-            return self._consent(operation, session_id)
-        except Exception:
-            self.store.release_account(email, op_id)
-            raise
-
-    def _consent(self, operation, session_id):
-        now = int(time.time())
-        state, verifier, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(48), secrets.token_urlsafe(32)
-        ref = self.store.secret_put("attempts/" + operation["id"] + "/" + new_id("at"), {"verifier": verifier, "nonce": nonce})
-        changes = {"phase": "authorizing", "status": "accepted", "state_hash": digest(state),
-            "session_hash": digest(session_id), "attempt_ref": ref,
-            "callback_ref": self.store.prefix + "/onboarding/callbacks/" + operation["id"] + "/" + digest(state), "consent_expires_at": now + 1800, "expires_at": now + 604800, "updated_at": now,
-            "promoted_at": 0, "verified_at": 0, "attempts": 0, "next_attempt": 0,
-            "exchange_saved": False, "validation_complete": False, "exchange_deadline_at": 0, "error": "", "error_code": "", "recovery": ""}
-        try:
-            updated = self.store.transition(operation["pk"], operation["phase"], changes)
-        except Exception:
-            self.store.secret_delete(ref)
-            raise
-        self.store.secret_delete(operation.get("attempt_ref"))
-        self.store.secret_delete(operation.get("callback_ref"))
-        operation = updated
-        self.store.put({"pk": "STATE#" + digest(state), "operation_id": operation["id"], "expires_at": now + 1800}, absent=True)
-        client = self.store.secret_get(operation["client_ref"])
-        result = public_operation(operation)
-        result["authorizationUrl"] = self.google.authorization_url(client, self.callback_url, state, verifier, nonce, operation["email"])
+    def projection(self, account, session_id=None):
+        result = account_projection(account)
+        latest = self.store.get("OP#" + account["latest_operation_id"]) if account.get("latest_operation_id") else None
+        summary = public_operation(latest) if latest else account.get("latest_operation")
+        if latest and latest["phase"] == "authorizing":
+            summary.update(continuation_key=latest.get("command_key", ""), continuation_request=latest.get("command_request", {}),
+                consent_session_matches=bool(session_id and latest.get("session_hash") == digest(session_id)))
+        result.update(selected_project_id=account.get("selected_project_id", ""),
+            installed_project_id=account.get("installed_project_id", ""), requested_services=account.get("requested_services", DEFAULT_SERVICES),
+            owner_access_enabled=account.get("desired_owner_access", True),
+            recovery_available=account.get("saved_recovery", {}).get("expires_at", 0) > int(time.time()),
+            latest_operation=summary)
         return result
 
-    def operation(self, owner, operation_id):
-        return public_operation(self._owned(owner, operation_id))
+    def update_setup(self, owner, body):
+        self.store.put({"pk": "SETUP", "owner": owner, "default_project_id": project_id(body.get("defaultProjectId", ""))})
+        return self.setup(owner)
 
-    def _owned(self, owner, operation_id):
-        op = self.store.get("OP#" + str(operation_id))
-        if not op or op.get("owner") != owner:
-            raise WorkflowError(404, "not_found", "Operation not found.")
+    def save_client(self, owner, project, web_json):
+        project = project_id(project)
+        client = validate_web_client(web_json, self.callback_url)
+        if client["project_id"] != project:
+            raise WorkflowError(400, "project_mismatch", "Upload the Web client from the selected Google project.")
+        revision = new_id("cr")
+        ref = self.store.secret_put("clients/" + revision, client)
+        self.store.put({"pk": "CLIENT#" + project, "owner": owner, "revision": revision, "project_id": project,
+            "secret_ref": ref, "client_id": client["client_id"], "publishing_confirmed": False, "api_confirmed": {}})
+        return self.setup(owner)
+
+    def update_project(self, owner, project, body):
+        project = project_id(project)
+        client = self.store.get("CLIENT#" + project)
+        if not client or body.get("clientRevision") != client["revision"]:
+            raise WorkflowError(409, "project_revision_changed", "Reload the project's current Web client before saving its review.")
+        confirmed = body.get("apiConfirmed", {})
+        if not isinstance(confirmed, dict) or any(name not in DEFAULT_SERVICES or not isinstance(value, bool) for name, value in confirmed.items()):
+            raise WorkflowError(400, "invalid_confirmation", "Confirm the selected service APIs with true or false values.")
+        changes = {"publishing_confirmed": body.get("publishingConfirmed") is True, "api_confirmed": confirmed}
+        # Revision precondition is checked by DynamoDB, not only by the earlier read.
+        self.store.confirm_project(client, changes)
+        return self.setup(owner)
+
+    def account(self, owner, email):
+        item = self.store.get("ACCOUNT#" + email_address(email))
+        if not item or item.get("owner") != owner:
+            raise WorkflowError(404, "not_found", "Saved account not found.")
+        return item
+
+    def save_account(self, owner, email, body):
+        email = email_address(email)
+        item = self.store.get("ACCOUNT#" + email)
+        config = self.store.get("SETUP") or {}
+        project = project_id(body.get("projectId") or (item or {}).get("selected_project_id") or config.get("default_project_id", "jayj-gogcli-full-access"))
+        services = selected_services(body.get("services", (item or {}).get("requested_services", DEFAULT_SERVICES)))
+        if item:
+            if item.get("owner") != owner:
+                raise WorkflowError(404, "not_found", "Saved account not found.")
+            if item.get("active_operation"):
+                raise WorkflowError(409, "operation_conflict", "Finish the current account action before changing setup.")
+            if not set(item.get("installed_services", [])).issubset(services):
+                raise WorkflowError(409, "scope_removal_requires_policy", "Narrow caller policy or disconnect; reconnect preserves installed services.")
+        else:
+            item = {"pk": "ACCOUNT#" + email, "email": email, "owner": owner, "generation": 0,
+                "connection_status": "not_connected", "desired_connection": "connected", "desired_owner_access": True}
+        updated = {**item, "selected_project_id": project, "requested_services": services}
+        self.store.save_account_metadata(item, updated)
+        return self.projection(updated)
+
+    def operation(self, owner, operation_id):
+        op = self.store.get("OP#" + operation_id)
+        if not op or op.get("owner") != owner or op.get("expires_at", int(time.time()) + 1) <= int(time.time()):
+            raise WorkflowError(404, "not_found", "Operation details expired; use the saved account controls.")
+        return public_operation(op)
+
+    def replay(self, owner, email, kind, key, request):
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key):
+            raise WorkflowError(400, "idempotency_required", "Supply a new Idempotency-Key for this account command.")
+        pk = "IDEM#" + digest(self.store.prefix + ":" + owner + ":" + email + ":" + kind + ":" + key)
+        fingerprint = content_hash(request)
+        item = self.store.get(pk)
+        if item:
+            if item.get("expires_at", int(time.time()) + 1) <= int(time.time()):
+                raise WorkflowError(409, "idempotency_expired", "Use a new request key for newly intended account work.")
+            if item["fingerprint"] != fingerprint:
+                raise WorkflowError(409, "idempotency_conflict", "This request key was used for different account choices.")
+            op = self.store.get("OP#" + item["operation_id"])
+            if op:
+                return pk, fingerprint, public_operation(op)
+            if item.get("result"):
+                return pk, fingerprint, item["result"]
+            raise WorkflowError(409, "operation_unavailable", "Refresh the saved account before retrying this command.")
+        return pk, fingerprint, None
+
+    def accept(self, owner, account, kind, phase, changes=None, details=None, idem=None, supersede=False):
+        now, op_id = int(time.time()), new_id()
+        op = {"pk": "OP#" + op_id, "id": op_id, "owner": owner, "email": account["email"], "kind": kind,
+            "phase": phase, "status": "accepted", "generation": int(account["generation"]) + 1,
+            "created_at": now, "updated_at": now, "attempts": 0, "next_attempt": now, **(details or {})}
+        key = None
+        if idem:
+            pk, fingerprint = idem
+            op.update(idempotency_pk=pk, request_fingerprint=fingerprint)
+            key = {"pk": pk, "operation_id": op_id, "fingerprint": fingerprint}
+        try:
+            self.store.accept(account, op, key, changes or {}, supersede=supersede)
+        except WorkflowError:
+            if key:
+                existing = self.store.get(key["pk"])
+                if existing and existing["fingerprint"] == key["fingerprint"]:
+                    accepted = self.store.get("OP#" + existing["operation_id"]) or existing.get("result")
+                    return {**accepted, "accepted_elsewhere": True}
+            raise
         return op
 
-    def attempts(self, owner, operation_id, session_id):
-        op = self._owned(owner, operation_id)
-        if op["phase"] not in ("authorizing", "failed", "exchanging", "ready", "verification_failed"):
-            raise WorkflowError(409, "consent_not_needed", "Check the saved operation status.")
-        if op["phase"] == "exchanging" and int(time.time()) < op.get("consent_expires_at", 0):
-            raise WorkflowError(409, "exchange_in_progress", "Wait for this consent attempt to finish.")
-        if op["phase"] != "authorizing" or int(time.time()) >= op.get("consent_expires_at", 0):
-            self.store.lock_account(op["email"], op["id"], int(time.time()))
-        return self._consent(op, session_id)
+    def enroll(self, owner, email, key, session_id, body=None):
+        from onboarding_commands import enroll
+        return enroll(self, owner, email_address(email), key, session_id, body or {})
+
+    def verification(self, owner, email, key):
+        from onboarding_commands import verification
+        return verification(self, owner, email_address(email), key)
+
+    def recover(self, owner, email, key):
+        from onboarding_commands import recover
+        return recover(self, owner, email_address(email), key)
+
+    def access(self, owner, email, enabled):
+        from onboarding_commands import access
+        return access(self, owner, email_address(email), enabled)
+
+    def disconnect(self, owner, email):
+        from onboarding_commands import disconnect
+        return disconnect(self, owner, email_address(email))
 
     def callback(self, state, code, session_id, error=None):
-        state_row = self.store.get("STATE#" + digest(str(state)))
-        op = self.store.get("OP#" + state_row["operation_id"]) if state_row else None
-        if not op or op.get("state_hash") != digest(str(state)) or op.get("session_hash") != digest(session_id):
-            raise WorkflowError(400, "invalid_state", "This consent callback does not match the owner session.")
-        if int(time.time()) >= op["consent_expires_at"]:
-            raise WorkflowError(400, "consent_expired", "Start a fresh consent attempt.")
-        op = self.store.transition(op["pk"], "authorizing", {"phase": "exchanging", "status": "running",
-            "exchange_deadline_at": int(time.time()) + 120}, conditions={"state_hash": digest(str(state)), "session_hash": digest(session_id)})
-        saved = False
-        try:
-            if error or not code:
-                raise WorkflowError(400, "consent_denied", "Google consent was not completed; start a fresh attempt.")
-            client = self.store.secret_get(op["client_ref"])
-            attempt = self.store.secret_get(op["attempt_ref"])
-            tokens = self.google.exchange(client, self.callback_url, code, attempt["verifier"])
-            reference = self.store.secret_put("callbacks/" + op["id"] + "/" + op["state_hash"], {"tokens": tokens, "nonce": attempt["nonce"]})
-            saved = True
-            op = self.store.transition(op["pk"], "exchanging", {"phase": "validating", "status": "running",
-                "callback_ref": reference, "exchange_saved": True, "updated_at": int(time.time())})
-            return public_operation(op)
-        except Exception as exc:
-            if saved:
-                # The stream's exchanging deadline reconciles a crash between SSM and DynamoDB.
-                raise WorkflowError(503, "authorization_saved", "Authorization is saved; reload to check background validation.") from None
-            code = exc.code if isinstance(exc, WorkflowError) else "consent_exchange_interrupted"
-            self.store.transition(op["pk"], "exchanging", {"phase": "failed", "status": "failed", "error": code,
-                "recovery": "Start a fresh consent attempt; existing mailbox access is preserved."})
-            self.store.release_account(op["email"], op["id"])
-            self.store.secret_delete(op.get("attempt_ref"))
-            if isinstance(exc, WorkflowError):
-                raise
-            raise WorkflowError(503, code, "The consent exchange was interrupted; start a fresh attempt.") from None
+        from onboarding_consent import callback
+        return callback(self, state, code, session_id, error)
 
     def validate_candidate_operation(self, op):
-        """Resume only saved tokens; the worker holds the conditional operation lease."""
-        client = self.store.secret_get(op["client_ref"])
-        exchange = self.store.secret_get(op["callback_ref"])
-        tokens = exchange["tokens"]
-        account = self.store.get("ACCOUNT#" + op["email"]) or {}
-        subject = exchange.get("verified_subject")
-        if not subject:
-            subject = self.google.identity(tokens, client, exchange["nonce"], op["email"], account.get("google_subject"))
-            exchange["verified_subject"] = subject
-            suffix = op["callback_ref"].removeprefix(self.store.prefix + "/onboarding/")
-            self.store.secret_put(suffix, exchange)
-        refresh = tokens.get("refresh_token")
-        if not refresh and account.get("google_subject") == subject:
-            old = self.store.secret_get(account_parameter(self.store.prefix, op["email"]))
-            refresh = old.get("refresh_token") if old.get("client_id") == client["client_id"] else None
-        if not refresh:
-            raise WorkflowError(400, "refresh_required", "Google did not provide durable access; start a fresh consent attempt.")
-        credentials = {"type": "oauth_refresh", "client_id": client["client_id"],
-            "client_secret": client["client_secret"], "refresh_token": refresh, "scopes": SCOPES}
-        self.google.validate_candidate(op["email"], credentials)
-        candidate = self.store.secret_put("candidates/" + op["id"], credentials)
-        return {"phase": "pending_promotion", "status": "running", "candidate_ref": candidate,
-            "google_subject": subject, "validation_complete": True, "expires_at": int(time.time()) + 604800}
-
-    def retry(self, owner, operation_id):
-        op = self._owned(owner, operation_id)
-        if op["phase"] != "verification_failed":
-            raise WorkflowError(409, "retry_not_available", "Only saved authorization awaiting verification can be retried.")
-        self.store.lock_account(op["email"], op["id"], int(time.time()))
-        phase = "verifying" if op.get("promoted_at") else "pending_promotion"
-        if not op.get("validation_complete") and op.get("exchange_deadline_at"):
-            phase = "validating" if op.get("exchange_saved") else "exchanging"
-        op = self.store.transition(op["pk"], "verification_failed", {"phase": phase, "status": "running", "updated_at": int(time.time()), "attempts": 0, "next_attempt": int(time.time()), "error_code": "", "error": ""})
-        return public_operation(op)
+        from onboarding_consent import validate_candidate
+        return validate_candidate(self, op)
 
 
 def build_service():
     import boto3
     import requests
-    table = boto3.resource("dynamodb").Table(os.environ["ONBOARDING_TABLE"])
-    store = Store(table, boto3.client("ssm"), os.environ.get("GOG_SSM_PREFIX", "/gogcli-proxy"))
+    from botocore.config import Config
+    config = Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1})
+    table = boto3.resource("dynamodb", config=config).Table(os.environ["ONBOARDING_TABLE"])
+    store = Store(table, boto3.client("ssm", config=config), os.environ.get("GOG_SSM_PREFIX", "/gogcli-proxy"))
     return OnboardingService(store, GoogleClient(requests.Session()), os.environ["GOOGLE_CALLBACK_URL"])

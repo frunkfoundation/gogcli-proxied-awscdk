@@ -2,7 +2,8 @@
 
 import base64
 import json
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+import re
+from typing import Any, Dict, List, Mapping, Tuple
 
 from errors import ProxyError, remaining_seconds
 
@@ -28,53 +29,63 @@ def _extract_account_domain(account_email: str) -> str:
     return email.split("@", 1)[1]
 
 
+def request_headers(event: Mapping[str, Any]) -> Dict[str, str]:
+    single = event.get("headers") or {}
+    multi = event.get("multiValueHeaders") or {}
+    if not isinstance(single, dict) or not isinstance(multi, dict):
+        raise ProxyError(400, "invalid request headers")
+    normalized = {}
+    for representation in (single, multi):
+        seen = set()
+        for key, value in representation.items():
+            if not isinstance(key, str) or re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key) is None:
+                raise ProxyError(400, "invalid request headers")
+            name = key.lower()
+            if name in seen:
+                raise ProxyError(400, "ambiguous request headers")
+            seen.add(name)
+            if name in {"x-http-method-override", "x-http-method", "x-method-override"}:
+                raise ProxyError(400, "method overrides are unsupported")
+            values = value if isinstance(value, list) else [value]
+            if len(values) != 1 or values[0] is None:
+                raise ProxyError(400, "ambiguous request headers")
+            text = str(values[0])
+            if any(ord(char) < 32 or ord(char) == 127 for char in text):
+                raise ProxyError(400, "invalid request headers")
+            if name in normalized and normalized[name] != text:
+                raise ProxyError(400, "contradictory request headers")
+            normalized[name] = text
+    return normalized
+
+
+def _query_pairs(event: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    single = event.get("queryStringParameters") or {}
+    multi = event.get("multiValueQueryStringParameters")
+    if not isinstance(single, dict) or (multi is not None and not isinstance(multi, dict)):
+        raise ProxyError(400, "invalid query parameters")
+    if multi is not None:
+        normalized = {str(key): values for key, values in multi.items()}
+        if single and (set(single) != set(normalized) or any(
+            not isinstance(normalized[key], list) or not normalized[key]
+            or str(value) != str(normalized[key][-1]) for key, value in single.items()
+        )):
+            raise ProxyError(400, "contradictory query parameters")
+        pairs = []
+        for key, values in normalized.items():
+            if not isinstance(values, list) or not values or any(value is None for value in values):
+                raise ProxyError(400, "invalid query parameters")
+            pairs.extend((key, str(value)) for value in values)
+        return pairs
+    return [(str(key), str(value)) for key, value in single.items() if value is not None]
+
+
 def _build_query_keys(event: Mapping[str, Any]) -> List[str]:
-    keys = set()
-    qs_multi = event.get("multiValueQueryStringParameters")
-    if isinstance(qs_multi, dict):
-        for k in qs_multi.keys():
-            if k is None:
-                continue
-            keys.add(str(k).strip().lower())
-    qs_single = event.get("queryStringParameters")
-    if isinstance(qs_single, dict):
-        for k in qs_single.keys():
-            if k is None:
-                continue
-            keys.add(str(k).strip().lower())
-    return sorted(k for k in keys if k != "")
-
-
-def _iter_query_pairs(qs_multi: Optional[Mapping[str, Any]], qs_single: Optional[Mapping[str, Any]]) -> Iterable[Tuple[str, str]]:
-    if qs_multi:
-        for k, vs in qs_multi.items():
-            if k is None or vs is None:
-                continue
-            if isinstance(vs, list):
-                for v in vs:
-                    if v is None:
-                        continue
-                    yield str(k), str(v)
-            else:
-                yield str(k), str(vs)
-        return
-
-    if qs_single:
-        for k, v in qs_single.items():
-            if k is None or v is None:
-                continue
-            yield str(k), str(v)
+    return sorted({key.strip().lower() for key, _ in _query_pairs(event) if key.strip()})
 
 
 def _build_query_string(event: Mapping[str, Any]) -> str:
     from urllib.parse import urlencode
-
-    qs_multi = event.get("multiValueQueryStringParameters")
-    qs_single = event.get("queryStringParameters")
-    pairs = list(_iter_query_pairs(qs_multi, qs_single))
-    if not pairs:
-        return ""
-    return urlencode(pairs, doseq=True, safe="~")
+    return urlencode(_query_pairs(event), safe="~")
 
 
 def _sanitize_outgoing_headers(in_headers: Mapping[str, Any]) -> Dict[str, str]:

@@ -21,7 +21,7 @@ gog sites (site) search (find) <query> ... [flags]
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
 | `--all-drives` | `bool` | true | Include shared drives (default: true; use --no-all-drives for My Drive only) |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `--drive`<br>`--drive-id` | `string` |  | Scope search to a specific shared drive (uses corpora=drive with driveId). Mutually exclusive with --no-all-drives. |
@@ -37,9 +37,9 @@ gog sites (site) search (find) <query> ... [flags]
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `--page`<br>`--cursor` | `string` |  | Page token |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
 | `--raw-query`<br>`--raw` | `bool` |  | Treat query as Drive query language (pass through; will still be constrained to Google Sites) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `-v`<br>`--verbose` | `bool` |  | Enable verbose logging |

@@ -41,17 +41,34 @@ func resolvedVersion() string {
 }
 
 func VersionString() string {
-	v := resolvedVersion()
-	if strings.TrimSpace(commit) == "" && strings.TrimSpace(date) == "" {
+	v := "gogcli-proxy " + resolvedVersion() + " [upstream " + upstreamBaseVersion() + "]"
+	sourceCommit := resolvedSourceCommit()
+	if strings.TrimSpace(sourceCommit) == "" && strings.TrimSpace(date) == "" {
 		return v
 	}
-	if strings.TrimSpace(commit) == "" {
+	if strings.TrimSpace(sourceCommit) == "" {
 		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(date))
 	}
 	if strings.TrimSpace(date) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(commit))
+		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(sourceCommit))
 	}
-	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(commit), strings.TrimSpace(date))
+	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(sourceCommit), strings.TrimSpace(date))
+}
+
+func upstreamBaseVersion() string { return strings.TrimSpace(embeddedVersion) }
+
+func resolvedSourceCommit() string {
+	if value := strings.TrimSpace(commit); value != "" {
+		return value
+	}
+	if info, ok := readBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return ""
 }
 
 type VersionCmd struct{}
@@ -60,9 +77,11 @@ func (c *VersionCmd) Run(ctx context.Context) error {
 	stdout := stdoutWriter(ctx)
 	if outfmt.IsJSON(ctx) {
 		return outfmt.WriteJSON(ctx, stdout, map[string]any{
-			"version": resolvedVersion(),
-			"commit":  strings.TrimSpace(commit),
-			"date":    strings.TrimSpace(date),
+			"product":               "gogcli-proxy",
+			"upstream_base_version": upstreamBaseVersion(),
+			"version":               resolvedVersion(),
+			"commit":                resolvedSourceCommit(),
+			"date":                  strings.TrimSpace(date),
 		})
 	}
 	fmt.Fprintln(stdout, VersionString())

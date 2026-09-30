@@ -23,7 +23,7 @@ gog docs (doc) insert-image <docId> [flags]
 | `--after` | `*string` |  | Insert after the first literal text match without deleting it |
 | `--at` | `*string` |  | Placeholder text to delete and replace, or 'end' to append |
 | `--before` | `*string` |  | Insert before the first literal text match without deleting it |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -41,8 +41,8 @@ gog docs (doc) insert-image <docId> [flags]
 | `--on-restricted` | `string` | error | If public sharing is blocked: error\|link |
 | `--parent` | `string` |  | Drive folder ID for the uploaded image |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `--tab` | `string` |  | Target a specific tab by title or ID (see docs list-tabs) |

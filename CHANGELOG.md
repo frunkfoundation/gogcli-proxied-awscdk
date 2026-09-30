@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- Proxy: add an owner-only remote Gmail setup guide with exact Web-client callback validation, a persisted mailbox checklist, resumable consent, factual signed-proxy verification, and retries that retain saved Google authorization.
+- Proxy: stabilize owner account setup for Gmail and Drive with existing-project guidance, independent installed/attempt status, revision-bound configuration, account-level recovery, and explicit caller access and disconnect controls.
+- Breaking: caller/default permission and optional account ceilings are evaluated independently; any matching explicit deny wins. Restrictive caller policies no longer inherit global allows. Review existing policy documents before rollout; see `infra/README.md`.
+- Proxy: validate the forwarded request before authorization, reject ambiguous routing/query/method overrides, and bound authorization-cache propagation.
+- Auth: use signed remote account inventory and real caller reads for managed account diagnostics; hosted setup replaces local account OAuth/keychain enrollment.
+- Distribution: identify this proxy fork and guide source builds instead of recommending upstream binaries without the proxy transport.
 
 - Fork: integrate upstream v0.42.0 while retaining mandatory AWS proxy routing for generated and raw Google API clients.
 - Gmail: send, raw send, reply, forward, draft send, and generic Discovery API send calls make one attempt so an ambiguous server error cannot trigger an automatic duplicate send.

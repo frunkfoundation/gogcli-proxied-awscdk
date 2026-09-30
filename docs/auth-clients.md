@@ -1,145 +1,52 @@
-# OAuth Clients
+# Managed Google authentication
 
-Use multiple OAuth client credentials (for different Google Cloud projects or brands) without mixing refresh tokens.
+This fork stores Google client credentials and account refresh tokens on the
+server. The CLI signs requests with its configured AWS identity and usage-plan
+API key. The API key identifies the plan; the AWS principal identifies the caller.
 
-## How it works
+Follow [Google account connections](account-onboarding.md) to import a hosted Web
+client, connect accounts, choose Gmail and Drive, recover interrupted consent,
+and remove access. The owner page reuses existing projects and can select another
+recorded project when an organization requires it. Each operation pins the
+reviewed client revision.
 
-- Default client name: `default`
-- Default credentials file: `$(os.UserConfigDir())/gogcli/credentials.json`
-- Named credentials files: `$(os.UserConfigDir())/gogcli/credentials-<client>.json`
-- Tokens are stored per client (`token:<client>:<email>`). Default client also writes legacy keys for backwards compatibility.
-- Default account is stored per client, with a legacy global fallback for the default client.
-
-## Selecting a client
-
-Use `--client` (or `GOG_CLIENT`) to pick which credentials + token bucket to use:
-
-```
-gog --client work auth credentials ~/Downloads/work-client.json
-gog --client work auth add you@company.com
-gog --client work gmail search "is:unread"
-```
-
-When `--client` is not set, `gog` resolves the client in this order:
-
-1) `--client` / `GOG_CLIENT` override
-2) `account_clients` map in config
-3) `client_domains` map in config
-4) Credentials file named after the email domain (e.g. `credentials-example.com.json`)
-5) `default`
-
-## Domain auto-map
-
-To auto-select a client for a domain:
-
-```
-gog --client work auth credentials ~/Downloads/work.json --domain example.com
-```
-
-This writes `client_domains` into `config.json` so any `@example.com` account selects the `work` client.
-
-## Listing stored credentials
-
-```
-gog auth credentials list
-```
-
-Shows stored credential files plus any configured domain mappings.
-
-## Config example
-
-```
-{
-  keyring_backend: "auto",
-  account_clients: {
-    "you@company.com": "work",
-  },
-  client_domains: {
-    "example.com": "work",
-  },
-}
-```
-
-## Migration notes
-
-- Legacy `token:<email>` entries are copied to `token:default:<email>` the first time they are read.
-- Legacy `default_account` is still respected for the default client.
-- Browser, manual, remote, and account-manager authorization use S256 PKCE.
-  Manual state includes a short-lived verifier under the active `gog` config
-  directory. Keep the same `GOG_HOME` and `--client` between remote steps.
-- Manual or remote authorization started before v0.24.0 cannot be completed
-  after upgrading. Run step 1 again to generate a PKCE-bound URL.
-
-## Quota project
-
-This selects request quota/billing attribution; it does not switch the Google
-login, grant IAM access, enable an API, or change a project's billing setup.
-
-Some Google APIs reject ADC or direct access tokens when they cannot identify
-a quota project, even if the API is enabled in a project you control. Set
-`--quota-project <project-id>` or `GOG_QUOTA_PROJECT` to send that project in
-the `X-Goog-User-Project` header on authenticated Google API requests:
+## CLI account commands
 
 ```bash
-GOG_AUTH_MODE=adc gog --readonly --quota-project my-project calendar events
-GOG_AUTH_MODE=adc GOG_QUOTA_PROJECT=my-project gog --readonly calendar events
+gog auth list --json
+gog auth status --json
+gog --account user@example.com auth doctor --check --json
+gog auth add user@example.com
+gog auth manage
+gog auth remove user@example.com
 ```
 
-The flag takes precedence over `GOG_QUOTA_PROJECT`. When both are unset, gog
-adds no quota-project header and existing authentication behavior is unchanged.
-`GOOGLE_CLOUD_QUOTA_PROJECT` and an ADC file's `quota_project_id` do not activate
-this setting; configure the flag or gog-specific variable explicitly.
+Inventory shows only remotely enrolled accounts visible to the authenticated
+caller. Status and doctor inspect the real proxy configuration and AWS credential
+source. `--check` reads each selected service as that caller. Setup/add/manage
+open or display the hosted owner page; remove points to its remote controls.
 
-The setting applies to stored OAuth, direct-token, ADC, and delegated
-service-account clients. A request's existing `X-Goog-User-Project` header takes
-precedence. Gmail watch request clients and MCP commands retain the selected
-project. API-key-only requests are unchanged.
+Select an account explicitly, through `GOG_ACCOUNT`, or with `default_account`
+in configuration. If none is selected, exactly one visible remote account can
+be chosen automatically. `auth alias` preserves local account shortcuts.
 
-The target API must be enabled on the project, and the authenticated principal
-needs `serviceusage.services.use` there, such as through
-`roles/serviceusage.serviceUsageConsumer`. See Google's
-[quota-project requirements](https://docs.cloud.google.com/docs/quotas/set-quota-project).
-This option does not grant IAM permissions or OAuth scopes, enable APIs, or
-configure billing. Credentials still need the command's API scopes; for example,
-ADC Calendar credentials need an appropriate Calendar scope independently of the
-quota project.
+## Two independent permissions
 
-## Workspace service accounts
+Google consent authorizes selected services for the saved Google account.
+Proxy access additionally requires an allowed account and permitted operations
+for the caller. Caller denies cannot be overridden by account allows. Local
+`--readonly` and command guards can restrict CLI use further.
 
-Workspace Admin, group, org-unit, and Keep automation commonly run through a
-service-account key with domain-wide delegation. Store the key for the
-Workspace admin identity you want to impersonate:
+Turning off owner-tool access retains the Google connection while removing that
+caller's explicit account grant. Disconnect removes this proxy's usable Google
+credentials. Neither action deletes Google content. Google application consent
+can be revoked separately through Google's connection settings.
 
-```
-gog auth service-account set admin@example.com --key ~/Downloads/service-account.json
-gog auth service-account status admin@example.com
-```
+Do not import local OAuth JSON, export tokens, start a loopback authorization
+flow, or enroll Workspace service-account keys to repair managed account access.
+Those account enrollment commands are absent from this fork's managed command
+tree. Unrelated Google Cloud API-key or Pub/Sub infrastructure credentials remain
+scoped to their own consumers.
 
-Cloud Identity Groups commands use the same Workspace service-account setup.
-Include `https://www.googleapis.com/auth/cloud-identity.groups.readonly` in
-domain-wide delegation, then run:
-
-```bash
-gog --account admin@example.com groups list
-gog --account admin@example.com groups members engineering@example.com
-gog --account admin@example.com calendar team engineering@example.com
-```
-
-Explicit `--access-token` and `GOG_AUTH_MODE=adc` auth remain available for
-advanced environments. `groups list` and Groups backups also require
-`--account <workspace-email>` because their transitive membership searches
-need the Workspace identity; `groups members` can use the active principal
-without that flag. `calendar team` shares the same Groups auth boundary.
-Stored user OAuth tokens are not used for these Cloud Identity lookups.
-
-Then run Admin SDK commands with that account:
-
-```
-gog --account admin@example.com admin users create ada@example.com \
-  --first-name Ada \
-  --last-name Lovelace \
-  --change-password
-```
-
-See [Workspace Admin](workspace-admin.md) for user creation, organizational
-units, cleanup, and group examples.
+See [proxy infrastructure](https://github.com/Frunk-Foundation/gogcli-proxied-awscdk/blob/main/infra/README.md) for operator policies and
+published integration facts.

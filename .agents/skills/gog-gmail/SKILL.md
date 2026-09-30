@@ -1,6 +1,6 @@
 ---
 name: gog-gmail
-description: "Gmail operations through gog."
+description: "Gmail command reference in the managed gogcli proxy fork."
 ---
 
 # Gmail
@@ -10,10 +10,17 @@ description: "Gmail operations through gog."
 Use `gog` for Gmail operations. Read `../gog/SKILL.md` first for shared auth,
 output, safety, and live-write rules.
 
+## Deployment authorization
+
+This deployment enrolls Gmail and Drive per remote account. Check the selected service and actual caller access before use with `gog --account user@example.com auth doctor --check --json --no-input`.
+
+Google credentials stay on the server. Do not start local OAuth or request tokens.
+Use the hosted owner page via `gog auth manage` for setup and recovery.
+
 ## Safe start
 
 ```bash
-gog auth list --check --json --no-input
+gog auth list --json --no-input
 gog schema gmail --json
 gog --readonly --account user@example.com gmail search 'newer_than:7d' --max 10 --json --wrap-untrusted
 ```

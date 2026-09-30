@@ -74,35 +74,19 @@ Generated from `gog schema --json`.
     - [`gog appscript (script,apps-script) pull <scriptId> <dir> [flags]`](commands/gog-appscript-pull.md) - Pull an Apps Script project into a local directory
     - [`gog appscript (script,apps-script) run <scriptId> <function> [flags]`](commands/gog-appscript-run.md) - Run a deployed Apps Script function
     - [`gog appscript (script,apps-script) versions (list-versions) <scriptId> [flags]`](commands/gog-appscript-versions.md) - List versions
-  - [`gog auth <command> [flags]`](commands/gog-auth.md) - Auth and credentials
-    - [`gog auth add <email> [flags]`](commands/gog-auth-add.md) - Authorize a Google Account or Google Workspace account and store a refresh token
-    - [`gog auth alias <command>`](commands/gog-auth-alias.md) - Manage account aliases
+  - [`gog auth <command> [flags]`](commands/gog-auth.md) - Managed Google accounts and proxy access
+    - [`gog auth add <email>`](commands/gog-auth-add.md) - Show where to connect a managed Google account
+    - [`gog auth alias <command>`](commands/gog-auth-alias.md) - Manage local account aliases
       - [`gog auth alias list`](commands/gog-auth-alias-list.md) - List account aliases
       - [`gog auth alias set <alias> <email>`](commands/gog-auth-alias-set.md) - Set an account alias
       - [`gog auth alias unset <alias>`](commands/gog-auth-alias-unset.md) - Remove an account alias
-    - [`gog auth credentials <command>`](commands/gog-auth-credentials.md) - Manage OAuth client credentials
-      - [`gog auth credentials list`](commands/gog-auth-credentials-list.md) - List stored OAuth client credentials
-      - [`gog auth credentials remove [<client>]`](commands/gog-auth-credentials-remove.md) - Remove stored OAuth client credentials
-      - [`gog auth credentials set <credentials> [flags]`](commands/gog-auth-credentials-set.md) - Store OAuth client credentials
-    - [`gog auth doctor [flags]`](commands/gog-auth-doctor.md) - Diagnose auth, keyring, and refresh-token issues
-    - [`gog auth import --email=STRING [flags]`](commands/gog-auth-import.md) - Import a required refresh token and optional current access token non-interactively
-    - [`gog auth keep --key=STRING <email>`](commands/gog-auth-keep.md) - Configure service account for Google Keep (Workspace only)
-    - [`gog auth keyring [<backend> [<backend2>]]`](commands/gog-auth-keyring.md) - Configure keyring backend
-    - [`gog auth list [flags]`](commands/gog-auth-list.md) - List stored accounts
-    - [`gog auth manage (login) [flags]`](commands/gog-auth-manage.md) - Open interactive accounts manager in browser
-    - [`gog auth remove <email>`](commands/gog-auth-remove.md) - Remove a stored refresh token
-    - [`gog auth service-account <command>`](commands/gog-auth-service-account.md) - Configure service account (Workspace only; domain-wide delegation)
-      - [`gog auth service-account set <email> [flags]`](commands/gog-auth-service-account-set.md) - Store a service account key for impersonation
-      - [`gog auth service-account status <email>`](commands/gog-auth-service-account-status.md) - Show stored service account key status
-      - [`gog auth service-account unset <email>`](commands/gog-auth-service-account-unset.md) - Remove stored service account key
-    - [`gog auth services [flags]`](commands/gog-auth-services.md) - List supported auth services and scopes
-    - [`gog auth setup [<email>] [flags]`](commands/gog-auth-setup.md) - Guide Google Cloud, OAuth client, and account setup
-    - [`gog auth status`](commands/gog-auth-status.md) - Show auth configuration and keyring backend
-    - [`gog auth tokens <command>`](commands/gog-auth-tokens.md) - Manage stored refresh tokens
-      - [`gog auth tokens delete <email>`](commands/gog-auth-tokens-delete.md) - Delete a stored refresh token
-      - [`gog auth tokens export <email> [flags]`](commands/gog-auth-tokens-export.md) - Export a refresh token to a file (contains secrets)
-      - [`gog auth tokens import <inPath>`](commands/gog-auth-tokens-import.md) - Import a refresh token file into keyring (contains secrets)
-      - [`gog auth tokens list`](commands/gog-auth-tokens-list.md) - List stored tokens (by key only)
+    - [`gog auth doctor [flags]`](commands/gog-auth-doctor.md) - Diagnose proxy credentials, remote accounts, and caller reads
+    - [`gog auth list [flags]`](commands/gog-auth-list.md) - List this caller's visible remote account connections
+    - [`gog auth manage (login)`](commands/gog-auth-manage.md) - Show the owner account management page
+    - [`gog auth remove <email>`](commands/gog-auth-remove.md) - Show where to remove remote account access
+    - [`gog auth services [flags]`](commands/gog-auth-services.md) - Show upstream services and managed enrollment limits
+    - [`gog auth setup`](commands/gog-auth-setup.md) - Show the owner page for Google account setup
+    - [`gog auth status`](commands/gog-auth-status.md) - Show proxy configuration and remote inventory access
   - [`gog backup <command> [flags]`](commands/gog-backup.md) - Encrypted Google account backups
     - [`gog backup cat <shard> [flags]`](commands/gog-backup-cat.md) - Decrypt one backup shard to stdout
     - [`gog backup export [flags]`](commands/gog-backup-export.md) - Write a local plaintext export
@@ -537,8 +521,8 @@ Generated from `gog schema --json`.
     - [`gog keep get <noteId> [flags]`](commands/gog-keep-get.md) - Get a note
     - [`gog keep list [flags]`](commands/gog-keep-list.md) - List notes
     - [`gog keep search <query> [flags]`](commands/gog-keep-search.md) - Search notes by text (client-side)
-  - [`gog login <email> [flags]`](commands/gog-login.md) - Authorize and store a refresh token (alias for 'auth add')
-  - [`gog logout <email> [flags]`](commands/gog-logout.md) - Remove a stored refresh token (alias for 'auth remove')
+  - [`gog login <email> [flags]`](commands/gog-login.md) - Show where to connect an account (alias for 'auth add')
+  - [`gog logout <email> [flags]`](commands/gog-logout.md) - Show where to remove remote access (alias for 'auth remove')
   - [`gog ls (list) [flags]`](commands/gog-ls.md) - List Drive files (alias for 'drive ls')
   - [`gog maps (map) <command> [flags]`](commands/gog-maps.md) - Google Maps
     - [`gog maps (map) directions (route) --origin=STRING --destination=STRING [flags]`](commands/gog-maps-directions.md) - Get directions between two locations
@@ -745,8 +729,8 @@ Generated from `gog schema --json`.
     - [`gog tasks (task) update (edit,set) <tasklistId> <taskId> [flags]`](commands/gog-tasks-update.md) - Update a task
   - [`gog time <command> [flags]`](commands/gog-time.md) - Local time utilities
     - [`gog time now [flags]`](commands/gog-time-now.md) - Show current time
-  - [`gog update <command> [flags]`](commands/gog-update.md) - Check gogcli release status
-    - [`gog update status (check) [flags]`](commands/gog-update-status.md) - Show installed and latest gogcli release status
+  - [`gog update <command> [flags]`](commands/gog-update.md) - Show source-update instructions for this proxy fork
+    - [`gog update status (check) [flags]`](commands/gog-update-status.md) - Show source-update instructions for this proxy fork
   - [`gog upload (up,put) <localPath> [flags]`](commands/gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
   - [`gog version [flags]`](commands/gog-version.md) - Print version
   - [`gog whoami (who-am-i) [flags]`](commands/gog-whoami.md) - Show your profile (alias for 'people me')

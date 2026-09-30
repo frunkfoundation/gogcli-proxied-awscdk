@@ -24,7 +24,7 @@ gog calendar (cal) events (list,ls) [<calendarId> ...] [flags]
 | `--all-pages`<br>`--allpages` | `bool` |  | Fetch all pages |
 | `--cal` | `[]string` |  | Calendar ID or name (can be repeated) |
 | `--calendars` | `string` |  | Comma-separated calendar IDs, names, or indices from 'calendar calendars' |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--days` | `int` | 0 | Window length in days, measured from --from when given, otherwise from today (timezone-aware) |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
@@ -48,8 +48,8 @@ gog calendar (cal) events (list,ls) [<calendarId> ...] [flags]
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
 | `--private-prop-filter` | `string` |  | Filter by private extended property (key=value) |
 | `--query` | `string` |  | Free text search |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `--shared-prop-filter` | `string` |  | Filter by shared extended property (key=value) |

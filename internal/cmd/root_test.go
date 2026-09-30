@@ -218,26 +218,19 @@ func TestExecute_AccessTokenDoesNotWarnForVersion(t *testing.T) {
 			}
 		})
 	})
-	if strings.Contains(errText, directAccessTokenWarning) {
+	if strings.Contains(errText, "Using direct access token") {
 		t.Fatalf("unexpected access-token warning for version command: %q", errText)
 	}
 }
 
-func TestExecute_AccessTokenWarningUsesRuntimeStderr(t *testing.T) {
-	stopErr := errors.New("stop after account resolution")
-	result := executeWithTestRuntime(t, []string{
-		"--access-token", "ya29.test-token",
-		"drive", "ls",
-	}, &app.Runtime{Services: app.Services{
-		Drive: func(context.Context, string) (*drive.Service, error) {
-			return nil, stopErr
-		},
-	}})
-	if !errors.Is(result.err, stopErr) {
-		t.Fatalf("Execute error = %v, want %v", result.err, stopErr)
-	}
-	if !strings.Contains(result.stderr, directAccessTokenWarning) {
-		t.Fatalf("missing access-token warning: %q", result.stderr)
+func TestExecute_AccessTokenRejectedBeforeManagedRead(t *testing.T) {
+	called := false
+	result := executeWithTestRuntime(t, []string{"--access-token", "ya29.test-token", "drive", "ls"}, &app.Runtime{Services: app.Services{Drive: func(context.Context, string) (*drive.Service, error) {
+		called = true
+		return nil, errors.New("unexpected service construction")
+	}}})
+	if result.err == nil || !strings.Contains(result.err.Error(), "unsupported") || called {
+		t.Fatalf("managed direct token result = %v, service called = %v", result.err, called)
 	}
 }
 
@@ -285,7 +278,7 @@ func TestExecute_QuotaProjectReachesCommandContext(t *testing.T) {
 				}
 			}
 
-			args := []string{"--access-token", "ya29.test-token"}
+			args := []string{"--account", "user@example.com"}
 			if test.flagProject != "" {
 				args = append(args, "--quota-project", test.flagProject)
 			}

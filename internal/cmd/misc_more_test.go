@@ -35,7 +35,7 @@ func TestVersionStringVariantsMore(t *testing.T) {
 	version = "1.2.3"
 	commit = ""
 	date = ""
-	if got := VersionString(); got != "1.2.3" {
+	if got := VersionString(); got != "gogcli-proxy 1.2.3 [upstream v0.42.0]" {
 		t.Fatalf("unexpected version: %q", got)
 	}
 

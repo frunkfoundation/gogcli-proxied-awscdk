@@ -1,47 +1,35 @@
-# gog 🧭 — Google Workspace from the terminal
+# gog proxy 🧭 — Managed Google accounts from the terminal
 
 ![gogcli banner](docs/assets/readme-banner.jpg)
 
-[![CI](https://img.shields.io/github/actions/workflow/status/openclaw/gogcli/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/openclaw/gogcli/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/openclaw/gogcli?style=flat-square)](https://github.com/openclaw/gogcli/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/Frunk-Foundation/gogcli-proxied-awscdk/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/Frunk-Foundation/gogcli-proxied-awscdk/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/openclaw/gogcli?style=flat-square)](https://go.dev/)
 [![License](https://img.shields.io/github/license/openclaw/gogcli?style=flat-square)](LICENSE)
-[![Homebrew](https://img.shields.io/badge/Homebrew-openclaw%2Ftap-fbb040?style=flat-square&logo=homebrew)](https://github.com/openclaw/homebrew-tap)
 
-`gog` is one command-line client for Gmail, Calendar, Drive, Docs, Sheets, and
-the wider Google Workspace surface. It is built for people, scripts, CI, and
-agents that need explicit account routing, machine-readable output, and safety
-controls.
+This fork of [gogcli](https://github.com/openclaw/gogcli) routes Google account
+requests through a remote proxy that holds the credentials and enforces caller,
+account, and API-operation permissions. Hosted account setup supports Gmail and
+Drive. The wider upstream command surface requires separately configured access.
 
 ```bash
 gog --readonly gmail search 'is:unread newer_than:7d' --max 10 --json
-gog --readonly calendar events --today --json
 gog --readonly drive audit sharing --parent <folderId> --json
 ```
 
-For least-privilege Gmail authorization, use `gog auth add you@example.com --services gmail --gmail-scope send` for sending only, or `--gmail-scope read-send` to also read messages without mailbox-modification or settings-management permissions.
+Connect accounts and choose services on the [owner account page](https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/onboarding/).
+The proxy can restrict each caller independently of Google's account consent.
 
 ## Install
 
-Homebrew is the shortest path on macOS and Linux:
+Build this repository so the binary includes its proxy transport:
 
 ```bash
-brew install openclaw/tap/gogcli
-gog --version
+make build
+bin/gog --version
 ```
 
-With Go:
-
-```bash
-go install github.com/openclaw/gogcli/cmd/gog@latest
-gog --version
-```
-
-Install scripts using the former `github.com/steipete/gogcli` module path should
-switch to `github.com/openclaw/gogcli` as shown above.
-
-Docker images, Windows archives, raw macOS/Linux binaries, and source builds
-are covered in the [install guide](docs/install.md).
+Upstream Homebrew/Go downloads omit this transport. This fork currently updates
+from its own source checkout; it does not recommend upstream replacement binaries.
 
 ## Proxy mode
 
@@ -58,29 +46,37 @@ This fork routes managed account Google API calls through an AWS service that ho
 
 Select an account explicitly with `--account` or `default_account`. Requests use AWS SigV4 plus the API usage-plan key; Google credentials stay on the server. For custom gateway domains, set `AWS_REGION=us-east-2`. See [proxy operation and account setup](infra/README.md).
 
-For managed Gmail accounts, use the deployed owner-only `/prd/onboarding/` page. It guides Google Console setup, validates a Web application client and its exact hosted callback, saves the mailbox checklist remotely, and verifies each connection through real signed proxy reads. See [remote Gmail onboarding and first CLI read](docs/account-onboarding.md). Google credentials stay on the server; local OAuth setup below does not enroll a managed mailbox.
+Use the owner-only `/prd/onboarding/` page to review your existing Google project,
+import a hosted Web client, and connect accounts to Gmail and Drive. Saved account
+state survives interrupted consent, reconnects, and temporary operation cleanup.
+See [account connections and CLI checks](docs/account-onboarding.md).
 
-Upstream direct-token and ADC modes are unsupported for managed account API calls in this fork. Maps/Places and public YouTube API-key modes retain their separate Google Cloud project credentials, as do Pub/Sub subscribers. Local OAuth commands remain available, but they do not register credentials with the proxy. The proxy limits transmitted request bodies to 4 MiB, including MIME/base64/JSON encoding. Run `just proxy-test` for the offline Lambda contract checks.
+Direct-token and ADC modes are unsupported for managed account API calls.
+Maps/Places, public YouTube API-key modes, and Pub/Sub subscribers retain separate
+Google Cloud project credentials. Managed authentication commands inspect remote
+accounts and direct enrollment to the owner page. Transmitted request bodies are
+limited to 4 MiB; serialized responses must fit 6 MiB. Run `just proxy-test` for
+the offline Lambda contract checks.
 
 ## Quick start
 
-Create a Desktop OAuth client in a [Google Cloud project](https://console.cloud.google.com/auth/clients),
-download its JSON file, and authorize only the services you need:
+Connect your Google accounts on the hosted page, then configure the proxy URL,
+usage-plan key, authorized AWS profile, and selected account in `config.json`:
 
 ```bash
-gog auth credentials set ~/Downloads/client_secret_*.json
-gog auth add you@gmail.com --services gmail,calendar,drive
-export GOG_ACCOUNT=you@gmail.com
-gog auth doctor --check
-gog gmail search 'newer_than:7d' --max 10
+bin/gog config path
+bin/gog auth list --json
+bin/gog --account you@gmail.com auth doctor --check --json
+bin/gog --account you@gmail.com --readonly drive ls --max 1 --json
 ```
 
-The [five-minute quickstart](docs/quickstart.md) covers API enablement, the OAuth
-consent screen, weekly-token-expiry avoidance, headless authorization, and
-account defaults.
+The [connection guide](docs/account-onboarding.md) covers the existing Google
+project, exact hosted callback, service permissions, recovery, and access removal.
 
 ## Work with Google services
 
+The following table describes upstream command coverage, not this deployment's
+current permissions. Hosted enrollment and acceptance cover Gmail and Drive.
 Commands follow the resource you are working with. These are the common entry
 points; the [examples](docs/examples.md) and generated
 [command index](docs/commands/README.md) cover the full surface.
@@ -125,10 +121,10 @@ locked flag values baked in at build time.
 
 ## Accounts and authentication
 
-One installation can route among multiple Google accounts, named OAuth client
-projects, direct access tokens, Application Default Credentials, and Workspace
-service accounts. Tokens use the platform keyring by default; headless systems
-can use the encrypted file backend.
+One installation routes among the remote accounts visible to its authenticated
+caller. Google credentials remain on the server. Account diagnostics inspect
+remote inventory and can check selected services through the actual caller's
+signed proxy requests. Local aliases remain available.
 
 ```bash
 gog auth list --check
@@ -136,9 +132,9 @@ gog auth alias set work you@company.com
 gog --account work gmail search 'is:unread'
 ```
 
-See [OAuth clients](docs/auth-clients.md) for client selection and service
-accounts, and [Paths and State](docs/paths.md) for `GOG_HOME`, XDG paths, and
-keyring storage.
+Use the [connection guide](docs/account-onboarding.md) for hosted project/client
+selection. Owner tools can remove caller access or disconnect a Google account;
+deleting local credentials does not remove remote access.
 
 ## Discover the contract
 
@@ -155,11 +151,11 @@ gog help drive inventory
 bridge. It is read-only by default; writes require explicit command and tool
 authorization. See the [MCP guide](docs/mcp.md).
 
-## Supported OAuth services
+## Upstream OAuth service coverage
 
-The generated table below records the user OAuth and Workspace service-account
-surface. `gog auth services` reports the same information from the installed
-binary.
+The generated table records the wider upstream Google authorization surface.
+It is not a claim that the hosted proxy enables every service or requests every
+listed scope. Managed service availability is reported by remote account status.
 
 <!-- auth-services:start -->
 | Service | User | APIs | Scopes | Notes |

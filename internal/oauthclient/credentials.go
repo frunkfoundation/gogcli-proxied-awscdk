@@ -44,14 +44,6 @@ func ClientSecretKey(client string) (string, error) {
 	return fmt.Sprintf(clientSecretKeyFmt, normalized), nil
 }
 
-func (s *CredentialsStore) PathFor(client string) (string, error) {
-	path, err := s.files.PathFor(client)
-	if err != nil {
-		return "", fmt.Errorf("resolve credentials path: %w", err)
-	}
-	return path, nil
-}
-
 func (s *CredentialsStore) Write(client string, creds config.ClientCredentials, insecure bool) error {
 	normalized, err := config.NormalizeClientNameOrDefault(client)
 	if err != nil {
@@ -134,13 +126,4 @@ func (s *CredentialsStore) Delete(client string) error {
 		return fmt.Errorf("delete credentials metadata: %w", fileErr)
 	}
 	return nil
-}
-
-func (s *CredentialsStore) ClientSecretInKeyring(client string) bool {
-	key, err := ClientSecretKey(client)
-	if err != nil {
-		return false
-	}
-	secret, err := s.secrets.GetSecret(key)
-	return err == nil && strings.TrimSpace(string(secret)) != ""
 }

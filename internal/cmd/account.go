@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -13,40 +11,29 @@ import (
 const (
 	accessTokenPlaceholderAccount = "access-token-user"
 	adcPlaceholderAccount         = "adc"
-	directAccessTokenWarning      = "Note: Using direct access token (expires in ~1 hour; no auto-refresh)" //nolint:gosec // user-facing warning text, not a credential
 )
 
 func requireAccount(flags *RootFlags) (string, error) {
-	// In ADC mode the service account authenticates as itself — no user email
-	// or keyring lookup is needed. We still accept --account/GOG_ACCOUNT as an
-	// optional label (e.g. for logging), but it is not required.
 	if isADCAuthMode(flags) {
-		if v := flagAccount(flags); v != "" {
-			if shouldAutoSelectAccount(v) {
-				return adcPlaceholderAccount, nil
-			}
-			return v, nil
-		}
-		if v := strings.TrimSpace(os.Getenv("GOG_ACCOUNT")); v != "" {
-			if shouldAutoSelectAccount(v) {
-				return adcPlaceholderAccount, nil
-			}
-			return v, nil
-		}
-		return adcPlaceholderAccount, nil
+		return "", usage("ADC is unsupported for managed Google accounts; configure proxy caller credentials")
 	}
-
+	if hasDirectAccessToken(flags) {
+		return "", usage("direct Google access tokens are unsupported for managed accounts; configure proxy caller credentials")
+	}
 	if account, ok, err := configuredAccount(flags); err != nil {
 		return "", err
 	} else if ok {
-		return finalizeRequiredAccount(flags, account), nil
+		return account, nil
+	}
+	if flags == nil || flags.inventoryReader == nil {
+		return "", usage("missing --account (or set default_account in config.json or GOG_ACCOUNT)")
+	}
+	inventory, err := flags.inventoryReader()
+	if err != nil {
+		return "", err
 	}
 
-	if hasDirectAccessToken(flags) {
-		return finalizeRequiredAccount(flags, accessTokenPlaceholderAccount), nil
-	}
-
-	return "", usage("missing --account (or set default_account in config.json or GOG_ACCOUNT)")
+	return selectManagedAccount(flags, inventory)
 }
 
 func isADCAuthMode(flags *RootFlags) bool {
@@ -123,21 +110,6 @@ func directAccessToken(flags *RootFlags) string {
 
 func hasDirectAccessToken(flags *RootFlags) bool {
 	return directAccessToken(flags) != ""
-}
-
-func finalizeRequiredAccount(flags *RootFlags, account string) string {
-	if hasDirectAccessToken(flags) {
-		_, _ = fmt.Fprintln(accountDiagnostics(flags), directAccessTokenWarning)
-	}
-
-	return account
-}
-
-func accountDiagnostics(flags *RootFlags) io.Writer {
-	if flags == nil || flags.diagnostics == nil {
-		return io.Discard
-	}
-	return flags.diagnostics
 }
 
 func resolveAccountAlias(flags *RootFlags, value string) (string, bool, error) {

@@ -21,7 +21,7 @@ gog <command> [flags]
 - [gog analytics](gog-analytics.md) - Google Analytics
 - [gog api](gog-api.md) - Google Discovery APIs and generic method calls
 - [gog appscript](gog-appscript.md) - Google Apps Script
-- [gog auth](gog-auth.md) - Auth and credentials
+- [gog auth](gog-auth.md) - Managed Google accounts and proxy access
 - [gog backup](gog-backup.md) - Encrypted Google account backups
 - [gog batch](gog-batch.md) - Build and submit persisted Google Docs, Slides, Forms, and Sheets request batches
 - [gog calendar](gog-calendar.md) - Google Calendar
@@ -37,8 +37,8 @@ gog <command> [flags]
 - [gog gmail](gog-gmail.md) - Gmail
 - [gog groups](gog-groups.md) - Cloud Identity Groups (Workspace only)
 - [gog keep](gog-keep.md) - Google Keep (Workspace only)
-- [gog login](gog-login.md) - Authorize and store a refresh token (alias for 'auth add')
-- [gog logout](gog-logout.md) - Remove a stored refresh token (alias for 'auth remove')
+- [gog login](gog-login.md) - Show where to connect an account (alias for 'auth add')
+- [gog logout](gog-logout.md) - Show where to remove remote access (alias for 'auth remove')
 - [gog ls](gog-ls.md) - List Drive files (alias for 'drive ls')
 - [gog maps](gog-maps.md) - Google Maps
 - [gog mcp](gog-mcp.md) - Run a typed, allowlisted MCP server over stdio
@@ -57,7 +57,7 @@ gog <command> [flags]
 - [gog status](gog-status.md) - Show auth/config status (alias for 'auth status')
 - [gog tasks](gog-tasks.md) - Google Tasks
 - [gog time](gog-time.md) - Local time utilities
-- [gog update](gog-update.md) - Check gogcli release status
+- [gog update](gog-update.md) - Show source-update instructions for this proxy fork
 - [gog upload](gog-upload.md) - Upload a file to Drive (alias for 'drive upload')
 - [gog version](gog-version.md) - Print version
 - [gog whoami](gog-whoami.md) - Show your profile (alias for 'people me')
@@ -70,7 +70,7 @@ gog <command> [flags]
 | --- | --- | --- | --- |
 | `--access-token` | `string` |  | Upstream direct-token option; unsupported for proxy Google API commands |
 | `-a`<br>`--account`<br>`--acct` | `string` |  | Account email or alias for proxy Google API commands |
-| `--client` | `string` |  | OAuth client name (selects stored credentials + token bucket) |
+| `--client` | `string` |  | Upstream OAuth client selector; unused by managed proxy account calls |
 | `--color` | `string` | auto | Color output: auto\|always\|never |
 | `--disable-commands` | `string` |  | Comma-separated list of disabled commands; dot paths allowed |
 | `-n`<br>`--dry-run`<br>`--dryrun`<br>`--noop`<br>`--preview` | `bool` |  | Do not make changes; print intended actions and exit successfully |
@@ -83,8 +83,8 @@ gog <command> [flags]
 | `-j`<br>`--json`<br>`--machine` | `bool` | false | Output JSON to stdout (best for scripting) |
 | `--no-input`<br>`--non-interactive`<br>`--noninteractive` | `bool` |  | Never prompt; fail instead (useful for CI) |
 | `-p`<br>`--plain`<br>`--tsv` | `bool` | false | Output stable, parseable text to stdout (TSV; no colors) |
-| `--quota-project` | `string` |  | Google Cloud project to bill for API usage (sent as X-Goog-User-Project; some APIs require it with --access-token or ADC) |
-| `--readonly` | `bool` | false | Block mutating API requests at runtime; auth add also requests read-only OAuth scopes |
+| `--quota-project` | `string` |  | Optional Google Cloud billing project (sent as X-Goog-User-Project through the proxy) |
+| `--readonly` | `bool` | false | Block mutating Google API requests at runtime |
 | `--results-only` | `bool` |  | In JSON mode, emit only the primary result (drops envelope fields like nextPageToken) |
 | `--select`<br>`--pick`<br>`--project` | `string` |  | In JSON mode, select comma-separated fields (best-effort; supports dot paths). Desire path: use --fields for most commands. |
 | `-v`<br>`--verbose` | `bool` |  | Enable verbose logging |

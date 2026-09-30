@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"google.golang.org/api/calendar/v3"
@@ -153,83 +152,18 @@ func TestRequireAccount_ResolvesAliasEnv(t *testing.T) {
 	}
 }
 
-func TestRequireAccount_ADCUsesCapturedMode(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-
-	got, err := requireAccount(&RootFlags{authMode: googleapi.AuthModeADC})
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if got != "adc" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestRequireAccount_ADCEnvAutoUsesPlaceholder(t *testing.T) {
-	for _, value := range []string{"auto", "default"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("GOG_ACCOUNT", value)
-
-			got, err := requireAccount(&RootFlags{authMode: googleapi.AuthModeADC})
-			if err != nil {
-				t.Fatalf("err: %v", err)
-			}
-			if got != adcPlaceholderAccount {
-				t.Fatalf("got %q", got)
-			}
-		})
+func TestRequireAccountRejectsDirectAuthentication(t *testing.T) {
+	for _, flags := range []*RootFlags{{authMode: googleapi.AuthModeADC}, {AccessToken: "unused-token"}, {Account: "user@example.com", AccessToken: "unused-token"}} {
+		if account, err := requireAccount(flags); err == nil || account != "" {
+			t.Fatalf("managed direct authentication accepted: %q, %v", account, err)
+		}
 	}
 }
 
 func TestRequireAccount_Missing(t *testing.T) {
 	t.Setenv("GOG_ACCOUNT", "")
-	flags := &RootFlags{}
-	_, err := requireAccount(flags)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-}
-
-func TestRequireAccount_AccessTokenNoAccount(t *testing.T) {
-	t.Setenv("GOG_ACCOUNT", "")
-	var diagnostics strings.Builder
-	flags := &RootFlags{AccessToken: "ya29.some-token", diagnostics: &diagnostics}
-	flags.authOperations = app.AuthOperations{
-		OpenSecretsStore: func() (secrets.Store, error) {
-			t.Fatal("OpenSecretsStore should not be called when access token is provided")
-			return nil, errors.New("unreachable")
-		},
-	}
-
-	got, err := requireAccount(flags)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if got != accessTokenPlaceholderAccount {
-		t.Fatalf("got %q", got)
-	}
-	if !strings.Contains(diagnostics.String(), directAccessTokenWarning) {
-		t.Fatalf("expected warning, got %q", diagnostics.String())
-	}
-}
-
-func TestRequireAccount_AccessTokenWithExplicitAccount(t *testing.T) {
-	var diagnostics strings.Builder
-	flags := &RootFlags{
-		AccessToken: "ya29.some-token",
-		Account:     "explicit@example.com",
-		diagnostics: &diagnostics,
-	}
-
-	got, err := requireAccount(flags)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if got != "explicit@example.com" {
-		t.Fatalf("got %q", got)
-	}
-	if !strings.Contains(diagnostics.String(), directAccessTokenWarning) {
-		t.Fatalf("expected warning, got %q", diagnostics.String())
+	if _, err := requireAccount(&RootFlags{}); err == nil {
+		t.Fatal("expected missing account")
 	}
 }
 

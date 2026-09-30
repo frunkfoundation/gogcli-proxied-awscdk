@@ -1,163 +1,181 @@
+"""Durable effects: withdrawn access wins, interrupted writes recover, probes stay read-only."""
+import copy
+import os
 import unittest
 from unittest.mock import Mock, patch
 
 import onboarding_worker as worker
+from onboarding_effects import (allow_parameter, apply_access, policy_parameter, promote, remove_connection,
+                                set_allowlist, validate_allowlist)
+from onboarding_services import content_hash, requested_scopes, service_policy
+from onboarding_store import WorkflowError, account_parameter
+import test_onboarding_lifecycle as lifecycle
 
 
-class VerificationTests(unittest.TestCase):
+class WorkerLifecycleTests(unittest.TestCase):
+    enroll = lifecycle.AccountLifecycleTests.enroll
+    # Reuse account preparation only; the inherited public-command tests remain valid.
     def setUp(self):
-        patcher = patch.dict(worker.os.environ, {"PROXY_BASE_URL": "https://example.execute-api.us-east-2.amazonaws.com/prd/"})
-        patcher.start()
-        self.addCleanup(patcher.stop)
-    def test_empty_mailbox_verifies_via_signed_normal_proxy(self):
-        http = Mock()
-        http.get.side_effect = [Mock(status_code=200, json=lambda: {"emailAddress": "jay@example.com"}),
-                                Mock(status_code=200, json=lambda: {"resultSizeEstimate": 0})]
-        credentials = Mock()
-        credentials.get_frozen_credentials.return_value = Mock(access_key="AKID", secret_key="secret", token="session")
-        api = Mock()
-        api.get_api_key.return_value = {"value": "server-only-key"}
-        with patch.dict(worker.os.environ, {"PROXY_BASE_URL": "https://example.execute-api.us-east-2.amazonaws.com/prd/", "PROXY_API_KEY_ID": "key-id", "AWS_REGION": "us-east-2"}), patch.object(worker, "aws_client", return_value=api), patch.object(worker, "aws_credentials", return_value=credentials):
-            worker.verify_proxy("jay@example.com", http)
-        self.assertEqual(2, api.get_api_key.call_count)
-        api.get_api_key.assert_called_with(apiKey="key-id", includeValue=True)
-        self.assertEqual(2, http.get.call_count)
-        first, second = http.get.call_args_list
-        self.assertTrue(first.args[0].endswith("/gmail/v1/users/me/profile"))
-        self.assertIn("AWS4-HMAC-SHA256", first.kwargs["headers"]["Authorization"])
-        self.assertEqual("jay@example.com", first.kwargs["headers"]["X-GOG-Account"])
-        from routing import resolve_google_host_and_path
-        self.assertEqual(("gmail.googleapis.com", "/gmail/v1/users/me/profile"),
-            resolve_google_host_and_path("/gmail/v1/users/me/profile", first.kwargs["headers"].get("X-GOG-Google-Host", "")))
-        self.assertIn("x-gog-google-host", first.kwargs["headers"]["Authorization"].split("SignedHeaders=")[1].split(",")[0])
-        self.assertIn("maxResults=1", second.args[0])
-        self.assertIn("fields=messages%2Fid%2CresultSizeEstimate", second.args[0])
+        lifecycle.AccountLifecycleTests.setUp(self)
+        self.env_worker = patch.dict(os.environ, {"GOOGLE_CALLBACK_URL": self.service.callback_url,
+            "PROXY_BASE_URL": "https://api.example/prd/", "PROXY_API_KEY_ID": "key"})
+        self.env_worker.start()
+        self.addCleanup(self.env_worker.stop)
 
-    def test_profile_must_match_expected_account(self):
-        http = Mock()
-        http.get.return_value = Mock(status_code=200, json=lambda: {"emailAddress": "someone@example.com"})
-        with patch.object(worker, "signed_headers", return_value={}), self.assertRaises(worker.IdentityMismatch):
-            worker.verify_proxy("jay@example.com", http)
-        self.assertEqual(1, http.get.call_count)
+    def candidate(self):
+        response = self.enroll()
+        op = self.store.get("OP#" + response["id"])
+        op.update(phase="pending_promotion", status="running", services=["gmail", "drive"], next_attempt=100,
+            google_subject="subject", granted_scopes=requested_scopes(["gmail", "drive"]), credential_revision=op["id"])
+        op["candidate_ref"] = self.store.secret_put("candidates/" + op["id"], {"type": "oauth_refresh",
+            "client_id": "client", "client_secret": "secret", "refresh_token": "token", "scopes": op["granted_scopes"],
+            "credential_revision": op["id"]})
+        self.store.put(op)
+        return op
 
-    def test_permission_block_preserves_actionable_error(self):
-        http = Mock()
-        http.get.return_value = Mock(status_code=403)
-        with patch.object(worker, "signed_headers", return_value={}), self.assertRaises(worker.PermissionBlocked):
-            worker.verify_proxy("jay@example.com", http)
+    def test_promotion_retains_owner_access_off_and_waits_from_final_write(self):
+        account = self.store.get("ACCOUNT#jay@example.com")
+        account["desired_owner_access"] = False
+        self.store.put(account)
+        op = self.candidate()
+        with patch("onboarding_effects.time.time", return_value=140):
+            result = promote(self.store, op, 100)
+        self.assertEqual(205, result["next_attempt"])
+        self.assertEqual(140, result["authorization_written_at"])
+        self.assertNotIn(op["email"], self.store.secret_get(allow_parameter(self.store, True))["emails"])
+        self.assertIn(op["email"], self.store.secret_get(allow_parameter(self.store, False))["emails"])
+        self.assertEqual("connected", self.store.get("ACCOUNT#jay@example.com")["connection_status"])
 
+    def test_disconnect_racing_promotion_cannot_be_overwritten(self):
+        op = self.candidate()
+        original_put = self.store.parameter_put
+        accepted = []
+        def put_and_disconnect(name, value):
+            original_put(name, value)
+            if name == account_parameter(self.store.prefix, op["email"]):
+                accepted.append(self.service.disconnect("owner", op["email"]))
+        self.store.parameter_put = put_and_disconnect
+        with self.assertRaises(WorkflowError):
+            promote(self.store, op, 100)
+        self.store.parameter_put = original_put
+        disconnected = self.store.get("OP#" + accepted[0]["id"])
+        with patch("onboarding_effects.time.time", return_value=160):
+            changes = remove_connection(self.store, disconnected, 140)
+        self.store.transition(disconnected["pk"], "removing", changes)
+        worker.process(disconnected["id"], self.store, now=225)
+        self.assertEqual("disconnected", self.store.get("ACCOUNT#jay@example.com")["connection_status"])
+        self.assertNotIn(account_parameter(self.store.prefix, op["email"]), self.store.secrets)
+        worker.process(op["id"], self.store, now=230)
+        self.assertNotIn(account_parameter(self.store.prefix, op["email"]), self.store.secrets)
 
-class WorkerStateTests(unittest.TestCase):
-    def setUp(self):
-        from test_onboarding_operations import MemoryStore
-        self.store = MemoryStore()
-        self.operation_id = "op_" + "1" * 22
-        self.operation = {"pk": "OP#" + self.operation_id, "id": self.operation_id,
-            "email": "jay@example.com", "phase": "verifying", "status": "running", "promoted_at": 100,
-            "google_subject": "subject", "client_revision": "revision", "candidate_ref": "/test/onboarding/candidates/one"}
-        self.store.items[self.operation["pk"]] = self.operation
-        self.store.items["ACCOUNT#jay@example.com"] = {"active_operation": self.operation_id, "lock_expires": 2000}
-        self.store.ssm = Mock()
-        self.store.table = Mock()
-        self.claim = patch.object(worker, "claim", side_effect=lambda store, op, now: (op, "lease"))
-        self.finish = patch.object(worker, "finish", side_effect=lambda store, op, lease, changes: self.operation.update(changes))
-        self.claim.start()
-        self.finish.start()
-        self.addCleanup(self.claim.stop)
-        self.addCleanup(self.finish.stop)
+    def test_partial_policy_write_is_recoverable_without_overwriting_operator_edits(self):
+        op = self.candidate()
+        original_put = self.store.parameter_put
+        def fail_credential(name, value):
+            if name == account_parameter(self.store.prefix, op["email"]):
+                raise RuntimeError("transient store outage")
+            original_put(name, value)
+        self.store.parameter_put = fail_credential
+        with self.assertRaises(RuntimeError):
+            promote(self.store, op, 100)
+        updated = self.store.get(op["pk"])
+        self.assertEqual(content_hash(service_policy(op["services"])), updated["policy_write_hash"])
+        worker.preserve_recovery(self.store, updated, {"phase": "failed"}, int(__import__("time").time()))
+        self.store.terminal(updated, {"phase": "failed", "status": "failed"}, int(__import__("time").time()))
+        recovered = self.service.recover("owner", op["email"], "recovery")
+        new = self.store.get("OP#" + recovered["id"])
+        self.assertEqual(updated["policy_write_hash"], new["policy_write_hash"])
+        self.assertNotEqual(updated["candidate_ref"], new["candidate_ref"])
+        self.store.parameter_put = original_put
+        new.update(phase="pending_promotion", validation_complete=True)
+        self.store.put(new)
+        with patch("onboarding_effects.time.time", return_value=150):
+            promote(self.store, new, 140)
+        self.assertEqual(new["id"], self.store.get("ACCOUNT#jay@example.com")["credential_revision"])
 
-    def test_cache_wait_reschedules_without_reading_proxy(self):
+    def test_operator_customized_policy_is_not_replaced(self):
+        op = self.candidate()
+        tightened = {"version": 1, "default_effect": "deny", "rules": []}
+        self.store.parameter_put(policy_parameter(self.store, op["email"]), tightened)
+        with self.assertRaises(WorkflowError) as failed:
+            promote(self.store, op, 100)
+        self.assertEqual("operator_policy_requires_review", failed.exception.code)
+        self.assertEqual(tightened, self.store.secret_get(policy_parameter(self.store, op["email"])))
+        self.assertNotIn(account_parameter(self.store.prefix, op["email"]), self.store.secrets)
+
+    def test_access_off_during_disconnect_does_not_cancel_removal(self):
+        self.enroll()
+        removal = self.service.disconnect("owner", "jay@example.com")
+        self.assertEqual(removal["id"], self.service.access("owner", "jay@example.com", False)["id"])
+        self.assertEqual("removing", self.store.get("OP#" + removal["id"])["phase"])
+
+    def test_whitespace_wildcard_or_domain_grant_requires_operator(self):
+        for config in ({"emails": [" * "]}, {"emails": [], "domains": ["other.example"]}):
+            self.store.parameter_put(allow_parameter(self.store, True), config)
+            with self.subTest(config=config), self.assertRaises(WorkflowError) as failed:
+                self.service.access("owner", "jay@example.com", False)
+            self.assertEqual("broad_allowlist_requires_operator", failed.exception.code)
+            self.assertEqual(config, self.store.secret_get(allow_parameter(self.store, True)))
+
+    def test_promotion_wait_avoids_proxy_until_cache_window_passes(self):
+        op = self.candidate()
+        with patch("onboarding_effects.time.time", return_value=140):
+            worker.process(op["id"], self.store, now=100)
         with patch.object(worker, "enqueue") as enqueue, patch.object(worker, "verify_proxy") as verify:
-            worker.process(self.operation_id, self.store, now=164)
-        enqueue.assert_called_once_with(self.operation_id, 1)
+            worker.process(op["id"], self.store, now=204)
         verify.assert_not_called()
-        self.assertEqual("verifying", self.operation["phase"])
+        enqueue.assert_called_once_with(op["id"], 1)
+        with patch.object(worker, "verify_proxy", return_value={"gmail": {"status": "succeeded"}, "drive": {"status": "failed", "error_code": "permission_blocked"}}):
+            worker.process(op["id"], self.store, now=205)
+        account = self.store.get("ACCOUNT#jay@example.com")
+        self.assertEqual("connected", account["connection_status"])
+        self.assertEqual("succeeded", account["verifications"]["gmail"]["status"])
+        self.assertEqual("failed", account["verifications"]["drive"]["status"])
+        self.assertNotIn("active_operation", account)
 
-    def test_permission_block_keeps_saved_credentials_for_retry(self):
-        with patch.object(worker, "verify_proxy", side_effect=worker.PermissionBlocked):
-            worker.process(self.operation_id, self.store, now=165)
-        self.assertEqual("verification_failed", self.operation["phase"])
-        self.assertEqual("permission_blocked", self.operation["error_code"])
-        self.store.ssm.put_parameter.assert_not_called()
-        self.assertIn("retained", self.operation["recovery"])
-        self.assertNotIn("active_operation", self.store.items["ACCOUNT#jay@example.com"])
+    def test_new_key_cannot_alias_an_unexpired_consent_attempt(self):
+        op = self.enroll()
+        with self.assertRaises(WorkflowError) as failed:
+            self.enroll(key="different")
+        self.assertEqual("operation_conflict", failed.exception.code)
+        self.assertEqual(op["id"], self.enroll()["id"])
 
-    def test_transient_failures_are_bounded(self):
-        with patch.object(worker, "verify_proxy", side_effect=worker.TransientFailure):
-            worker.process(self.operation_id, self.store, now=165)
-            self.assertEqual("verifying", self.operation["phase"])
-            self.assertEqual(225, self.operation["next_attempt"])
-            self.operation["attempts"] = 4
-            worker.process(self.operation_id, self.store, now=300)
-        self.assertEqual("verification_failed", self.operation["phase"])
-        self.assertEqual("retry_exhausted", self.operation["error_code"])
+    def test_consent_expiry_is_terminal_without_ttl_removing_installed_state(self):
+        result = self.enroll()
+        op = self.store.get("OP#" + result["id"])
+        self.assertNotIn("expires_at", op)
+        worker.process(op["id"], self.store, now=op["consent_expires_at"])
+        self.assertEqual("failed", self.store.get(op["pk"])["status"])
+        self.assertNotIn("active_operation", self.store.get("ACCOUNT#jay@example.com"))
+        self.assertEqual("not_connected", self.store.get("ACCOUNT#jay@example.com")["connection_status"])
 
-    def test_promotion_is_recoverable_and_waits_before_normal_reads(self):
-        self.operation["phase"] = "pending_promotion"
-        self.operation.pop("promoted_at")
-        self.store.secrets[self.operation["candidate_ref"]] = {"type": "oauth_refresh", "client_id": "client", "client_secret": "secret", "refresh_token": "refresh"}
-        with patch.object(worker, "extend_allowlists"), patch.object(worker, "verify_proxy") as verify:
-            worker.process(self.operation_id, self.store, now=100)
-        written = self.store.ssm.put_parameter.call_args.kwargs
-        self.assertEqual("SecureString", written["Type"])
-        self.assertEqual("alias/aws/ssm", written["KeyId"])
-        self.assertEqual("verifying", self.operation["phase"])
-        self.assertEqual(100, self.operation["promoted_at"])
-        self.assertEqual(165, self.operation["next_attempt"])
-        verify.assert_not_called()
 
-    def test_stale_operation_cannot_replace_newer_account(self):
-        self.operation["phase"] = "pending_promotion"
-        self.operation.pop("promoted_at")
-        self.store.items["ACCOUNT#jay@example.com"]["active_operation"] = "newer"
-        worker.process(self.operation_id, self.store, now=100)
-        self.store.ssm.put_parameter.assert_not_called()
-        self.assertEqual("identity_mismatch", self.operation["error_code"])
+class ProxyProbeTests(unittest.TestCase):
+    def test_drive_only_signed_probe_checks_identity_and_one_id(self):
+        http = Mock()
+        http.get.side_effect = [Mock(status_code=200, json=lambda: {"user": {"emailAddress": "jay@example.com"}}),
+                                Mock(status_code=200, json=lambda: {"files": []})]
+        with patch.dict(os.environ, {"PROXY_BASE_URL": "https://api.example/prd/", "PROXY_API_KEY_ID": "key"}), \
+             patch.object(worker, "aws_client") as api, patch.object(worker, "signed_headers", return_value={}) as signed:
+            api.return_value.get_api_key.return_value = {"value": "private-key"}
+            result = worker.verify_proxy("jay@example.com", http, ["drive"])
+        self.assertEqual({"drive": {"status": "succeeded"}}, result)
+        self.assertEqual(2, http.get.call_count)
+        self.assertIn("pageSize=1", http.get.call_args_list[1].args[0])
+        self.assertEqual("www.googleapis.com", signed.call_args.args[2])
+        self.assertTrue(all("drive/v3" in call.args[0] for call in http.get.call_args_list))
 
-    def test_ttl_cleanup_deletes_only_temporary_secrets(self):
-        installed = "/test/google/accounts/mailbox"
-        temporary = "/test/onboarding/candidates/one"
-        self.store.secrets.update({installed: {}, temporary: {}})
-        worker.cleanup(self.store, {"candidate_ref": temporary, "client_ref": installed, "attempt_ref": installed})
-        self.assertNotIn(temporary, self.store.secrets)
-        self.assertIn(installed, self.store.secrets)
-
-    def test_interrupted_exchange_waits_until_callback_deadline(self):
-        self.operation.update(phase="exchanging", promoted_at=0, exchange_deadline_at=220)
-        with patch.object(worker, "enqueue") as enqueue:
-            worker.process(self.operation_id, self.store, now=200)
-        enqueue.assert_called_once_with(self.operation_id, 20)
-        self.assertEqual("exchanging", self.operation["phase"])
-
-    def test_saved_exchange_response_recovers_without_exchanging_code_again(self):
-        callback_ref = "/test/onboarding/callbacks/one"
-        self.operation.update(phase="exchanging", promoted_at=0, exchange_deadline_at=120, callback_ref=callback_ref)
-        self.store.secrets[callback_ref] = {"tokens": {"refresh_token": "saved"}, "nonce": "saved"}
-        with patch("onboarding_google.GoogleClient.exchange") as exchange:
-            worker.process(self.operation_id, self.store, now=200)
-        self.assertEqual("validating", self.operation["phase"])
-        self.assertTrue(self.operation["exchange_saved"])
-        exchange.assert_not_called()
-        self.assertIn(callback_ref, self.store.secrets)
-
-    def test_interrupted_unsaved_exchange_requires_fresh_consent(self):
-        from botocore.exceptions import ClientError
-        self.operation.update(phase="exchanging", promoted_at=0, exchange_deadline_at=120, callback_ref="/test/onboarding/callbacks/one")
-        self.store.secret_get = Mock(side_effect=ClientError({"Error": {"Code": "ParameterNotFound"}}, "GetParameter"))
-        with patch("onboarding_google.GoogleClient.exchange") as exchange:
-            worker.process(self.operation_id, self.store, now=200)
-        self.assertEqual("failed", self.operation["phase"])
-        self.assertEqual("consent_exchange_interrupted", self.operation["error_code"])
-        exchange.assert_not_called()
-
-    def test_validation_transient_failure_retains_saved_google_response(self):
-        self.operation.update(phase="validating", promoted_at=0, callback_ref="/test/onboarding/callbacks/one", exchange_saved=True)
-        self.store.secrets[self.operation["callback_ref"]] = {"tokens": {"refresh_token": "saved"}, "nonce": "saved"}
-        with patch.dict(worker.os.environ, {"GOOGLE_CALLBACK_URL": "https://app.test/callback"}), patch("onboarding_operations.OnboardingService.validate_candidate_operation", side_effect=worker.WorkflowError(400, "candidate_unusable", "unusable")):
-            worker.process(self.operation_id, self.store, now=200)
-        self.assertEqual("validating", self.operation["phase"])
-        self.assertIn(self.operation["callback_ref"], self.store.secrets)
-        self.assertEqual(260, self.operation["next_attempt"])
+    def test_failed_gmail_check_does_not_prevent_separate_drive_result(self):
+        http = Mock()
+        http.get.side_effect = [Mock(status_code=403, json=lambda: {"error": "policy_denied"}),
+            Mock(status_code=200, json=lambda: {"user": {"emailAddress": "jay@example.com"}}),
+            Mock(status_code=200, json=lambda: {"files": []})]
+        with patch.dict(os.environ, {"PROXY_BASE_URL": "https://api.example/prd/", "PROXY_API_KEY_ID": "key"}), \
+             patch.object(worker, "aws_client") as api, patch.object(worker, "signed_headers", return_value={}):
+            api.return_value.get_api_key.return_value = {"value": "private-key"}
+            result = worker.verify_proxy("jay@example.com", http, ["gmail", "drive"])
+        self.assertEqual("failed", result["gmail"]["status"])
+        self.assertEqual("succeeded", result["drive"]["status"])
 
 
 class DeliveryTests(unittest.TestCase):
@@ -166,59 +184,23 @@ class DeliveryTests(unittest.TestCase):
         serializer = TypeSerializer()
         return {key: serializer.serialize(item) for key, item in value.items()}
 
-    def test_outbox_dispatches_phase_and_delay_but_not_lease_updates(self):
+    def test_stream_outbox_dispatches_phase_changes_but_not_lease_changes(self):
         pending = {"pk": "OP#op_" + "1" * 22, "id": "op_" + "1" * 22, "phase": "pending_promotion"}
-        record = {"eventSource": "aws:dynamodb", "eventName": "MODIFY", "eventID": "1",
-            "dynamodb": {"NewImage": self.image(pending), "OldImage": self.image({**pending, "phase": "exchanging"})}}
+        record = {"eventSource": "aws:dynamodb", "eventName": "MODIFY", "eventID": "id", "dynamodb": {
+            "NewImage": self.image(pending), "OldImage": self.image({**pending, "phase": "validating"})}}
         with patch.object(worker, "enqueue") as enqueue:
             self.assertEqual([], worker.handler({"Records": [record]}, None)["batchItemFailures"])
             enqueue.assert_called_once()
-            enqueue.reset_mock()
             record["dynamodb"]["OldImage"] = self.image(pending)
             record["dynamodb"]["NewImage"] = self.image({**pending, "lease_until": 120})
+            enqueue.reset_mock()
             worker.handler({"Records": [record]}, None)
             enqueue.assert_not_called()
 
-    def test_poison_operation_records_actionable_failed_status_from_dlq(self):
-        from test_onboarding_operations import MemoryStore
-        store = MemoryStore()
-        operation_id = "op_" + "1" * 22
-        store.items["OP#" + operation_id] = {"pk": "OP#" + operation_id, "id": operation_id,
-            "email": "jay@example.com", "phase": "verifying", "status": "running"}
-        store.items["ACCOUNT#jay@example.com"] = {"active_operation": operation_id, "lock_expires": 2000}
-        event = {"Records": [{"eventSource": "aws:sqs", "eventSourceARN": "dlq", "messageId": "1", "body": operation_id}]}
-        with patch.dict(worker.os.environ, {"ONBOARDING_DLQ_ARN": "dlq"}), patch.object(worker, "runtime_store", return_value=store):
-            self.assertEqual([], worker.handler(event, None)["batchItemFailures"])
-        self.assertEqual("verification_failed", store.items["OP#" + operation_id]["phase"])
-        self.assertEqual("worker_delivery_failed", store.items["OP#" + operation_id]["error_code"])
-        self.assertNotIn("active_operation", store.items["ACCOUNT#jay@example.com"])
-
-    def test_durable_delivery_failure_retries_stream_record(self):
-        event = {"Records": [{"eventSource": "aws:dynamodb", "eventName": "INSERT", "eventID": "stream-id",
-            "dynamodb": {"NewImage": self.image({"pk": "OP#one", "id": "op_one", "phase": "pending_promotion"})}}]}
-        with patch.object(worker, "enqueue", side_effect=RuntimeError):
-            self.assertEqual({"batchItemFailures": [{"itemIdentifier": "stream-id"}]}, worker.handler(event, None))
-
-
-class AllowlistTests(unittest.TestCase):
-    def test_only_explicit_emails_are_retained_for_both_callers(self):
+    def test_cleanup_never_deletes_installed_or_client_secret(self):
         store = Mock(prefix="/test")
-        store.secret_get.return_value = {"emails": ["first@example.com", "*"], "domains": ["example.com", "*"]}
-        with patch.dict(worker.os.environ, {"ONBOARDING_VERIFIER_ROLE_ARN": "arn:aws:iam::968138089939:role/verifier"}):
-            worker.extend_allowlists(store, "second@example.com")
-        self.assertEqual(2, store.ssm.put_parameter.call_count)
-        for call in store.ssm.put_parameter.call_args_list:
-            import json
-            self.assertEqual({"emails": ["first@example.com", "second@example.com"]}, json.loads(call.kwargs["Value"]))
-        self.assertEqual(4, store.table.update_item.call_count)
-
-    def test_cleanup_owner_login_secret_preserves_client_secret(self):
-        store = Mock(prefix="/test")
-        worker.cleanup(store, {"secret_ref": "/test/onboarding/clients/current"})
+        for ref in ("/test/onboarding/clients/current", "/test/google/accounts/installed"):
+            worker.cleanup(store, {"secret_ref": ref})
         store.secret_delete.assert_not_called()
         worker.cleanup(store, {"secret_ref": "/test/onboarding/owner-logins/expired"})
         store.secret_delete.assert_called_once_with("/test/onboarding/owner-logins/expired")
-
-
-if __name__ == "__main__":
-    unittest.main()
