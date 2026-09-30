@@ -9,29 +9,27 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ASSETS = Path(__file__).resolve().parents[2] / "lambda/google_proxy/assets/onboarding"
-PROJECT = "jayj-gogcli-full-access"
+PROJECT = "gogcli-proxy"
+EMAILS = ("jay.jakosky@gmail.com", "jay@frunkholdings.ltd", "treasurer@longmonttheatre.org",
+          "jay@longmonttheatre.org", "jay@krystaljakosky.com", "jay@marinasailing.com",
+          "jay@frunkfoundation.org", "jay@kraecollective.com")
 STATE = {
-    "callbackUrl": "https://example.invalid/onboarding/oauth/google/callback",
-    "csrfToken": "offline-fixture", "proxyUrl": "https://example.invalid/prd/",
-    "defaultProjectId": PROJECT, "ownerCallerArn": "offline-owner",
+    "csrfToken": "offline-fixture",
+    "application": {"projectId": PROJECT, "name": PROJECT, "organization": "kraecollective.com",
+                    "clientConfigured": True, "apiConfirmed": {"gmail": True, "drive": True}},
     "serviceOptions": [
-        {"name": "gmail", "label": "Gmail", "apiName": "gmail.googleapis.com", "scope": "fixture:gmail", "description": "Read and change mail, including sending."},
-        {"name": "drive", "label": "Drive", "apiName": "drive.googleapis.com", "scope": "fixture:drive", "description": "Read and change files within transfer limits."},
-        {"name": "calendar", "label": "Google Calendar", "apiName": "calendar-json.googleapis.com", "scope": "fixture:calendar", "description": "Read and change calendars and events."},
+        {"name": "gmail", "label": "Gmail", "description": "Read, send, label, and move mail to Trash"},
+        {"name": "drive", "label": "Google Drive", "description": "Read, create, change, share, and delete Drive files"},
+        {"name": "calendar", "label": "Google Calendar", "description": "Read, create, change, share, and delete calendars and events"},
     ],
-    "projects": [{"projectId": PROJECT, "clientConfigured": True, "clientRevision": "fixture-revision",
-                  "publishingConfirmed": True, "apiConfirmed": {"gmail": True, "drive": True},
-                  "recordedClientType": "desktop", "recordedClientId": "offline-client"}],
-    "accounts": [],
+    "accounts": [{"email": email, "connection_status": "not_connected", "services": [],
+                  "uses_current_app": False, "requested_services": ["gmail", "drive"],
+                  "owner_access_enabled": True} for email in EMAILS],
 }
-for email in ("jay.jakosky@gmail.com", "jay@frunkholdings.ltd", "treasurer@longmonttheatre.org"):
-    STATE["accounts"].append({"email": email, "connection_status": "not_connected", "services": [],
-                              "selected_project_id": PROJECT, "requested_services": ["gmail", "drive"],
-                              "owner_access_enabled": True})
-STATE["accounts"][0].update({"connection_status": "connected", "installed_project_id": PROJECT,
-    "services": [{"name": "gmail", "authorization_status": "authorized", "last_verification_status": "passed", "last_verified_at": 1760000000},
-                 {"name": "drive", "authorization_status": "authorized", "last_verification_status": "passed", "last_verified_at": 1760000000}],
-    "latest_operation": {"id": "op-fixture-failed", "status": "failed", "phase": "failed", "error_code": "identity_mismatch"}})
+STATE["accounts"][0].update({"connection_status": "connected",
+    "owner_access_enabled": True,
+    "services": [{"name": name, "authorization_status": "granted", "last_verification_status": "succeeded", "last_verified_at": 1760000000} for name in ("gmail", "drive")],
+    "latest_operation": {"id": "op-fixture-failed", "kind": "enrollment", "status": "failed", "phase": "failed", "error_code": "identity_mismatch"}})
 CALLS = []
 
 
@@ -52,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(CALLS)
         if self.path == "/onboarding/v1/setup":
             return self.send(STATE)
-        filename = self.path.removeprefix("/onboarding/") or "index.html"
+        filename = self.path.split("?", 1)[0].removeprefix("/onboarding/") or "index.html"
         if filename not in ("index.html", "app.js", "style.css"):
             return self.send({}, 404)
         return self.send((ASSETS / filename).read_bytes(), content_type={"index.html": "text/html", "app.js": "text/javascript", "style.css": "text/css"}[filename])
@@ -61,26 +59,20 @@ class Handler(BaseHTTPRequestHandler):
         data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         CALLS.append({"method": self.command, "path": self.path, "body": data})
         route = unquote(self.path).split("/")
-        if "accounts" in route:
-            email = route[route.index("accounts") + 1]
-            account = next((item for item in STATE["accounts"] if item["email"] == email), None)
-            if account is None:
-                account = {"email": email, "connection_status": "not_connected", "services": [], "owner_access_enabled": True}
-                STATE["accounts"].append(account)
-            if self.command == "PUT" and route[-1] == email:
-                if account.get("latest_operation", {}).get("phase") == "authorizing":
-                    return self.send({"detail": "Finish the current account action before changing setup."}, 409)
-                account.update(selected_project_id=data["projectId"], requested_services=data["services"])
-                return self.send(account)
-            account["latest_operation"] = {"id": "op-fixture-" + email, "kind": route[-1], "status": "running", "phase": "verifying"}
-            return self.send(account["latest_operation"], 202)
-        if "projects" in route:
-            if data.get("clientRevision") != STATE["projects"][0]["clientRevision"]:
-                return self.send({"detail": "Review the current client revision."}, 409)
-            STATE["projects"][0].update(data)
-        if self.path == "/onboarding/v1/setup":
-            STATE.update(data)
-        self.send(STATE)
+        if "accounts" not in route:
+            return self.send({}, 404)
+        email = route[route.index("accounts") + 1]
+        account = next((item for item in STATE["accounts"] if item["email"] == email), None)
+        if account is None:
+            account = {"email": email, "connection_status": "not_connected", "services": [], "owner_access_enabled": True, "uses_current_app": False}
+            STATE["accounts"].append(account)
+        if self.command == "PUT" and route[-1] == email:
+            account.update(requested_services=data["services"])
+            return self.send(account)
+        if route[-1] == "enrollments":
+            account["requested_services"] = data["services"]
+        account["latest_operation"] = {"id": "op-fixture-" + email, "kind": route[-1], "status": "running", "phase": "verifying"}
+        return self.send(account["latest_operation"], 202)
 
     do_PUT = mutation
     do_POST = mutation

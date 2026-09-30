@@ -9,7 +9,7 @@ This Python AWS CDK app deploys the `gogcli-prd` environment into K-Rae account
   usage-plan API key; `/prd/onboarding/` uses its own owner session through the
   existing `auth.k-rae.com` Authentik service.
 - A retained DynamoDB metadata/operation table with a stream and TTL, plus an
-  encrypted SQS verification queue and dead-letter queue. Closing the setup page
+  encrypted SQS verification queue and dead-letter queue. Closing the account page
   does not interrupt saved account operations.
 - SSM SecureString storage for Google client secrets, refresh tokens, and owner
   OIDC credentials using the existing AWS-managed SSM key. DynamoDB and queue
@@ -68,11 +68,11 @@ The generated CDK outputs in `env/gogcli-prd/access.json` are grouped under
 | --- | --- |
 | `ProxyBaseUrl` | CLI proxy base URL, ending in `/prd/` |
 | `ApiKeyId` | Identifier for the usage-plan key; not its secret value |
-| `ProxyInvokeArns` | JSON array string of the five exact canonical JDev invocation resources |
-| `SetupUrl` | Published HTTPS owner setup page, ending in `/prd/onboarding/` |
+| `ProxyInvokeArns` | JSON array string of the six exact canonical JDev invocation resources |
+| `SetupUrl` | Published HTTPS owner account connections page, ending in `/prd/onboarding/` |
 | `GoogleCallbackUrl` | Exact redirect URI for the Google Web application client |
 | `OwnerCallbackUrl` | Exact Authentik redirect URI |
-| `OnboardingTable` | Persisted checklist and operation metadata table |
+| `OnboardingTable` | Persisted account and operation metadata table |
 | `OnboardingRoleArn` | Application role used by signed verification reads |
 
 The invocation list contains these resource suffixes under this exact API and
@@ -135,15 +135,59 @@ saved back to that catalog and SSM SecureString without being printed. Its final
 read-only checks verify provider discovery, JWKS, the exact callback, and owner
 membership.
 
-Open `SetupUrl` and follow the [Google account guide](../docs/account-onboarding.md).
-Reuse the recorded Google project and import a **Web application** client with
-the exact displayed `GoogleCallbackUrl`. The three recorded Desktop/local client
-contexts are historical context, not remote credentials or verified Google
-Console state. Project confirmations are bound to the imported client revision;
-each account chooses a project and any combination of Gmail, Drive, and Calendar.
+## Configure the Google application
+
+The source is this checkout; the target is the existing `gogcli-prd` binding
+(account `968138089939`, `us-east-2`, explicit profile `krae-jdev-dev-prd`).
+The singular `google_application` binding identifies project `gogcli-proxy`,
+number `1042630585914`, owned by `kraecollective.com`. This project and its OAuth
+application already exist. Use the downloaded **Web application** client JSON;
+keep it outside the repository.
+
+Before provisioning, inspect the existing Google Console configuration and
+confirm the selected service APIs are enabled, the scope list includes the
+selected services, and the intended audience can approve consent. Confirm the
+Web client's redirect URI is exactly `GoogleCallbackUrl` from `access.json`:
+
+```text
+https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback
+```
+
+The callback is permanent across API replacements. Register no generated API
+hostname. Google authorized-domain settings for this callback use `k-rae.com`;
+the project organization owner is `kraecollective.com`. JSON and imported metadata
+cannot establish API enablement, publishing status, test users, or Workspace approval. Record only settings actually observed.
+For the currently confirmed Gmail/Drive setup and a confirmed Testing status:
+
+```bash
+just configure-google-application /absolute/path/to/client.json gmail,drive testing
+```
+
+Use `gmail,drive,calendar` only after confirming Calendar API and its scope;
+use `production` only after confirming that exact publishing state. The command
+validates canonical project identity, Web-client type, callback, explicit AWS
+identity and target; it stores an encrypted immutable client revision and
+revision-bound API/publishing confirmations without printing secret values.
+Reimporting the same client reuses its credential revision and creates no new
+encrypted client secret; recording the operator review writes metadata. Replacement
+revisions leave installed connections pinned to their original client until a
+successful reconnect. The operator handles provisioning failures here; the
+account page contains no credential upload or configuration controls.
+
+Testing is supported. Google's seven-day refresh-token expiry applies to Testing
+applications using these scopes unless an applicable documented exception is
+established. Workspace trust concerns each organization's users; personal Gmail
+and other organizations do not inherit it. Check the actual audience/test-user
+and publishing configuration before describing token lifetime. See
+[Google's app-state overview](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).
+
+Open `SetupUrl` and follow the [account connection guide](../docs/account-onboarding.md).
+Each account chooses Gmail, Drive, and optional Calendar for the same application.
+A blocked organization may require administrator approval for the canonical
+client and requested scopes. Provisioning does not connect any Google account.
 
 The shared service registry requests `openid` and `email` for identity, plus
-`gmail.modify` and/or `drive` for the selected services. The provisioned owner
+`gmail.modify`, `drive`, and `calendar` for the selected services. The provisioned owner
 policy allows those services' normal GET/POST/PUT/PATCH/DELETE routes; independent
 account policies and Google permissions narrow what actually succeeds. These
 scopes do not promise permanent Gmail deletion, Gmail settings operations,
@@ -157,8 +201,9 @@ signed proxy as the **verifier role**. Its result records the service, revision,
 principal, and time; it does not prove the actual CLI caller's IAM/policy access.
 Run inventory and the same minimal reads as that caller for acceptance.
 
-Google connection, the latest attempt, and **Allow my tools to use this account**
-are separate facts. That explicit flag controls the concrete
+Google connection, the latest attempt, and desired tool access
+are separate facts. Connect enables the configured owner unless an existing
+saved pause must be preserved. **Pause tool access** controls the concrete
 `binding.client_role_arn` (`ONBOARDING_OWNER_CALLER_ARN` at runtime). Turning it off
 removes the owner's explicit email grant while retaining Google authorization
 and limited verifier access. Reconnect preserves the flag and installed
@@ -184,7 +229,7 @@ aws --profile krae-jdev-dev-prd --region us-east-2 apigateway get-api-key \
 Configure `proxy_base_url` from `ProxyBaseUrl`, `proxy_api_key` from the returned
 value, `aws_profile` as `krae-jdev-dev-prd`, and a verified `default_account` in the
 CLI's `config.json`. Run `bin/gog config path` to locate it. Google credentials
-stay on the server; the page's final section and the account guide provide the
+stay on the server; the account guide provides the
 first read-only CLI checks. Signed `GET /proxy/v1/accounts` returns only metadata
 for the caller's permitted installed accounts and never reads account credential
 parameters or Google data.

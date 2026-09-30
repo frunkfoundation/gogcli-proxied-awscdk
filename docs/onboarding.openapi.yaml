@@ -1,12 +1,16 @@
 openapi: 3.1.0
 info:
   title: Managed Google account connections and caller inventory
-  version: 2.0.0
-  description: Owner routes use the existing Authentik session. Mutations require canonical Origin and session CSRF.
-    POST account commands require scoped idempotency keys; terminal diagnostics and replay results are retained
-    for seven days, while account state has no TTL. Incomplete commands return 202 with Location. Restrictive changes
-    remain applying at least 65 seconds after writes. Google consent and caller access are separate. Secrets and
-    provider response bodies are never returned.
+  version: 3.0.0
+  description: 'Owner routes use the existing Authentik session. Mutations require
+    canonical Origin and session CSRF. POST account commands require scoped idempotency
+    keys; terminal diagnostics and replay results are retained for seven days, while
+    account state has no TTL. Incomplete commands return 202 with Location. Restrictive
+    changes remain applying at least 65 seconds after writes. Google consent and caller
+    access are separate. Secrets and provider response bodies are never returned.
+    Breaking owner-page contract: application selection and HTTP provisioning routes
+    are removed. Fresh requests reject projectId; exact accepted command replay retains
+    its original request.'
 servers:
 - url: https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding
 security:
@@ -45,9 +49,10 @@ paths:
   /oauth/google/callback:
     get:
       summary: Consume one session-bound Google consent attempt
-      description: Uses state, PKCE and nonce. An ambiguous code exchange is never repeated. Candidate validation
-        preserves installed credentials on failure. Expired owner sessions return to owner sign-in and fresh consent.
-        Codes and tokens are never returned.
+      description: Uses state, PKCE and nonce. An ambiguous code exchange is never
+        repeated. Candidate validation preserves installed credentials on failure.
+        Expired owner sessions return to owner sign-in and fresh consent. Codes and
+        tokens are never returned.
       parameters:
       - name: state
         in: query
@@ -66,7 +71,7 @@ paths:
           $ref: '#/components/responses/Problem'
   /v1/setup:
     get:
-      summary: Read saved project context and independent account progress
+      summary: Read canonical application readiness and independent account progress
       responses:
         '200':
           description: Saved nonsecret state
@@ -76,118 +81,15 @@ paths:
                 $ref: '#/components/schemas/Setup'
         default:
           $ref: '#/components/responses/Problem'
-    put:
-      summary: Select the shared default project
-      responses:
-        '200':
-          description: Saved nonsecret state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Setup'
-        default:
-          $ref: '#/components/responses/Problem'
-      parameters: &id002
-      - &id005
-        $ref: '#/components/parameters/Origin'
-      - &id006
-        $ref: '#/components/parameters/CSRF'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                defaultProjectId: *id001
-              required:
-              - defaultProjectId
-  /v1/projects/{projectId}/oauth-client:
-    parameters:
-    - $ref: '#/components/parameters/ProjectId'
-    put:
-      summary: Import an immutable revision of a Google Web client
-      responses:
-        '200':
-          description: Saved nonsecret state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Setup'
-        default:
-          $ref: '#/components/responses/Problem'
-      parameters: *id002
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                web:
-                  type: object
-                  properties:
-                    client_id: *id001
-                    client_secret:
-                      type: string
-                      writeOnly: true
-                    project_id: *id001
-                    redirect_uris:
-                      type: array
-                      items:
-                        type: string
-                        format: uri
-                  required:
-                  - client_id
-                  - client_secret
-                  - project_id
-                  - redirect_uris
-              required:
-              - web
-  /v1/projects/{projectId}/setup:
-    parameters:
-    - $ref: '#/components/parameters/ProjectId'
-    put:
-      summary: Record revision-bound publishing and API confirmations
-      responses:
-        '200':
-          description: Saved nonsecret state
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Setup'
-        default:
-          $ref: '#/components/responses/Problem'
-      parameters: *id002
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                clientRevision: *id001
-                publishingConfirmed: &id003
-                  type: boolean
-                apiConfirmed:
-                  type: object
-                  properties:
-                    gmail: *id003
-                    drive: *id003
-                    calendar: *id003
-              required:
-              - clientRevision
-              - publishingConfirmed
-              - apiConfirmed
   /v1/accounts/{email}:
     parameters:
     - $ref: '#/components/parameters/Email'
     put:
-      summary: Save account project and requested services
+      summary: Save requested account services without changing installed authorization
       responses:
         '200':
           description: Saved nonsecret state
-          content: &id004
+          content: &id002
             application/json:
               schema:
                 $ref: '#/components/schemas/Account'
@@ -200,8 +102,12 @@ paths:
               schema:
                 type: string
                 format: uri
-          content: *id004
-      parameters: *id002
+          content: *id002
+      parameters: &id008
+      - &id003
+        $ref: '#/components/parameters/Origin'
+      - &id004
+        $ref: '#/components/parameters/CSRF'
       requestBody:
         required: true
         content:
@@ -209,8 +115,7 @@ paths:
             schema:
               type: object
               properties:
-                projectId: *id001
-                services: &id007
+                services: &id005
                   type: array
                   minItems: 1
                   uniqueItems: true
@@ -220,9 +125,7 @@ paths:
                     - gmail
                     - drive
                     - calendar
-              required:
-              - projectId
-              - services
+              additionalProperties: false
   /v1/accounts/{email}/enrollments:
     parameters:
     - $ref: '#/components/parameters/Email'
@@ -233,9 +136,9 @@ paths:
           $ref: '#/components/responses/Accepted'
         default:
           $ref: '#/components/responses/Problem'
-      parameters: &id008
-      - *id005
-      - *id006
+      parameters: &id007
+      - *id003
+      - *id004
       - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -244,17 +147,18 @@ paths:
             schema:
               type: object
               properties:
-                projectId: *id001
-                services: *id007
-                ownerAccessEnabled: *id003
-                restart: *id003
-              required:
-              - projectId
-              - services
-              - ownerAccessEnabled
-      description: Continue reuses the original key and exact body supplied by owner setup. An unused new key during
-        unexpired same-session consent returns 409; explicit restart uses a fresh key and restart:true. No consent
-        URL appears in ordinary setup. Google URLs are returned only for the bound action.
+                services: *id005
+                ownerAccessEnabled: &id006
+                  type: boolean
+                restart: *id006
+              additionalProperties: false
+      description: New consent always uses gogcli-proxy. Connect enables authorized
+        tools unless a saved pause exists; reconnect preserves desired access. ownerAccessEnabled
+        is optional and cannot override a saved pause. Continue reuses the exact accepted
+        body and original key, including historical fields if present; replay lookup
+        precedes fresh-command validation. An unused key during same-session consent
+        returns 409. Explicit restart uses a fresh key and restart:true. No consent
+        URL appears in ordinary setup.
   /v1/accounts/{email}/verifications:
     parameters:
     - $ref: '#/components/parameters/Email'
@@ -265,7 +169,7 @@ paths:
           $ref: '#/components/responses/Accepted'
         default:
           $ref: '#/components/responses/Problem'
-      parameters: *id008
+      parameters: *id007
       requestBody:
         required: true
         content:
@@ -283,7 +187,7 @@ paths:
           $ref: '#/components/responses/Accepted'
         default:
           $ref: '#/components/responses/Problem'
-      parameters: *id008
+      parameters: *id007
       requestBody:
         required: true
         content:
@@ -301,7 +205,7 @@ paths:
           $ref: '#/components/responses/Accepted'
         default:
           $ref: '#/components/responses/Problem'
-      parameters: *id002
+      parameters: *id008
       requestBody:
         required: true
         content:
@@ -309,7 +213,7 @@ paths:
             schema:
               type: object
               properties:
-                enabled: *id003
+                enabled: *id006
               required:
               - enabled
   /v1/accounts/{email}/connection:
@@ -324,7 +228,7 @@ paths:
           $ref: '#/components/responses/Problem'
         '204':
           description: Proxy connection already absent; no unfinished removal work.
-      parameters: *id002
+      parameters: *id008
   /v1/operations/{operationId}:
     parameters:
     - $ref: '#/components/parameters/OperationId'
@@ -363,8 +267,8 @@ paths:
                 - accounts
                 - setup_url
         default:
-          description: Proxy or gateway admission error. Caller access and IAM/usage-plan checks precede account
-            metadata reads.
+          description: Proxy or gateway admission error. Caller access and IAM/usage-plan
+            checks precede account metadata reads.
           content:
             application/json:
               schema:
@@ -377,8 +281,8 @@ paths:
       security:
       - SigV4: []
         UsagePlanKey: []
-      description: AWS SigV4 and usage-plan key are both required. No Google routing/account headers or secret reads.
-        Metadata visibility does not grant all service operations.
+      description: AWS SigV4 and usage-plan key are both required. No Google routing/account
+        headers or secret reads. Metadata visibility does not grant all service operations.
 components:
   securitySchemes:
     OwnerSession:
@@ -389,8 +293,8 @@ components:
       type: apiKey
       in: header
       name: Authorization
-      description: AWS Signature Version 4, service execute-api, region us-east-2. API Gateway verifies the IAM
-        principal.
+      description: AWS Signature Version 4, service execute-api, region us-east-2.
+        API Gateway verifies the IAM principal.
     UsagePlanKey:
       type: apiKey
       in: header
@@ -418,11 +322,6 @@ components:
         minLength: 1
         maxLength: 128
         pattern: ^[A-Za-z0-9_-]+$
-    ProjectId:
-      name: projectId
-      in: path
-      required: true
-      schema: *id001
     Email:
       name: email
       in: path
@@ -449,8 +348,9 @@ components:
           schema:
             $ref: '#/components/schemas/Operation'
     Problem:
-      description: Safe RFC 9457 error; 409 means stale revision, conflicting account work, or operator-managed
-        permission conflict. 401 provides fixed owner login URL.
+      description: Safe RFC 9457 error; 409 means stale revision, conflicting account
+        work, or operator-managed permission conflict. 401 provides fixed owner login
+        URL.
       content:
         application/problem+json:
           schema:
@@ -514,16 +414,18 @@ components:
       - $ref: '#/components/schemas/InventoryAccount'
       - type: object
         properties:
-          selected_project_id: *id001
-          installed_project_id: *id001
-          requested_services: *id007
-          owner_access_enabled: *id003
+          requested_services: *id005
+          owner_access_enabled: *id006
           latest_operation:
             anyOf:
             - $ref: '#/components/schemas/Operation'
             - type: 'null'
           recovery_available:
             type: boolean
+          uses_current_app:
+            type: boolean
+            description: Installed authorization belongs to the configured canonical
+              application; connection and check status remain separate.
     Operation:
       type: object
       properties:
@@ -560,16 +462,20 @@ components:
         authorizationUrl:
           type: string
           format: uri
-          description: Returned only for current consent continuation, never logged or stored by clients.
+          description: Returned only for current consent continuation, never logged
+            or stored by clients.
         continuation_key:
           type: string
-          description: 'Owner setup only: original nonsecret command key for consent continuation.'
+          description: 'Owner setup only: original nonsecret command key for consent
+            continuation.'
         continuation_request:
           type: object
-          description: 'Owner setup only: exact original enrollment body to reuse with continuation_key.'
+          description: 'Owner setup only: exact original enrollment body to reuse
+            with continuation_key.'
         consent_session_matches:
           type: boolean
-          description: 'Owner setup only: whether Continue is bound to the current owner session.'
+          description: 'Owner setup only: whether Continue is bound to the current
+            owner session.'
       required:
       - id
       - kind
@@ -580,17 +486,6 @@ components:
       type: object
       properties:
         csrfToken: *id001
-        callbackUrl:
-          type: string
-          format: uri
-        proxyUrl:
-          type: string
-          format: uri
-        setupUrl:
-          type: string
-          format: uri
-        defaultProjectId: *id001
-        ownerCallerArn: *id001
         serviceOptions:
           type: array
           items:
@@ -601,25 +496,36 @@ components:
               apiName: *id001
               scope: *id001
               description: *id001
-        projects:
-          type: array
-          items:
-            type: object
-            properties:
-              projectId: *id001
-              clientConfigured: *id003
-              clientRevision: *id001
-              clientId: *id001
-              publishingConfirmed: *id003
-              apiConfirmed:
-                type: object
-                properties:
-                  gmail: *id003
-                  drive: *id003
-                  calendar: *id003
-              recordedClientType: *id001
-              recordedClientId: *id001
         accounts:
           type: array
           items:
             $ref: '#/components/schemas/Account'
+        application:
+          type: object
+          properties:
+            projectId:
+              type: string
+              const: gogcli-proxy
+            name:
+              type: string
+            organization:
+              type: string
+            clientConfigured:
+              type: boolean
+            apiConfirmed:
+              type: object
+              additionalProperties:
+                type: boolean
+          required:
+          - projectId
+          - name
+          - organization
+          - clientConfigured
+          - apiConfirmed
+          description: Read-only imported configuration and revision-bound operator
+            confirmations; not proof Google permits a specific account.
+      required:
+      - csrfToken
+      - application
+      - serviceOptions
+      - accounts

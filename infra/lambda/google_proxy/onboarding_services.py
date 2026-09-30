@@ -6,9 +6,9 @@ from onboarding_store import WorkflowError
 
 SERVICE_OPTIONS = [
     {"name": "gmail", "label": "Gmail", "apiName": "gmail.googleapis.com", "scope": "https://www.googleapis.com/auth/gmail.modify",
-     "description": "Read, send, label, and change mail."},
+     "description": "Read, send, label, and move mail to Trash."},
     {"name": "drive", "label": "Google Drive", "apiName": "drive.googleapis.com", "scope": "https://www.googleapis.com/auth/drive",
-     "description": "Read and change existing Drive files."},
+     "description": "Read, create, change, share, and delete Drive files."},
     {"name": "calendar", "label": "Google Calendar", "apiName": "calendar-json.googleapis.com",
      "scope": "https://www.googleapis.com/auth/calendar",
      "description": "Read, create, change, share, and delete calendars and events."},
@@ -16,11 +16,6 @@ SERVICE_OPTIONS = [
 IDENTITY_SCOPES = ["openid", "email"]
 SCOPES_BY_SERVICE = {item["name"]: item["scope"] for item in SERVICE_OPTIONS}
 DEFAULT_SERVICES = ["gmail", "drive"]
-KNOWN_ACCOUNTS = {
-    "jay.jakosky@gmail.com": "jayj-gogcli-full-access",
-    "jay@frunkholdings.ltd": "jay-fhl-gogcli-full-access",
-    "treasurer@longmonttheatre.org": "gogcli-ltc-treasurer-full",
-}
 
 
 def selected_services(value):

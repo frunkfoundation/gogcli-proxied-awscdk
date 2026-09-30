@@ -44,7 +44,7 @@ def check_response(response, proxy=False):
     if reason == "invalid_grant":
         code, detail = "refresh_revoked", "Google refresh authorization is unavailable; reconnect this account."
     elif reason in {"accessNotConfigured", "SERVICE_DISABLED"}:
-        code, detail = "api_disabled", "Enable this service API in the selected Google project, then retry."
+        code, detail = "api_disabled", "gogcli-proxy is not ready for this service. Contact the operator, then retry."
     elif reason in {"domainPolicy", "admin_policy_enforced"}:
         code, detail = "workspace_restricted", "The Google Workspace administrator must approve this application."
     elif reason in {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}:
@@ -56,7 +56,7 @@ def check_response(response, proxy=False):
     elif status == 429 or status >= 500:
         code, detail = "provider_unavailable", "The service is temporarily unavailable; retry the saved authorization."
     else:
-        code, detail = "service_check_failed", "The selected service could not be checked; review its setup and retry."
+        code, detail = "service_check_failed", "The selected service could not be checked. Retry the connection check."
     raise WorkflowError(503 if status == 429 or status >= 500 else 400, code, detail)
 
 

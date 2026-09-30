@@ -8,8 +8,8 @@
 
 This fork of [gogcli](https://github.com/openclaw/gogcli) routes Google account
 requests through a remote proxy that holds the credentials and enforces caller,
-account, and API-operation permissions. Hosted account setup supports Gmail and
-Drive. The wider upstream command surface requires separately configured access.
+account, and API-operation permissions. Hosted account connections support Gmail,
+Drive, and optional Calendar. The wider upstream command surface requires separately configured access.
 
 ```bash
 gog --readonly gmail search 'is:unread newer_than:7d' --max 10 --json
@@ -37,7 +37,7 @@ This fork routes managed account Google API calls through an AWS service that ho
 
 ```json
 {
-  "proxy_base_url": "https://<api-id>.execute-api.us-east-2.amazonaws.com/prd/",
+  "proxy_base_url": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/",
   "proxy_api_key": "<api-key>",
   "aws_profile": "<authorized-client-profile>",
   "default_account": "you@example.com"
@@ -46,8 +46,9 @@ This fork routes managed account Google API calls through an AWS service that ho
 
 Select an account explicitly with `--account` or `default_account`. Requests use AWS SigV4 plus the API usage-plan key; Google credentials stay on the server. For custom gateway domains, set `AWS_REGION=us-east-2`. See [proxy operation and account setup](infra/README.md).
 
-Use the owner-only `/prd/onboarding/` page to review your existing Google project,
-import a hosted Web client, and connect accounts to Gmail and Drive. Saved account
+Use the owner-only `/prd/onboarding/` page to connect accounts to the
+gogcli-proxy application with Gmail, Drive, and optional Calendar. The operator
+prepares application configuration through the [operator runbook](infra/README.md#configure-the-google-application). Saved account
 state survives interrupted consent, reconnects, and temporary operation cleanup.
 See [account connections and CLI checks](docs/account-onboarding.md).
 

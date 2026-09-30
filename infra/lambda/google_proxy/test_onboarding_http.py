@@ -46,6 +46,18 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(404, onboarding.handler({'path': '/prd/onboarding/../requirements.txt', 'httpMethod': 'GET'}, None)['statusCode'])
 
 
+    def test_removed_application_mutations_are_not_routes(self):
+        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
+            auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
+            for route in ('setup', 'projects/gogcli-proxy/oauth-client', 'projects/gogcli-proxy/setup'):
+                result = onboarding.handler({'path': '/onboarding/v1/' + route,
+                    'httpMethod': 'PUT', 'body': '{}'}, None)
+                self.assertEqual(404, result['statusCode'])
+            service.return_value.update_setup.assert_not_called()
+            service.return_value.save_client.assert_not_called()
+            service.return_value.update_project.assert_not_called()
+
+
 class CallbackRecoveryTests(unittest.TestCase):
     setUp = BoundaryTests.setUp
 
@@ -77,28 +89,28 @@ class ClientImportTests(unittest.TestCase):
         self.http = Mock()
         self.service = OnboardingService(self.store, GoogleClient(self.http),
             'https://app.example/onboarding/oauth/google/callback')
-        self.document = {'web': {'client_id': 'example.apps.googleusercontent.com', 'project_id': 'project-one',
+        self.document = {'web': {'client_id': 'example.apps.googleusercontent.com', 'project_id': 'gogcli-proxy',
             'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
             'token_uri': 'https://oauth2.googleapis.com/token',
             'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
             'client_secret': 'synthetic-secret', 'redirect_uris': [self.service.callback_url]}}
         env = patch.dict('os.environ', {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/',
-                                      'GOOGLE_EXISTING_PROJECTS': '[]'})
+                                      'GOOGLE_PROJECT_ID': 'gogcli-proxy'})
         env.start()
         self.addCleanup(env.stop)
 
     def upload(self):
-        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
-            auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
-            return onboarding.handler({'path': '/onboarding/v1/projects/project-one/oauth-client',
-                'httpMethod': 'PUT', 'body': json.dumps(self.document)}, None)
+        try:
+            return onboarding.response(200, self.service.import_client(self.document))
+        except Exception as error:
+            return onboarding.problem(error)
 
     def enroll_in_testing(self, api_confirmed):
         self.assertEqual(200, self.upload()['statusCode'])
-        revision = self.store.get('CLIENT#project-one')['revision']
-        self.service.update_project('owner', 'project-one', {'clientRevision': revision,
-            'publishingConfirmed': False, 'apiConfirmed': api_confirmed})
-        self.service.save_account('owner', 'jay@example.com', {'projectId': 'project-one', 'services': ['drive']})
+        revision = self.store.get('CLIENT#gogcli-proxy')['revision']
+        self.service.review_application( {'clientRevision': revision,
+            'publishingStatus': 'testing', 'apiConfirmed': api_confirmed})
+        self.service.save_account('owner', 'jay@example.com', {'services': ['drive']})
         with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
             auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
             return onboarding.handler({'path': '/onboarding/v1/accounts/jay@example.com/enrollments',
@@ -112,13 +124,13 @@ class ClientImportTests(unittest.TestCase):
         self.assertTrue(operation['authorizationUrl'].startswith('https://accounts.google.com/o/oauth2/v2/auth?'))
         self.assertTrue(result['headers']['Location'].endswith('/v1/operations/' + operation['id']))
         self.assertEqual(operation['id'], self.store.get('ACCOUNT#jay@example.com')['active_operation'])
-        self.assertFalse(self.store.get('CLIENT#project-one')['publishing_confirmed'])
+        self.assertFalse(self.store.get('CLIENT#gogcli-proxy')['publishing_status'] == 'production')
         self.http.post.assert_not_called()
 
     def test_testing_project_still_requires_selected_service_api_confirmation(self):
         result = self.enroll_in_testing({'gmail': True, 'drive': False})
         self.assertEqual(409, result['statusCode'], result['body'])
-        self.assertEqual('project setup required', json.loads(result['body'])['title'])
+        self.assertEqual('application setup required', json.loads(result['body'])['title'])
         self.assertFalse(self.store.rows('OP#'))
         self.assertNotIn('active_operation', self.store.get('ACCOUNT#jay@example.com'))
         self.http.post.assert_not_called()
@@ -129,10 +141,9 @@ class ClientImportTests(unittest.TestCase):
                 self.document['web']['auth_uri'] = endpoint
                 result = self.upload()
                 self.assertEqual(200, result['statusCode'], result['body'])
-                self.assertTrue(next(p for p in json.loads(result['body'])['projects']
-                                     if p['projectId'] == 'project-one')['clientConfigured'])
+                self.assertTrue(json.loads(result['body'])['clientConfigured'])
                 self.assertNotIn('synthetic-secret', result['body'])
-                client = self.store.secret_get(self.store.get('CLIENT#project-one')['secret_ref'])
+                client = self.store.secret_get(self.store.get('CLIENT#gogcli-proxy')['secret_ref'])
                 url = self.service.google.authorization_url(client, self.service.callback_url,
                     'state', 'verifier', 'nonce', 'jay@example.com', ['drive'])
                 self.assertTrue(url.startswith('https://accounts.google.com/o/oauth2/v2/auth?'))

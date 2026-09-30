@@ -2,7 +2,7 @@
 
 Date: 2026-09-30
 
-Status: Proposed implementation plan. This document makes no application or production changes.
+Status: Implemented and locally verified on 2026-09-30. Canonical client provisioning and production deployment await the downloaded Web-client JSON file path. See [acceptance evidence](single-project-account-connections-acceptance.md). Account enrollment remains separate from software delivery.
 
 Source inspected: `05731f89` in `/Users/jay/Projects/gogcli-proxy`.
 

@@ -18,7 +18,7 @@ class RecoveryContracts(unittest.TestCase):
         for services in (["gmail"], ["drive"], ["gmail", "drive"]):
             with self.subTest(services=services):
                 email = services[0] + str(len(services)) + "@example.com"
-                self.service.save_account("owner", email, {"projectId": "project-one", "services": services})
+                self.service.save_account("owner", email, {"services": services})
                 response = self.service.enroll("owner", email, "start", "session", {"services": services})
                 op = self.store.get("OP#" + response["id"])
                 state = self.store.secret_get(op["attempt_ref"])["state"]

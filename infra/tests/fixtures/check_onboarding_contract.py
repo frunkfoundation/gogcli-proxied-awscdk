@@ -1,31 +1,35 @@
-"""Offline DOM journey through the real owner HTTP handler and service contracts.
+"""Offline browser journey through real handler, commands, callback and worker.
 
 uv run --python 3.11 --with boto3 --with-requirements infra/lambda/google_proxy/requirements.txt python infra/tests/fixtures/check_onboarding_contract.py
-Only owner identity, Google consent, and persistence use explicit offline fixtures.
-The Google page is intercepted; this test makes no AWS or Google calls.
+Google authorization navigation is intercepted. Identity, HTTP transport, owner
+session and storage are explicit offline fixtures; no AWS or Google calls occur.
 """
 import json
 import os
 from pathlib import Path
-import subprocess
 import socket
+import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlencode, urlparse
 
 LAMBDA = Path(__file__).resolve().parents[2] / "lambda/google_proxy"
 sys.path.insert(0, str(LAMBDA))
 import onboarding
+import onboarding_worker as worker
 from onboarding_auth import OwnerAuth
 from onboarding_google import GoogleClient
 from onboarding_operations import OnboardingService
 from onboarding_services import requested_scopes
 from test_onboarding_lifecycle import MemoryStore
+from onboarding_page import EMAILS
 
-SESSION = "gogcli-proxy-contract"
-PROJECT = "jayj-gogcli-full-access"
-EMAIL = "jay@frunkholdings.ltd"
+SESSION = "gogcli-single-account-contract"
+PROJECT = "gogcli-proxy"
+OLD, EMAIL, CALENDAR = EMAILS[:3]
 CALLS = []
 
 
@@ -41,8 +45,43 @@ class OwnerFixture:
         auth.check_mutation(headers, session)
 
 
+class Response:
+    def __init__(self, data, status=200):
+        self.data, self.status_code = data, status
+
+    def json(self):
+        return self.data
+
+
+class GoogleTransportFixture:
+    """Only fixture tokens and read-only named-probe responses."""
+    exchanges = 0
+    fail = False
+    email = EMAIL
+    probes = []
+
+    def post(self, url, data, **kwargs):
+        assert url == "https://oauth2.googleapis.com/token"
+        if self.fail:
+            return Response({}, 503)
+        if data["grant_type"] == "authorization_code":
+            self.exchanges += 1
+            return Response({"refresh_token": "offline-refresh", "id_token": "offline-identity", "scope": " ".join(requested_scopes(["gmail", "drive", "calendar"]))})
+        return Response({"access_token": "offline-access"})
+
+    def get(self, url, headers, **kwargs):
+        email = headers.get("X-GOG-Account", self.email)
+        self.probes.append((email, urlparse(url).path))
+        if urlparse(url).path.endswith("profile"):
+            return Response({"emailAddress": email})
+        if urlparse(url).path.endswith("about"):
+            return Response({"user": {"emailAddress": email}})
+        return Response({"items": [], "messages": [], "files": []})
+
+
 STORE = MemoryStore()
-SERVICE = OnboardingService(STORE, GoogleClient(None), "https://example.invalid/google-callback")
+HTTP = GoogleTransportFixture()
+SERVICE = OnboardingService(STORE, GoogleClient(HTTP), "https://example.invalid/google-callback")
 onboarding.get_service = lambda: SERVICE
 onboarding.get_auth = lambda: OwnerFixture()
 
@@ -53,11 +92,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def request(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
-        event = {"path": self.path, "httpMethod": self.command, "body": raw,
-                 "headers": dict(self.headers), "queryStringParameters": {}}
+        parsed = urlparse(self.path)
+        event = {"path": parsed.path, "httpMethod": self.command, "body": raw,
+                 "headers": dict(self.headers), "queryStringParameters": {key: value[0] for key, value in parse_qs(parsed.query).items()}}
         result = onboarding.handler(event, None)
         if self.command != "GET":
-            CALLS.append({"method": self.command, "path": self.path,
+            CALLS.append({"method": self.command, "path": parsed.path,
                           "body": json.loads(raw) if raw else {}, "status": result["statusCode"]})
         self.send_response(result["statusCode"])
         for name, value in result["headers"].items():
@@ -72,8 +112,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def browser(*args):
-    result = subprocess.run(["agent-browser", "--session", SESSION, *args],
-                            text=True, capture_output=True)
+    result = subprocess.run(["agent-browser", "--session", SESSION, *args], text=True, capture_output=True)
     if result.returncode:
         raise AssertionError(result.stderr or result.stdout)
     return result.stdout
@@ -84,7 +123,7 @@ def check(code):
 
 
 def intercept_google():
-    # Installed agent-browser 0.9.0 ignores CLI --body; its daemon accepts response.
+    # agent-browser 0.9.0 ignores CLI --body; the daemon accepts response.
     directory = os.getenv("AGENT_BROWSER_SOCKET_DIR") or (str(Path(os.environ["XDG_RUNTIME_DIR"]) / "agent-browser")
                 if os.getenv("XDG_RUNTIME_DIR") else str(Path.home() / ".agent-browser"))
     command = {"id": "offline-google", "action": "route", "url": "https://accounts.google.com/**",
@@ -98,297 +137,146 @@ def intercept_google():
         raise AssertionError(result)
 
 
-def latest():
-    return STORE.get("ACCOUNT#" + EMAIL)["latest_operation_id"]
+def card(email):
+    return 'document.querySelector(' + json.dumps('[data-email="' + email + '"]') + ')'
 
 
-def shared_app_handoff(url):
-    new_project, new_client = "gogcli-proxy", "new-shared-web-client"
-    os.environ["GOOGLE_EXISTING_PROJECTS"] = json.dumps([{"projectId": new_project}])
-    emails = ("jay.jakosky@gmail.com", EMAIL, "treasurer@longmonttheatre.org")
-    for email in emails[:2]:
-        account = SERVICE.account("fixture", email)
-        STORE.terminal(STORE.get("OP#" + account["active_operation"]), {"phase": "failed", "status": "failed"}, 1760000000)
-    # A separate shared-app scenario: saved accounts select Gmail/Drive only.
-    SERVICE.save_account("fixture", EMAIL, {"projectId": PROJECT, "services": ["gmail", "drive"]})
-    original = {email: SERVICE.account("fixture", email) for email in emails}
+def reopen(url):
     browser("open", url)
     browser("wait", "#accounts article")
-    document = {"web": {"project_id": new_project, "client_id": new_client, "client_secret": "offline-new-app-secret",
-                         "redirect_uris": [SERVICE.callback_url]}}
-    check("""
-      document.querySelector('#projectId').value='gogcli-proxy';
-      document.querySelector('#projectId').dispatchEvent(new Event('change'));
-      const files=new DataTransfer();
-      files.items.add(new File([JSON.stringify(%s)],'offline-shared-web.json',{type:'application/json'}));
-      document.querySelector('#credentialsFile').files=files.files;
-      document.querySelector('#credentialsForm').requestSubmit();
-    """ % json.dumps(document))
-    browser("wait", "200")
-    check("document.querySelectorAll('#apiConfirmations input').forEach(input=>{if(input.dataset.service!=='calendar')input.click();}); document.querySelector('#saveProject').click()")
-    browser("wait", "200")
-    check("if(!document.querySelector('#projectSaveStatus').textContent.includes('Google setup complete')) throw Error('Gmail/Drive-only shared app review required optional Calendar')")
-    before = len(CALLS)
-    check("""
-      document.querySelector('[data-email="jay@frunkholdings.ltd"] [data-service="calendar"]').click();
-      document.querySelector('#saveDefault').click();
-    """)
-    browser("wait", "200")
-    if len(CALLS) != before:
-        raise AssertionError("shared app action submitted over unsaved account draft")
-    check("if(!document.querySelector('#defaultStatus').textContent.toLowerCase().includes('unsaved')) throw Error('unsaved draft lacks actionable guidance')")
-    browser("open", url)
-    browser("wait", "#accounts article")
-    check("document.querySelector('#projectId').value='gogcli-proxy'; document.querySelector('#projectId').dispatchEvent(new Event('change')); document.querySelector('#saveDefault').click()")
-    browser("wait", "500")
-    for email in emails[:2]:
-        account = SERVICE.account("fixture", email)
-        if account["selected_project_id"] != new_project:
-            raise AssertionError("shared app choice did not retarget existing account: " + email)
-        if account["requested_services"] != original[email]["requested_services"]:
-            raise AssertionError("shared app choice changed selected services")
-    installed = SERVICE.account("fixture", emails[0])
-    if installed["credential_revision"] != original[emails[0]]["credential_revision"] or installed["installed_project_id"] != PROJECT or installed["desired_owner_access"]:
-        raise AssertionError("shared app choice replaced installed credentials or restored owner access")
-    if SERVICE.account("fixture", emails[2])["selected_project_id"] != PROJECT:
-        raise AssertionError("shared app choice bypassed active-operation fence")
-    if not any(item["method"] == "PUT" and item["path"].endswith("treasurer%40longmonttheatre.org") and item["status"] == 409 for item in CALLS):
-        raise AssertionError("busy account did not exercise the real metadata conflict contract")
-    check("""
-      const status=document.querySelector('#defaultStatus').textContent;
-      if(!status.includes('treasurer@longmonttheatre.org') || !/retry|again|finish/i.test(status))
-        throw Error('partial shared app choice lacks account-specific retry guidance: '+status);
-    """)
-    busy = SERVICE.account("fixture", emails[2])
-    STORE.terminal(STORE.get("OP#" + busy["active_operation"]), {"phase": "failed", "status": "failed"}, 1760000000)
-    check("document.querySelector('#refresh').click()")
-    browser("wait", "200")
-    check("document.querySelector('#saveDefault').click()")
-    browser("wait", "500")
-    if any(SERVICE.account("fixture", email)["selected_project_id"] != new_project for email in emails):
-        raise AssertionError("shared app retry did not persist all account choices")
-    check("document.querySelector('#newEmails').value='new-shared@example.com'; document.querySelector('#addAccountsForm').requestSubmit()")
-    browser("wait", "200")
-    if SERVICE.account("fixture", "new-shared@example.com")["selected_project_id"] != new_project:
-        raise AssertionError("new account did not inherit shared app choice")
-    browser("open", url)
-    browser("wait", "#accounts article")
-    check("""
-      const card=document.querySelector('[data-email="jay.jakosky@gmail.com"]');
-      if(!card.querySelector('.connect-account') || card.querySelector('.connect-account').disabled)
-        throw Error('installed legacy account lacks visible new-app consent action');
-      card.querySelector('.connect-account').click();
-    """)
+
+
+def consent(email, services):
+    check(card(email) + ".querySelector('button').click()")
     browser("wait", "--url", "https://accounts.google.com/**")
-    check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('new app consent was not intercepted')")
-    consent = parse_qs(urlparse(browser("get", "url").strip()).query)
-    if consent["client_id"] != [new_client] or CALLS[-1]["body"]["ownerAccessEnabled"]:
-        raise AssertionError("new app handoff used legacy client or restored withdrawn owner access")
+    check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('Google navigation escaped interception')")
+    query = parse_qs(urlparse(browser("get", "url").strip()).query)
+    assert query["client_id"] == ["offline-canonical-client"]
+    assert set(query["scope"][0].split()) == set(requested_scopes(services))
+    return STORE.get("ACCOUNT#" + email)["latest_operation_id"], query["state"][0]
+
+
+def process(operation):
+    op = STORE.get("OP#" + operation)
+    HTTP.email = op["email"]
+    worker.process(operation, STORE, HTTP, now=max(int(time.time()), op.get("next_attempt", 0)))
+
+
+def approve(url, email, state, operation, count="0 of 8"):
+    browser("open", url + "oauth/google/callback?" + urlencode({"state": state, "code": "offline-code"}))
+    browser("wait", "#accounts article")
+    check("if(document.activeElement.dataset.email!==" + json.dumps(email) + ") throw Error('real callback lost account focus')")
+    assert STORE.get("OP#" + operation)["phase"] == "validating"
+    check("if(!document.querySelector('#connectedCount').textContent.startsWith(" + json.dumps(count) + ")) throw Error('callback counted before checks')")
 
 
 def main():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     url = f"http://127.0.0.1:{server.server_port}/onboarding/"
-    os.environ["ONBOARDING_BASE_URL"] = url
-    for email in ("jay.jakosky@gmail.com", EMAIL, "treasurer@longmonttheatre.org"):
-        SERVICE.save_account("fixture", email, {"projectId": PROJECT, "services": ["gmail", "drive"]})
-    installed = SERVICE.account("fixture", "jay.jakosky@gmail.com")
-    STORE.put({**installed, "connection_status": "connected", "credential_revision": "fixture-installed",
-               "installed_services": ["gmail"], "requested_services": ["gmail"], "granted_scopes": requested_scopes(["gmail"]),
-               "installed_project_id": PROJECT, "verifications": {"gmail": {"status": "succeeded", "verified_at": 1760000000}}})
+    os.environ.update(ONBOARDING_BASE_URL=url, GOOGLE_PROJECT_ID=PROJECT,
+        GOOGLE_CALLBACK_URL=SERVICE.callback_url, PROXY_BASE_URL="https://fixture.invalid/prd/", PROXY_API_KEY_ID="fixture",
+        ONBOARDING_OWNER_CALLER_ARN="arn:aws:iam::123456789012:role/fixture-owner",
+        ONBOARDING_VERIFIER_ROLE_ARN="arn:aws:iam::123456789012:role/fixture-verifier")
+    SERVICE.import_client({"web": {"project_id": PROJECT, "client_id": "offline-canonical-client", "client_secret": "offline-secret", "redirect_uris": [SERVICE.callback_url]}})
+    revision = STORE.get("CLIENT#" + PROJECT)["revision"]
+    SERVICE.review_application({"clientRevision": revision, "apiConfirmed": {"gmail": True, "drive": True, "calendar": True}, "publishingStatus": "testing"})
+    for email in EMAILS:
+        SERVICE.save_account("fixture", email, {"services": ["gmail", "drive"]})
+    old = SERVICE.account("fixture", OLD)
+    STORE.put({**old, "desired_owner_access": False, "connection_status": "connected", "credential_revision": "offline-existing-revision",
+        "installed_project_id": "fixture-prior-application", "installed_services": ["gmail", "drive"], "granted_scopes": requested_scopes(["gmail", "drive"]),
+        "verifications": {name: {"status": "succeeded", "verified_at": 1760000000} for name in ["gmail", "drive"]}})
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        browser("open", url)
+        reopen(url)
         intercept_google()
-        browser("wait", "#accounts article")
-        check("""
-          if(document.querySelector('#confirmStep #apiConfirmations')!==document.querySelector('#apiConfirmations'))
-            throw Error('API confirmations must follow Web client upload in step 4');
-          if(document.querySelector('#apisStep #apiConfirmations')) throw Error('step 1 repeats step 4 review');
-          if(!document.querySelector('#connectAccounts')?.disabled) throw Error('step 5 must wait for Web client and API review');
-          if([...document.querySelectorAll('.connect-account')].some(button=>!button.disabled))
-            throw Error('consent is enabled before Google setup');
-          const cards=[...document.querySelectorAll('.account')];
-          if(cards.some(card=>!card.querySelector('[data-service="calendar"]')))
-            throw Error('Calendar selection unavailable');
-          if(cards.some(card=>card.querySelector('[data-service="calendar"]').checked))
-            throw Error('Calendar auto-expanded existing selections');
-          const link=[...document.querySelectorAll('#apiLinks a')].find(link=>link.textContent.includes('Calendar'));
-          if(!link || new URL(link.href).pathname!=='/apis/library/calendar-json.googleapis.com')
-            throw Error('Calendar API link does not target actual Google library');
-          cards.find(card=>card.dataset.email==='jay@frunkholdings.ltd').querySelector('[data-service="calendar"]').click();
-          document.querySelector('#refresh').click();
-        """)
-        browser("wait", "200")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
-          if(!card.querySelector('[data-service="calendar"]').checked) throw Error('refresh lost Calendar draft');
-          card.querySelector('[data-service="calendar"]').click();
-          const draft=drafts.get('jay@frunkholdings.ltd');
-          if(JSON.stringify(draft.services)!==JSON.stringify(['gmail','drive'])) throw Error('Calendar deselect changed Gmail/Drive');
-          document.querySelector('[data-email="jay@frunkholdings.ltd"] [data-service="calendar"]').click();
-        """)
-        web_json = {"web": {"client_id": "actual-imported-fixture-client", "client_secret": "offline-fixture-secret",
-                            "project_id": PROJECT, "redirect_uris": [SERVICE.callback_url]}}
-        check("""
-          document.querySelector('#clientStep').open=true;
-          const files=new DataTransfer();
-          files.items.add(new File([JSON.stringify(%s)],'offline-google-web.json',{type:'application/json'}));
-          document.querySelector('#credentialsFile').files=files.files;
-          document.querySelector('#credentialsForm').requestSubmit();
-        """ % json.dumps(web_json))
-        browser("wait", "200")
-        if STORE.get("CLIENT#" + PROJECT)["client_id"] != "actual-imported-fixture-client":
-            raise AssertionError("Web JSON did not reach the real owner import handler")
-        check("""
-          if(!document.querySelector('#confirmStep').open) throw Error('upload did not open API review');
-          if([...document.querySelectorAll('#confirmStep #apiConfirmations input')].some(input=>input.checked))
-            throw Error('upload retained unreviewed API confirmations');
-          document.querySelector('#saveProject').click();
-        """)
-        browser("wait", "200")
-        check("""
-          const status=document.querySelector('#projectSaveStatus').textContent;
-          if(!status.includes('Gmail') || !status.includes('Drive') || !status.includes('Calendar') || status.includes('Google setup complete'))
-            throw Error('unchecked APIs lack specific next-action guidance: '+status);
-          if(!document.querySelector('#connectAccounts').disabled) throw Error('unchecked APIs enabled connection');
-        """)
-        if any(item["path"].endswith("/setup") or item["path"].endswith("/enrollments") for item in CALLS):
-            raise AssertionError("incomplete API review submitted setup or started enrollment")
-        check("""
-          document.querySelectorAll('#confirmStep #apiConfirmations input').forEach(input=>{if(input.dataset.service!=='calendar')input.click();});
-          document.querySelector('#saveProject').click();
-        """)
-        browser("wait", "200")
-        check("""
-          if(!document.querySelector('#projectSaveStatus').textContent.includes('Calendar')) throw Error('missing Calendar review lacks named guidance');
-          if(!document.querySelector('[data-email="jay@frunkholdings.ltd"] .connect-account').disabled) throw Error('missing Calendar API allows consent');
-        """)
-        if any(item["path"].endswith("/setup") or item["path"].endswith("/enrollments") for item in CALLS):
-            raise AssertionError("missing Calendar API submitted review or consent")
-        check("""
-          document.querySelector('#confirmStep [data-service="calendar"]').click();
-          document.querySelector('#saveProject').click();
-        """)
-        if any(item["path"].endswith("/enrollments") for item in CALLS):
-            raise AssertionError("Google setup created an enrollment before the account consent action")
-        browser("wait", "200")
-        check("""
-          if(!document.querySelector('#projectSaveStatus').textContent.includes('Google setup complete'))
-            throw Error('saved API review does not mark Google setup complete');
-          if(document.querySelector('#connectAccounts').disabled) throw Error('reviewed APIs did not enable step 5');
-          document.querySelector('#connectAccounts').click();
-          const first=[...document.querySelectorAll('.account .connect-account')].find(button=>!button.disabled);
-          if(document.activeElement!==first || first.closest('.account').dataset.email!=='jay@frunkholdings.ltd')
-            throw Error('step 5 did not focus first ready unconnected account');
-        """)
-        check("""
-          if(!document.querySelector('#adminInstructions').textContent.includes('actual-imported-fixture-client')) throw Error('administrator client ID does not match imported client');
-          const cards=[...document.querySelectorAll('.account')];
-          const installed=cards.find(card=>card.dataset.email==='jay.jakosky@gmail.com');
-          if(!installed.textContent.includes('last check passed')) throw Error('real service result status misunderstood');
-          installed.querySelector('button').click()
-        """)
-        browser("wait", "200")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
-          if(card.querySelector('button').disabled) throw Error('real A verification blocked B');
-          card.querySelector('.connect-account').click()
-        """)
-        browser("wait", "--url", "https://accounts.google.com/**")
-        check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('Google consent was not intercepted')")
-        enrollment = CALLS[-1]
-        if enrollment["body"]["services"] != ["gmail", "drive", "calendar"]:
-            raise AssertionError("explicit Calendar selection did not reach account enrollment")
-        consent_url = browser("get", "url").strip()
-        consent_scopes = parse_qs(urlparse(consent_url).query)["scope"][0].split()
-        if set(consent_scopes) != set(requested_scopes(["gmail", "drive", "calendar"])):
-            raise AssertionError("Google consent omitted selected Calendar scope")
-        first = latest()
-        browser("open", url)
-        browser("wait", "#accounts article")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
-          if(card.querySelector('button').textContent!=='Continue Google consent') throw Error('reload lacks Continue action');
-          card.querySelector('button').click()
-        """)
-        browser("wait", "200")
-        if CALLS[-1]["status"] >= 400:
-            raise AssertionError("Continue did not replay the accepted command key and fingerprint")
-        browser("wait", "--url", "https://accounts.google.com/**")
-        if latest() != first:
-            raise AssertionError("Continue after reload replaced the accepted operation")
+        check("if(document.querySelector('#projectId,#appSettings,#saveDefault,select,input[type=file],pre')) throw Error('removed setup controls present');if(document.querySelectorAll('.account').length!==8) throw Error('real snapshot lost roster')")
+        check("if(!document.querySelector('#connectedCount').textContent.includes('0 of 8 connected to gogcli-proxy; 1 existing connection awaiting reconnection')) throw Error('real canonical count wrong')")
+        check(card(EMAIL) + ".querySelector('[data-service=calendar]').click()")
+        first, _ = consent(EMAIL, ["gmail", "drive", "calendar"])
+        assert CALLS[-1]["body"]["ownerAccessEnabled"] is True
+        assert "projectId" not in CALLS[-1]["body"]
+        assert not any(call["method"] == "PUT" for call in CALLS)
+        reopen(url)
+        check("if(" + card(EMAIL) + ".querySelector('button').textContent!=='Continue Google consent') throw Error('reopen lost durable continuation')")
+        again, _ = consent(EMAIL, ["gmail", "drive", "calendar"])
+        assert first == again
         OwnerFixture.session_id = "fixture-new-session"
-        browser("open", url)
+        reopen(url)
+        check("if(" + card(EMAIL) + ".querySelector('button').textContent!=='Restart Google consent') throw Error('new session lacks restart')")
+        second, state = consent(EMAIL, ["gmail", "drive", "calendar"])
+        assert second != first
+        browser("open", url + "oauth/google/callback?" + urlencode({"state": state, "error": "access_denied"}))
         browser("wait", "#accounts article")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
-          if(card.querySelector('button').textContent!=='Restart Google consent') throw Error('new owner session did not require fresh consent');
-          const options=card.querySelector('details'); options.open=true;
-          [...options.querySelectorAll('button')].find(button=>button.textContent==='Restart Google consent').click()
-        """)
-        browser("wait", "--url", "https://accounts.google.com/**")
-        second = latest()
-        if second == first:
-            raise AssertionError("explicit restart reused the previous attempt")
-        op = STORE.get("OP#" + second)
-        attempt = STORE.secret_get(op["attempt_ref"])
-        try:
-            SERVICE.callback(attempt["state"], "", OwnerFixture.session_id, "access_denied")
-        except Exception as error:
-            if getattr(error, "code", "") != "consent_denied":
-                raise
-        browser("open", url)
-        browser("wait", "#accounts article")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay@frunkholdings.ltd');
-          if(!card.textContent.includes('Google consent was canceled')) throw Error('canceled consent recovery missing');
-          card.querySelector('button').click()
-        """)
-        browser("wait", "--url", "https://accounts.google.com/**")
-        if latest() == second:
-            raise AssertionError("new consent after cancellation reused the failed attempt")
-        browser("open", url)
-        browser("wait", "#accounts article")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay.jakosky@gmail.com');
-          card.querySelector('[data-service="drive"]').click()
-        """)
-        account = SERVICE.account("fixture", "jay.jakosky@gmail.com")
-        STORE.terminal(STORE.get("OP#" + account["active_operation"]), {"phase": "ready", "status": "succeeded"}, 1760000000)
-        account = SERVICE.account("fixture", "jay.jakosky@gmail.com")
-        STORE.put({**account, "desired_owner_access": False})
-        check("document.querySelector('#refresh').click()")
+        check("if(!" + card(EMAIL) + ".textContent.includes('Google consent was canceled')) throw Error('denial lacks recovery')")
+        third, state = consent(EMAIL, ["gmail", "drive", "calendar"])
+        approve(url, EMAIL, state, third)
+        process(third)
+        op = STORE.get("OP#" + third)
+        STORE.put({**op, "attempts": 4})
+        HTTP.fail = True
+        process(third)
+        HTTP.fail = False
+        reopen(url)
+        check("if(" + card(EMAIL) + ".querySelector('button').textContent!=='Retry connection') throw Error('saved recovery lacks priority');" + card(EMAIL) + ".querySelector('button').click()")
         browser("wait", "200")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='jay.jakosky@gmail.com');
-          const options=card.querySelector('details'); options.open=true;
-          [...options.querySelectorAll('button')].find(button=>button.textContent==='Reconnect / add selected service').click()
-        """)
-        browser("wait", "--url", "https://accounts.google.com/**")
-        if CALLS[-1]["body"]["ownerAccessEnabled"]:
-            raise AssertionError("reconnect restored withdrawn caller access from an old draft")
-        browser("open", url)
+        recovery = STORE.get("ACCOUNT#" + EMAIL)["latest_operation_id"]
+        assert recovery != third and CALLS[-1]["path"].endswith("/recoveries")
+        assert HTTP.exchanges == 1
+        process(recovery)
+        process(recovery)
+        reopen(url)
+        check("if(!document.querySelector('#connectedCount').textContent.startsWith('0 of 8')) throw Error('promotion counted before named checks')")
+        process(recovery)
+        reopen(url)
+        check("if(!document.querySelector('#connectedCount').textContent.startsWith('1 of 8')) throw Error('checked canonical connection not counted')")
+        check(card(EMAIL) + ".querySelector('button').click()")
+        browser("wait", "200")
+        verification = STORE.get("ACCOUNT#" + EMAIL)["latest_operation_id"]
+        check("const options=" + card(EMAIL) + ".querySelector('details');options.open=true;const pause=[...options.querySelectorAll('button')].find(button=>button.textContent==='Pause tool access');if(pause.disabled) throw Error('checking blocked restrictive access');pause.click()")
+        browser("wait", "200")
+        assert SERVICE.account("fixture", EMAIL)["desired_owner_access"] is False
+        assert STORE.get("OP#" + verification)["status"] == "canceled"
+        process(verification)
+        assert SERVICE.account("fixture", EMAIL)["desired_owner_access"] is False
+        reopen(url)
+        previous, state = consent(OLD, ["gmail", "drive"])
+        assert CALLS[-1]["body"]["ownerAccessEnabled"] is False
+        browser("open", url + "oauth/google/callback?" + urlencode({"state": state, "error": "access_denied"}))
         browser("wait", "#accounts article")
-        check("""
-          const card=[...document.querySelectorAll('.account')].find(card=>card.dataset.email==='treasurer@longmonttheatre.org');
-          card.querySelector('[data-service="calendar"]').click();
-          document.querySelector('[data-email="treasurer@longmonttheatre.org"] [data-service="calendar"]').click();
-          document.querySelector('[data-email="treasurer@longmonttheatre.org"] .connect-account').click();
-        """)
-        browser("wait", "--url", "https://accounts.google.com/**")
-        consent_scopes = parse_qs(urlparse(browser("get", "url").strip()).query)["scope"][0].split()
-        if CALLS[-1]["body"]["services"] != ["gmail", "drive"] or set(consent_scopes) != set(requested_scopes(["gmail", "drive"])):
-            raise AssertionError("Calendar deselection changed Gmail/Drive enrollment or consent scopes")
-        if any(item["status"] >= 400 for item in CALLS):
-            raise AssertionError(f"browser sent an incompatible command: {CALLS}")
-        shared_app_handoff(url)
-        print("Passed shared-app handoff: real new-client import/review, unsaved-draft guard, partial account PUT conflict/retry, retained services/installed revision/owner access, inherited new-account choice, legacy-account primary consent with new client.")
-        print("Passed real HTTP/service DOM contracts: Calendar opt-in, API library and review gating, draft refresh, selected consent scopes and deselection, Web JSON import, step 5 handoff, parallel checks, Continue/restart/cancellation recovery, withdrawn access preserved.")
+        assert SERVICE.account("fixture", OLD)["credential_revision"] == "offline-existing-revision"
+        check("if(!" + card(OLD) + ".textContent.includes('existing connection still works')) throw Error('failed replacement hid installed access')")
+        replacement, state = consent(OLD, ["gmail", "drive"])
+        approve(url, OLD, state, replacement, "1 of 8")
+        for _ in range(4):
+            process(replacement)
+        assert SERVICE.account("fixture", OLD)["installed_project_id"] == PROJECT
+        assert SERVICE.account("fixture", OLD)["desired_owner_access"] is False
+        reopen(url)
+        check("if(!document.querySelector('#connectedCount').textContent.startsWith('2 of 8')) throw Error('successful prior-app replacement not counted');if(!" + card(OLD) + ".textContent.includes('Tool access: paused')) throw Error('replacement restored paused tools')")
+        STORE.put({**SERVICE.account("fixture", CALENDAR), "desired_owner_access": False})
+        reopen(url)
+        check(card(CALENDAR) + ".querySelector('[data-service=gmail]').click();" + card(CALENDAR) + ".querySelector('[data-service=drive]').click();" + card(CALENDAR) + ".querySelector('[data-service=calendar]').click()")
+        calendar_op, state = consent(CALENDAR, ["calendar"])
+        approve(url, CALENDAR, state, calendar_op, "2 of 8")
+        for _ in range(4):
+            process(calendar_op)
+        assert HTTP.probes and all(path.endswith("/calendarList") for email, path in HTTP.probes if email == CALENDAR)
+        reopen(url)
+        check("if(!document.querySelector('#connectedCount').textContent.startsWith('3 of 8')) throw Error('Calendar-only successful probes not counted')")
+        assert CALLS[-1]["body"]["services"] == ["calendar"]
+        assert CALLS[-1]["body"]["ownerAccessEnabled"] is False
+        assert SERVICE.account("fixture", CALENDAR)["desired_owner_access"] is False
+        assert all(call["status"] < 400 for call in CALLS), CALLS
+        print("Passed real owner HTTP/browser journey: canonical client, eight records, direct Connect, Calendar scopes, continuation/restart/denial, actual callback focus, saved recovery without repeated exchange, validation/promotion/check count, paused reconnect, retained prior access, paused canonical replacement, restrictive supersession and Calendar-only probes.")
     finally:
         browser("close")
         server.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    with patch.object(GoogleClient, "identity", lambda self, tokens, client, nonce, email, services, prior_subject=None: {"subject": "offline-" + email, "granted_scopes": requested_scopes(services)}), \
+         patch.object(worker, "enqueue"), patch.object(worker, "signed_headers", lambda url, email, host, key: {"X-GOG-Account": email}), \
+         patch.object(worker, "aws_client") as aws:
+        aws.return_value.get_api_key.return_value = {"value": "offline-key"}
+        main()

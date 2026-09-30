@@ -2,69 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Connect and manage Google accounts</title>
+  <title>Connect your Google accounts</title>
   <link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
 </head>
 <body><main>
-  <header><h1>Connect and manage Google accounts</h1></header>
+  <header><h1>Connect your Google accounts</h1>
+    <p>Connect your accounts to gogcli-proxy, owned by kraecollective.com, so your authorized tools can use the services you choose.</p>
+  </header>
   <p id="pageStatus" class="notice" role="status" aria-live="polite">Loading…</p>
   <p id="recoveryStatus" class="notice" role="status" hidden></p>
   <a id="loginLink" class="button" hidden>Sign in</a>
-  <button id="refresh" type="button">Refresh</button>
   <div id="guide" hidden>
-    <section id="projectGuide" aria-labelledby="projectTitle"><h2 id="projectTitle">Google application</h2>
-      <p>Choose the application your accounts will connect to, then approve each account's Google consent below.</p>
-      <label for="projectId">Google Cloud project</label><select id="projectId"></select>
-      <p id="credentialStatus" class="notice" role="status"></p>
-      <button id="saveDefault" type="button" aria-describedby="appChoiceStatus defaultStatus" disabled>Use this app for all accounts</button><p id="appChoiceStatus" role="status"></p><p id="defaultStatus" role="status" aria-live="polite"></p>
-      <details id="appSettings"><summary>Application settings</summary>
-      <p>Upload the downloaded Web client and review its APIs here. Open the Google setup directions when you need to change the application.</p>
-      <details id="apisStep"><summary>1. Enable APIs</summary>
-        <p>Open each API and choose <strong>Enable</strong>. If it shows <strong>Manage</strong>, it is already enabled.</p><div id="apiLinks"></div>
-      </details>
-      <details id="audienceStep"><summary>2. Set up branding, audience, and scopes</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener noreferrer">Open Branding ↗</a>. If Google shows <strong>Get started</strong>, enter these values, choose <strong>External</strong>, agree to the policy, and choose <strong>Create</strong>.</p>
-        <label for="appName">App name</label><div class="copy"><input id="appName" readonly><button id="copyAppName" type="button">Copy app name</button></div><p id="appNameStatus" role="status"></p>
-        <ul>
-          <li><strong>User support email:</strong> <code>jay@kraecollective.com</code></li>
-          <li><strong>Developer contact information:</strong> <code>jay@kraecollective.com</code></li>
-          <li><strong>Authorized domains</strong> (if asked): <code>k-rae.com</code> for this application's callback</li>
-        </ul>
-        <p><a data-console="https://console.cloud.google.com/auth/audience" target="_blank" rel="noopener noreferrer">Open Audience ↗</a>. Keep <strong>External</strong> and <strong>Testing</strong>. Under <strong>Test users</strong>, add the accounts you want to connect: <span id="testUserEmails"></span>.</p>
-        <p>Testing normally limits Gmail, Drive, and Calendar authorization to seven days. A Workspace administrator can mark this app Trusted for their organization's users; personal Gmail still follows the Testing limit. Production is optional for longer-lived connections.</p>
-        <p><a data-console="https://console.cloud.google.com/auth/scopes" target="_blank" rel="noopener noreferrer">Open Data Access ↗</a>. Choose <strong>Add or remove scopes</strong>, select these, and save:</p><ul id="serviceDescriptions"></ul>
-      </details>
-      <details id="clientStep"><summary>3. Create a Web client</summary>
-        <p><a data-console="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open Clients ↗</a> and choose <strong>Create client</strong>.</p>
-        <p><strong>Application type:</strong> Web application</p>
-        <label for="webClientName">Name</label><div class="copy"><input id="webClientName" readonly><button id="copyWebClientName" type="button">Copy client name</button></div><p id="webClientNameStatus" role="status"></p>
-        <p><strong>Authorized JavaScript origins:</strong> leave blank.</p>
-        <label for="callbackUrl">Authorized redirect URIs → Add URI</label><div class="copy"><input id="callbackUrl" readonly><button id="copyCallback" type="button">Copy callback</button></div><p id="copyStatus" role="status"></p>
-        <p>Choose <strong>Create</strong>, download the client JSON, and upload it here.</p>
-        <form id="credentialsForm"><label for="credentialsFile">Client JSON</label><input id="credentialsFile" type="file" accept=".json,application/json" required><button id="importCredentials" type="submit">Upload</button></form>
-        <p id="uploadStatus" role="status" aria-live="polite"></p>
-      </details>
-      <details id="confirmStep"><summary>4. Review APIs and save settings</summary>
-        <p>After uploading the Web client, confirm the APIs you enabled in step 1 for the services your accounts will use. Saving these settings prepares the project; each account still needs Google consent in step 5.</p>
-        <div id="apiConfirmations"></div>
-        <label class="check"><input id="publishingConfirmed" type="checkbox"> In production (optional; leave unchecked for Testing)</label>
-        <button id="saveProject" type="button">Save reviewed settings</button><p id="projectSaveStatus" role="status" aria-live="polite"></p>
-      </details>
-      <details><summary>Blocked by a Workspace administrator?</summary><p>Send them this:</p><p id="adminInstructions"></p><button id="copyAdmin" type="button">Copy</button><p id="adminStatus" role="status"></p></details>
-      </details>
-      <button id="connectAccounts" type="button" aria-describedby="connectStatus" disabled>Connect accounts</button><p id="connectStatus" role="status" aria-live="polite"></p>
-    </section>
-    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">5. Connect your accounts</h2>
-      <p>For each account, choose its services and Connect. Google will ask you to choose that account and approve its permissions. Each account is connected after Google approval and the service checks finish.</p>
-      <p>Calendar is optional. To add it to a connected account, select Calendar, review its API in step 4, then choose <strong>Reconnect / add selected service</strong> under <strong>Connection options</strong> and approve fresh Google consent.</p>
-      <p id="connectedCount" role="status"></p>
+    <p id="connectedCount" role="status"></p><button id="refresh" type="button">Refresh</button>
+    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
       <div id="accounts"></div>
       <form id="addAccountsForm"><label for="newEmails">Add accounts</label>
         <textarea id="newEmails" rows="3" placeholder="Emails, separated by commas or new lines" autocomplete="off"></textarea>
-        <button type="submit">Add</button>
-        <p id="addStatus" role="status" aria-live="polite"></p>
+        <button type="submit">Add</button><p id="addStatus" role="status" aria-live="polite"></p>
       </form>
     </section>
-    <details><summary>Use the CLI</summary><p>Build with <code>make build</code>, then merge this into the file shown by <code>bin/gog config path</code>:</p><pre id="cliConfig"></pre><p id="callerIdentity" class="small"></p><p>Test with <code>bin/gog auth doctor --check</code>.</p></details>
   </div>
 </main></body></html>

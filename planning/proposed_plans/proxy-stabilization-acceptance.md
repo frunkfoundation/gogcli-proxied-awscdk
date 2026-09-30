@@ -65,8 +65,9 @@ service using the uniquely recorded owner. Installed connections: **0 of 8**.
 This saved metadata only; no Google calls, credential writes, or caller grants.
 
 These service selections are defaults awaiting the owner's page review, not
-claims of granted Google permissions. Reuse `jayj-gogcli-full-access` unless an
-observed organization requirement calls for another recorded project.
+claims of granted Google permissions. This historical report predates the
+singular gogcli-proxy application; its setup direction is superseded by
+[single-project-account-connections.md](single-project-account-connections.md).
 
 ## Verification completed
 
@@ -104,10 +105,10 @@ Application rollout and deployed infrastructure checks are complete:
   Real CLI inventory reaches the proxy but is denied because no account grants
   have been enrolled; this is not a successful live Google acceptance check.
 
-Next owner action: sign in on the page, select the existing
-`jayj-gogcli-full-access` project, and follow its Web-client configuration steps.
-Import the Web-client JSON on the page, then complete Google consent for the first
-account. Historical Desktop clients do not enroll remote proxy accounts.
+Current next action: the operator provisions the canonical application's downloaded
+Web-client JSON through the [operator runbook](../../infra/README.md#configure-the-google-application),
+then the owner connects each account on the page. This report's original
+previous-application setup does not establish current canonical readiness.
 
 Product readiness requires actual owner-caller Gmail and Drive reads through an
 enrolled account. Eight-account enrollment remains incomplete until each account

@@ -2,24 +2,13 @@
 
 ## Unreleased
 
-- Setup: offer the shared gogcli-proxy application, apply it to accounts through an explicit retryable action, and show consent for accounts moving from another app while preserving installed connections.
-
-- Proxy: add opt-in Calendar consent, revision-bound API review, service verification, and caller access alongside Gmail and Drive without changing existing account selections.
-
-- Setup: review API confirmations after Web-client upload, show saved readiness and specific missing requirements, and provide an explicit step 5 handoff to account consent.
-
-- Setup: prepare the shared Google project before account connections, remove duplicate setup controls, and show Google revocation only for installed connections.
-
-- Setup: allow Google Testing applications to connect without a production confirmation; retain API checks and explain test-user setup and seven-day refresh-token expiry.
-- Setup: cut explanatory caveats from the owner page to direct instructions, and keep open Google setup steps and account options open when the page refreshes or regains focus.
-
-- Setup: accept Google-downloaded Web client JSON using its standard authorization URL while keeping runtime endpoints fixed.
-
-- Setup: show Google Console field names and suggested project-specific values, including a copyable Web-client name and the permanent callback.
+- Breaking: the owner page connects accounts to one server-selected gogcli-proxy application. Remove project/default selectors and application-configuration HTTP routes; fresh account/enrollment requests reject project selection. Provision the existing application's Web client through the operator command.
+- Accounts: show connection progress, requested/installed services, consent continuation and recovery, and pause/resume controls. Preserve working credentials on failed replacements and saved access pauses on reconnect.
+- Proxy: support optional Calendar consent and checks alongside Gmail and Drive; configuration review remains bound to the imported client revision, with Google Testing supported.
 
 - Proxy: publish setup, Google/owner callbacks, and CLI access on a retained custom domain so API replacement does not change registered OAuth URLs.
 
-- Proxy: stabilize owner account setup for Gmail and Drive with existing-project guidance, independent installed/attempt status, revision-bound configuration, account-level recovery, and explicit caller access and disconnect controls.
+- Proxy: stabilize owner account setup for Gmail and Drive with independent installed/attempt status, revision-bound configuration, account-level recovery, and explicit caller access and disconnect controls.
 - Breaking: caller/default permission and optional account ceilings are evaluated independently; any matching explicit deny wins. Restrictive caller policies no longer inherit global allows. Review existing policy documents before rollout; see `infra/README.md`.
 - Proxy: validate the forwarded request before authorization, reject ambiguous routing/query/method overrides, and bound authorization-cache propagation.
 - Auth: use signed remote account inventory and real caller reads for managed account diagnostics; hosted setup replaces local account OAuth/keychain enrollment.

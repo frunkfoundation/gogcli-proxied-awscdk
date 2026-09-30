@@ -4,7 +4,7 @@ Implement the approved remote onboarding plan in K-Rae production, account `9681
 
 ## Fixed choices
 
-- Owner-only setup at the generated HTTPS API Gateway `/prd/onboarding/` URL, using the existing `auth.k-rae.com` Authentik service and Jay's daily user.
+- Owner-only account connections at the permanent published `/prd/onboarding/` URL, using the existing `auth.k-rae.com` Authentik service and Jay's daily user.
 - Request Google `openid email https://www.googleapis.com/auth/gmail.modify` with a Web application client and exact hosted callback.
 - Preserve the proxy's AWS SigV4 and API-key contract. First CLI caller is `JayDeveloperFromJdev` using `krae-jdev-dev-prd`.
 - First account is `jay.jakosky@gmail.com`; prefill `jay@frunkholdings.ltd` and `treasurer@longmonttheatre.org`, and support eight or more accounts.
@@ -14,7 +14,7 @@ Implement the approved remote onboarding plan in K-Rae production, account `9681
 
 Extend the existing Python Lambda package with a separate onboarding handler, owner authentication, safe instructional assets, and operation-based APIs. Reuse existing Google/proxy helpers. Add DynamoDB metadata and conditional workflow state, its stream as durable delivery, and SQS for delayed verification. Only secret references go into DynamoDB and operation IDs into queues; sensitive temporary data goes into SSM and is cleaned up.
 
-The page provides project-specific Google Console links, Audience publishing guidance, exact Web-client callback copying, JSON upload validation, and a server-persisted expandable mailbox checklist. Progress and worker verification survive closing the page. Every account has a factual status and recovery action.
+The original application-setup UI is superseded by [single-project-account-connections.md](single-project-account-connections.md). The account page uses one canonical application and persisted account records; operator provisioning is separate. Progress and worker verification survive closing the page. Every account has a factual status and recovery action.
 
 Use state, PKCE, OIDC nonce and verified identity/account/scope checks. Preserve old credentials until replacement refresh and candidate Gmail reads pass. Consume callback attempts conditionally; never repeat ambiguous code exchange. Promote to the current per-account SSM format, update explicit caller allowlists, and verify normal signed proxy reads after at least 65 seconds to outlast the existing credential cache. Empty mailboxes pass. Failed verification retains saved authorization and supports retry without consent.
 

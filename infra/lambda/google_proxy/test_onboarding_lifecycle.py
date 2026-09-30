@@ -167,15 +167,15 @@ class AccountLifecycleTests(unittest.TestCase):
         self.google.authorization_url.return_value = "https://accounts.google.com/consent"
         self.service = OnboardingService(self.store, self.google, "https://app.example/onboarding/oauth/google/callback")
         self.env = patch.dict(os.environ, {"ONBOARDING_OWNER_CALLER_ARN": "arn:aws:iam::123456789012:role/owner",
-            "ONBOARDING_VERIFIER_ROLE_ARN": "arn:aws:iam::123456789012:role/verifier", "GOOGLE_EXISTING_PROJECTS": "[]"})
+            "ONBOARDING_VERIFIER_ROLE_ARN": "arn:aws:iam::123456789012:role/verifier", "GOOGLE_PROJECT_ID": "gogcli-proxy"})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.service.save_client("owner", "project-one", {"web": {"client_id": "client", "client_secret": "secret",
-            "project_id": "project-one", "redirect_uris": [self.service.callback_url]}})
-        revision = self.store.get("CLIENT#project-one")["revision"]
-        self.service.update_project("owner", "project-one", {"clientRevision": revision, "publishingConfirmed": True,
+        self.service.import_client( {"web": {"client_id": "client", "client_secret": "secret",
+            "project_id": "gogcli-proxy", "redirect_uris": [self.service.callback_url]}})
+        revision = self.store.get("CLIENT#gogcli-proxy")["revision"]
+        self.service.review_application( {"clientRevision": revision, "publishingStatus": "production",
             "apiConfirmed": {"gmail": True, "drive": True}})
-        self.service.save_account("owner", "jay@example.com", {"projectId": "project-one", "services": ["gmail", "drive"]})
+        self.service.save_account("owner", "jay@example.com", {"services": ["gmail", "drive"]})
 
     def enroll(self, key="first", **body):
         return self.service.enroll("owner", "jay@example.com", key, "session", body)
@@ -195,16 +195,14 @@ class AccountLifecycleTests(unittest.TestCase):
         self.assertEqual("failed", projected["latest_operation"]["status"])
         self.assertNotEqual(op["id"], self.enroll(key="new")["id"])
 
-    def test_project_confirmation_is_revision_bound_and_selection_survives_import(self):
-        old_revision = self.store.get("CLIENT#project-one")["revision"]
-        self.service.save_client("owner", "project-one", {"web": {"client_id": "new", "client_secret": "secret",
-            "project_id": "project-one", "redirect_uris": [self.service.callback_url]}})
+    def test_application_confirmation_is_revision_bound_and_new_import_clears_review(self):
+        old_revision = self.store.get("CLIENT#gogcli-proxy")["revision"]
+        self.service.import_client( {"web": {"client_id": "new", "client_secret": "secret",
+            "project_id": "gogcli-proxy", "redirect_uris": [self.service.callback_url]}})
         with self.assertRaises(WorkflowError) as failed:
-            self.service.update_project("owner", "project-one", {"clientRevision": old_revision, "publishingConfirmed": True})
+            self.service.review_application( {"clientRevision": old_revision, "publishingStatus": "production"})
         self.assertEqual("project_revision_changed", failed.exception.code)
-        self.service.update_setup("owner", {"defaultProjectId": "project-two"})
-        self.assertEqual("project-two", self.service.setup("owner")["defaultProjectId"])
-        self.assertFalse(next(p for p in self.service.setup("owner")["projects"] if p["projectId"] == "project-one")["publishingConfirmed"])
+        self.assertEqual({}, self.service.setup("owner")["application"]["apiConfirmed"])
 
     def test_idempotent_enrollment_replays_without_recreating_consent_and_detects_changed_data(self):
         op = self.enroll()

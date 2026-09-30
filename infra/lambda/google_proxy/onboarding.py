@@ -128,14 +128,6 @@ def dispatch(event):
             data = service.setup(owner, session['session_id'])
             data['csrfToken'] = session['csrf']
             return response(200, data)
-        if method == 'PUT':
-            return response(200, service.update_setup(owner, json_body(event)))
-    match = re.fullmatch(r'/onboarding/v1/projects/([a-z][a-z0-9-]{4,61}[a-z0-9])/(oauth-client|setup)', path)
-    if match and method == 'PUT':
-        project, action = match.groups()
-        body = json_body(event)
-        data = service.save_client(owner, project, body) if action == 'oauth-client' else service.update_project(owner, project, body)
-        return response(200, data)
     match = re.fullmatch(r'/onboarding/v1/accounts/([^/]+)(/(enrollments|verifications|recoveries|access|connection))?', path)
     if match:
         email, _, action = match.groups()

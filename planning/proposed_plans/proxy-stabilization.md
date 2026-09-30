@@ -37,17 +37,13 @@ The 2026-09-30 read-only audit established:
 
 Recheck metadata before implementing a cutover. If accounts or callers have appeared since this observation, inspect their actual nonsecret configuration and prepare a specific conversion before changing its semantics. Do not invent a general migration framework for empty state.
 
-### Known accounts and existing projects
+### Historical account context
 
-| Account | Recorded Google project | Recorded client |
-| --- | --- | --- |
-| `jay.jakosky@gmail.com` | `jayj-gogcli-full-access` | Desktop/local |
-| `jay@frunkholdings.ltd` | `jay-fhl-gogcli-full-access` | Desktop/local |
-| `treasurer@longmonttheatre.org` | `gogcli-ltc-treasurer-full` | Desktop/local |
-
-The remaining addresses must come from Jay, preferably through the page's Add accounts interaction. Do not invent five addresses or display five mandatory empty forms.
-
-The default is to reuse `jayj-gogcli-full-access` and a hosted Web OAuth client. An External Google application can connect personal Gmail and accounts in different Workspace organizations, subject to those organizations' policies. A new Google project is not required per mailbox. Keep the other recorded project contexts available when an organization actually requires another client.
+Three accounts had previous local Desktop-client setups. That observation did
+not prove remote connectivity. The project-selection and application-setup
+instructions in this plan are superseded by
+[single-project-account-connections.md](single-project-account-connections.md).
+All new consent uses gogcli-proxy; saved account records are authoritative.
 
 ### Retained architecture and defaults
 
@@ -77,7 +73,7 @@ Production verification reads only. It sends no mail and creates, modifies, shar
 7. Reconnect or delayed workers cannot restore access that the owner has withdrawn.
 8. A successful verifier read proves that verifier's named checks at that time. Actual caller readiness is proved using that caller's requests.
 9. Browser/API/CLI errors never expose Google tokens, secrets, cookies, OAuth codes, or consent URLs.
-10. The page uses observed facts and saved project context; user confirmations remain labeled as confirmations.
+10. The page uses observed facts and saved application context; user confirmations remain labeled as confirmations.
 
 ## 4. Authorization repair
 
@@ -162,23 +158,20 @@ Drive upload/download support remains subject to the existing bounds. Check the 
 
 Use the existing DynamoDB table and SSM secret format. Extend the current records rather than add services or a general relational domain model.
 
-### Project records
+### Application records
 
-- Replace the single global `CLIENT` selector with `CLIENT#<project-id>` records containing the current imported Web-client revision and secret reference.
-- Keep the current SSM client-revision secret scheme. Operations pin a client revision when they start.
-- `SETUP` stores the default selected project and shared page preferences; project readiness/publishing confirmations belong to the relevant project/client revision.
-- Account records store their selected project. New accounts use the prepared shared default; choosing an alternate existing project is an advanced account option.
-- Preserve the three historical project names/client types as contextual binding metadata. A Desktop record is not a hosted credential or proof of current Google Console settings.
-- Importing a client requires the selected project and exact hosted callback to match. A client replacement invalidates its associated setup confirmations until reviewed.
-- Save project confirmations on the matching `CLIENT#<project-id>` record through the project setup PUT route. Its body carries the reviewed client revision; a stale revision returns `409`. Incomplete project context may exist without an imported credential, but `configured` requires a valid saved secret reference and revision. Consent is gated server-side on the current revision's publishing confirmation, not only by a disabled browser button.
-- `setup()` must honor the selected project, not let a previously imported global client silently override it.
+Reuse `CLIENT#gogcli-proxy` with immutable encrypted revisions. Operations pin
+client provenance. Operator provisioning validates the canonical project and
+permanent callback, and binds API/publishing review to that revision. The earlier
+catalog/default/selection design is obsolete; follow the current singular-app
+plan and operator runbook.
 
 ### Account records
 
 Keep `ACCOUNT#<normalized-email>`. Store these independent facts:
 
 - Email and verified Google subject.
-- Selected project and installed client/credential revision.
+- Installed application provenance and client/credential revision.
 - Installed selected services and actual granted scopes.
 - Installed connection state: `not_connected`, `connected`, `needs_attention`, `disconnecting`, or `disconnected`.
 - Explicit desired access for the configured owner caller.
@@ -228,7 +221,7 @@ stateDiagram-v2
 
 Use `binding.client_role_arn` throughout infrastructure, Lambda environment, and worker behavior. Delete the hardcoded Developer ARN in worker code.
 
-The account page exposes **Allow my tools to use this account** for that configured principal. For new accounts it is checked with an explicit explanation of the selected services; the action is labeled **Connect and enable my tools**. The owner can uncheck it to save only the Google connection. Capture that intent in durable state. Reconnect preserves the current setting and must not silently regrant access.
+The account page explains that Connect enables the configured owner, except where a saved access pause already exists. Capture intent in durable state. Reconnect preserves saved access, and pause/resume uses the separate account action.
 
 Turning it off removes the email from the configured caller's existing allowlist. It keeps the Google connection available to the owner and the limited connection verifier. Turning it on requires an installed connection and explicitly adds that email. This is a control for the existing configured owner identity, not a general consumer-management dashboard.
 
@@ -257,11 +250,8 @@ Update the existing OpenAPI 3.1 document before implementation. Keep owner sessi
 
 | Audience | Method and path | Behavior |
 | --- | --- | --- |
-| Owner | `GET /onboarding/v1/setup` | Project context, setup confirmations, account projections, selected services, safe latest-operation summaries, and CSRF token |
-| Owner | `PUT /onboarding/v1/setup` | Save shared preferences/default project; no side effect of replacing the account list |
-| Owner | `PUT /onboarding/v1/projects/{projectId}/oauth-client` | Validate/import a Web client for that project; no secret values in response |
-| Owner | `PUT /onboarding/v1/projects/{projectId}/setup` | Save reviewed setup/publishing confirmations with an exact current client-revision precondition |
-| Owner | `PUT /onboarding/v1/accounts/{email}` | Idempotently add/update a saved account's project and initial service choices; never change installed credentials implicitly |
+| Owner | `GET /onboarding/v1/setup` | Application identity/readiness, account projections, selected services, safe latest-operation summaries, and CSRF token |
+| Owner | `PUT /onboarding/v1/accounts/{email}` | Idempotently add/update a saved account's service choices; never change installed credentials implicitly |
 | Owner | `POST /onboarding/v1/accounts/{email}/enrollments` | Start a fresh connection or reconnect operation; initial selected services and explicit owner-access intent form the fingerprint |
 | Owner | `POST /onboarding/v1/accounts/{email}/verifications` | Check installed selected services without repeating consent; fresh durable operation |
 | Owner | `POST /onboarding/v1/accounts/{email}/recoveries` | Resume usable saved authorization from the latest failed attempt in a fresh durable operation; otherwise report fresh consent required |
@@ -272,7 +262,7 @@ Update the existing OpenAPI 3.1 document before implementation. Keep owner sessi
 
 Incomplete mutations return `202` and `Location`; immediate created account metadata returns `201`, existing metadata updates return `200`, and an already completed deletion may return `204`. Owner POST commands require idempotency keys. PUT and DELETE reuse a pending operation for the same desired state. Ordinary competing enrollment or configuration changes return a precise conflict. Access-disable and disconnect are exceptions: accept their restrictive desired state immediately, supersede/fence active enrollment intent, and reconcile effects under the account lease. Final promotion writes to metadata require the current account generation/desired state; an old worker cannot report a connection over an accepted disconnect. Operation responses name the stable target account.
 
-The existing operation-based retry/attempt mutation routes and global OAuth-client route become obsolete once the page switches to account/project routes. Since there are no external clients or saved enrollment records in the observed deployment, replace them together and remove obsolete routes/docs. Retain only the operation GET resource and the existing callback protocol. Reassess this assumption if the preflight inventory changes.
+The existing operation-based retry/attempt mutation routes and global OAuth-client route become obsolete once the page switches to account routes. Since there are no external clients or saved enrollment records in the observed deployment, replace them together and remove obsolete routes/docs. Retain only the operation GET resource and the existing callback protocol. Reassess this assumption if the preflight inventory changes.
 
 ### Caller inventory
 
@@ -291,31 +281,27 @@ Reuse the static HTML/CSS/JavaScript page; no framework or new frontend applicat
 ### Returning-user landing view
 
 - Heading: connect and manage Google accounts.
-- Show the three recognized historical accounts as previous setups awaiting a remote connection, unless remote records establish another state.
+- Show persisted account records and their observed connection state.
 - Show saved accounts and per-service status first. Display the count actually connected, with a target of eight initially; allow more than eight.
 - Provide one Add accounts interaction accepting a single email or pasted comma/newline-separated emails. Validate new entries locally before saving. A bad draft must not block status refresh or work on another account.
-- Each account has one primary next action: prepare Google setup, connect, continue/restart consent, check saved connection, or resolve a specific problem.
+- Each account has one primary next action: connect, continue/restart consent, check saved connection, or resolve a specific problem.
 - Place reconnect, caller-access removal, and disconnect under secondary account actions. Connected accounts do not lead with Reconnect.
 
-### Google setup guide
+### Application provisioning
 
-- Use the selected existing project and exact project-scoped Google Console links.
-- Explain that this shared application can connect accounts from different organizations; an organization's administrator may still restrict it.
-- Guide one task at a time: enable selected APIs; review audience/branding/data access; prepare a Web client; register the exact callback; upload the downloaded JSON.
-- Explain that the historical Desktop client served local software and cannot supply the hosted callback configuration.
-- Distinguish imported configuration, user-confirmed Google settings, and verified service access. Do not infer API enablement, publishing, or administrator approval from the credential JSON.
-- Review External/production publishing for durable use. If Google reports a policy block, show the actual client identifier and requested scopes with copyable administrator instructions. Do not automatically send messages.
-- Keep alternate recorded projects under an advanced choice. Do not require Jay to understand OAuth architecture to connect the next account.
+Application configuration is operator-owned and account users connect through
+one application. Follow the current [operator runbook](../../infra/README.md#configure-the-google-application).
+Do not infer API enablement, publishing, or administrator approval from JSON.
 
 ### Interruption and recovery
 
-- Save complete account/project choices before redirecting to Google.
+- Save complete account service choices before redirecting to Google.
 - Reload saved progress on return, page focus, or explicit refresh without first submitting unrelated drafts.
 - Reset dirty state after a successful save; unsaved drafts stay local and are clearly distinguishable.
 - Show which account is waiting at Google. If no callback arrives, provide a restart action and expiry explanation; do not show an indefinite unexplained spinner.
 - After callback, show per-service checks with a reasonable time estimate and allow starting another account while verification runs.
 - Expired owner sessions lead back to owner login and a fresh bound consent attempt where necessary. Never ask Jay to paste an OAuth callback URL, code, or secret into chat.
-- Failed checks offer the smallest applicable recovery: retry the saved connection, complete Google setup, approve the correct account/services, or reconnect only when durable authorization is unavailable.
+- Failed checks offer the smallest applicable recovery: retry the saved connection, contact the operator about readiness, approve the correct account/services, or reconnect only when durable authorization is unavailable.
 
 Keep AWS signing, SSM, API-key retrieval, and SDK details in advanced integration instructions. The main account flow uses concrete language about accounts, services, permission, and next actions.
 
@@ -395,8 +381,8 @@ Use Red → Green → Refactor for the behavioral repairs below. Prefer current 
 
 - Gmail-only, Drive-only, and combined consent request/validate the intended scopes and probes.
 - Wrong account, missing permissions, canceled/expired consent, and callback replay preserve installed credentials.
-- Existing Desktop project metadata does not count as a configured hosted client or remote account.
-- Switching/importing projects selects the correct client and cannot reuse another project's publishing confirmation.
+- Historical local client metadata does not count as a hosted connection.
+- Replacing a client cannot reuse an earlier revision's API/publishing confirmations.
 - Two concurrent enrollments for the same account cannot install competing candidates; different accounts can progress independently.
 - Old OP deletion and delayed TTL cleanup do not break account reconnect, verification, disconnect, or idempotency replay.
 - A failed reconnect leaves the installed revision/service evidence visible.
@@ -459,16 +445,16 @@ If a rollout fails, pause new enrollment and restore a reviewed compatible versi
 ### Connect and prove actual use
 
 1. Open the owner page and start with `jay.jakosky@gmail.com`.
-2. Use its existing project, review current Google settings, and import a suitable Web client. Jay completes any required Google login/consent. The agent does not request secret/callback pastes into chat.
+2. The operator provisions the canonical application through the current runbook; Jay chooses Connect and completes Google consent. The agent does not request secret/callback pastes into chat.
 3. Observe candidate validation, durable installation, and per-service verifier reads.
 4. Configure/build this fork and use the actual owner caller identity to run signed inventory plus minimal Gmail and Drive reads. Gmail reads profile and at most one message ID; Drive reads account identity and at most one file ID. Empty collections pass. Fetch no message bodies, attachments, or file contents for acceptance.
 5. Use an explicitly unlisted synthetic address such as `proxy-deny-probe@example.invalid` for a signed read and require the proxy's account-authorization denial before Google is called. Separately use the connected account for a read route outside the configured Gmail/Drive policy, such as Calendar calendar-list, and require `policy_denied` if IAM permits invocation; an earlier API Gateway IAM denial establishes only that outer boundary. If IAM blocks the request first, report that distinction and rely on the handler contract test for the inner policy result. These checks change no production permissions. Offline tests cover mutation denials and destructive lifecycle cases.
-6. Add the other known accounts, then the remaining addresses Jay supplies. Reuse the shared prepared Google application unless an observed organization constraint requires one of the alternate project configurations.
-7. For each account, record project, selected service authorization, last verifier result, actual caller result, and any specific remaining user/admin step. Record no Google data or secret values.
+6. Add the other known accounts, then the remaining addresses Jay supplies. Use the canonical gogcli-proxy application; resolve organization approval with its administrator.
+7. For each account, record canonical provenance, selected service authorization, last verifier result, actual caller result, and any specific remaining user/admin step. Record no Google data or secret values.
 
 Keep these published URLs available directly:
 
-- Setup: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/`
+- Account connections: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/`
 - Proxy: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/`
 - Google callback: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback`
 - Owner callback: `https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/auth/callback`

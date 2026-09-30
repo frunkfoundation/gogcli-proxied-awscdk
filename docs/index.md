@@ -33,7 +33,7 @@ transfer is outside this deployment's contract.
 ## Documentation
 
 - [Quickstart](quickstart.md): build, connect, configure, and check.
-- [Account connections](account-onboarding.md): Google setup, recovery, and removal.
+- [Account connections](account-onboarding.md): Connect accounts, recover connections, and remove access.
 - [Managed authentication](auth-clients.md): Google authorization and caller access.
 - [Infrastructure](https://github.com/Frunk-Foundation/gogcli-proxied-awscdk/blob/main/infra/README.md): exact deployment bindings and policies.
 - [Safety profiles](safety-profiles.md): local restrictions in addition to proxy policy.

@@ -1,9 +1,8 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const apiBase = new URL('v1/', new URL('./', location.href));
-let snapshot, csrfToken = '', loading = false, pollTimer;
-const drafts = new Map(), pending = new Set(), keys = new Map();
-let projectDirty = false, reviewedProjectRevision = '';
+let snapshot, csrfToken = '', loading = false, pollTimer, callbackFocused = false;
+const drafts = new Map(), pending = new Set(), keys = new Map(), order = [];
 function message(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle('error', error); }
 function element(tag, text, parent) { const node = document.createElement(tag); if (text) node.textContent = text; if (parent) parent.append(node); return node; }
 async function request(route, method = 'GET', body, headers = {}) {
@@ -14,217 +13,126 @@ async function request(route, method = 'GET', body, headers = {}) {
   if (response.status === 401) {
     $('guide').hidden = true;
     if (data.loginUrl) { const url = new URL(data.loginUrl, location.href); if (url.origin === location.origin) { $('loginLink').href = url.href; $('loginLink').hidden = false; } }
-    throw new Error('Your session ended. Sign in again.');
+    throw new Error('Your session ended. Sign in again to return to your account progress.');
   }
   if (!response.ok) throw new Error(data.detail || data.error?.message || data.message || 'Request failed. Try again.');
   return data;
 }
-const project = () => snapshot.projects.find(item => item.projectId === $('projectId').value);
 const accountRoute = email => 'accounts/' + encodeURIComponent(email);
-const accountServices = account => [...new Set([...(account.requested_services || ['gmail', 'drive']), ...(account.services || []).map(service => service.name)])];
-const canContinue = operation => operation?.phase === 'authorizing' && operation.consent_session_matches === true && operation.continuation_key && operation.continuation_request && operation.consent_expires_at * 1000 > Date.now();
-const active = operation => operation && ['accepted', 'running', 'applying'].includes(operation.status);
+const installedServices = account => (account.services || []).map(service => service.name);
+const accountServices = account => [...new Set([...(account.requested_services || ['gmail', 'drive']), ...installedServices(account)])];
+const canContinue = op => op?.phase === 'authorizing' && op.consent_session_matches === true && op.continuation_key && op.continuation_request && op.consent_expires_at * 1000 > Date.now();
+const active = op => op && ['accepted', 'running', 'applying'].includes(op.status);
+const installed = account => ['connected', 'needs_attention'].includes(account.connection_status);
 const time = value => value ? new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString() : 'not checked';
-function choices(select, selected) {
-  snapshot.projects.forEach(item => { const option = element('option', item.projectId, select); option.value = item.projectId; }); select.value = selected;
-}
-function requiredServices(saved) {
-  const accounts = snapshot.accounts.map(draftFor).filter(draft => draft.projectId === saved.projectId);
-  return accounts.length ? [...new Set(accounts.flatMap(draft => draft.services))] : snapshot.accounts.length ? [...new Set(snapshot.accounts.flatMap(accountServices))] : ['gmail', 'drive'];
-}
 const serviceLabels = names => names.map(name => snapshot.serviceOptions.find(service => service.name === name)?.label || name).join(' and ');
-const missingAPIs = saved => requiredServices(saved).filter(name => saved.apiConfirmed?.[name] !== true);
-function setupStatus(saved) {
-  if (!saved.clientConfigured) return 'Upload a Web client in step 3, then review APIs in step 4 before connecting accounts.';
-  const missing = missingAPIs(saved);
-  return missing.length ? 'Confirm ' + serviceLabels(missing) + ' API access in step 4 and save before connecting accounts.' : 'Google setup complete. Next: connect your accounts.';
-}
-function connectionTarget() {
-  return [...$('accounts').querySelectorAll('.connect-account')].find(node => !node.disabled && node.dataset.project === $('projectId').value);
-}
-function renderSetupStatus() {
-  const saved = project(); if (!saved) return;
-  const ready = saved.clientConfigured && !missingAPIs(saved).length;
-  message('credentialStatus', setupStatus(saved));
-  $('projectId').disabled = pending.has('shared-app');
-  $('addAccountsForm').querySelectorAll('textarea, button').forEach(control => { control.disabled = pending.has('shared-app'); });
-  $('connectAccounts').disabled = !ready || !connectionTarget();
-  const allServices = snapshot.accounts.length ? [...new Set(snapshot.accounts.flatMap(accountServices))] : requiredServices(saved);
-  const missing = allServices.filter(name => saved.apiConfirmed?.[name] !== true);
-  $('saveDefault').disabled = !saved.clientConfigured || missing.length > 0 || pending.has('shared-app');
-  message('appChoiceStatus', !saved.clientConfigured ? 'Upload the Web client in Application settings first.' : missing.length ? 'Review and save ' + serviceLabels(missing) + ' API access in Application settings before applying this app to all accounts.' : 'Apply this app to existing and new accounts. Service choices and installed connections are preserved; each account approves fresh Google consent.');
-  message('connectStatus', !ready ? setupStatus(saved) : connectionTarget() ? 'Next: choose an account below to start Google consent.' : snapshot.accounts.length ? 'No accounts are ready for new Google consent in this project. Review their connection status and options in step 5.' : 'Add an account in step 5 to start Google consent.');
-}
-function renderProject() {
-  const saved = project(); if (!saved) return; reviewedProjectRevision = saved.clientRevision;
-  $('appName').value = saved.projectId; $('webClientName').value = saved.projectId + ' web client';
-  $('testUserEmails').textContent = snapshot.accounts.map(account => account.email).join(', ');
-  message('projectSaveStatus', '');
-  $('publishingConfirmed').checked = saved.publishingConfirmed === true;
-  $('apiLinks').replaceChildren(); $('apiConfirmations').replaceChildren(); $('serviceDescriptions').replaceChildren();
-  snapshot.serviceOptions.forEach(service => {
-    const link = element('a', 'Open ' + service.label + ' API ↗', $('apiLinks')); link.dataset.console = 'https://console.cloud.google.com/apis/library/' + service.apiName; link.target = '_blank'; link.rel = 'noopener noreferrer';
-    const label = element('label', '', $('apiConfirmations')); label.className = 'check';
-    const input = element('input', '', label); input.type = 'checkbox'; input.dataset.service = service.name; input.checked = saved.apiConfirmed?.[service.name] === true;
-    label.append(document.createTextNode(service.label + ' API is enabled')); input.addEventListener('change', markProjectDirty);
-    element('li', service.scope + ' (' + service.label + ')', $('serviceDescriptions'));
-  });
-  element('li', 'openid, email', $('serviceDescriptions'));
-  document.querySelectorAll('[data-console]').forEach(link => { const url = new URL(link.dataset.console); url.searchParams.set('project', saved.projectId); link.href = url.href; });
-  $('saveProject').disabled = !saved.clientConfigured;
-  $('adminInstructions').textContent = 'Please allow Google OAuth client ' + (saved.clientId || '(upload the client JSON first)') + ' in project ' + saved.projectId + ' with scopes: ' + snapshot.serviceOptions.map(service => service.scope).join(', ') + ', openid, email.';
-  projectDirty = false;
-  renderSetupStatus();
-}
-function openNextStep() { const saved = project(); $('appSettings').open = !saved?.clientConfigured || missingAPIs(saved).length > 0; if ($('appSettings').open) $(saved?.clientConfigured ? 'confirmStep' : 'clientStep').open = true; }
-function markProjectDirty() { projectDirty = true; message('projectSaveStatus', 'Unsaved changes.'); }
 function draftFor(account) {
-  if (!drafts.has(account.email)) drafts.set(account.email, { projectId: account.selected_project_id || snapshot.defaultProjectId,
-    services: accountServices(account), ownerAccessEnabled: account.owner_access_enabled !== false, dirty: false });
+  if (!drafts.has(account.email)) drafts.set(account.email, { services: accountServices(account), dirty: false });
   return drafts.get(account.email);
 }
-function operationText(operation) {
-  const phases = { preparing_consent: 'Preparing Google consent…', preparing_recovery: 'Resuming saved authorization…', checking_candidate: 'Checking authorization…', applying_access: 'Applying access change…', removing: 'Disconnecting…', propagating: 'Access change saved.', disconnected: 'Disconnected.', failed: 'Failed.', canceled: 'Canceled.', authorizing: 'Waiting for Google consent.', validating: 'Checking permissions…', exchanging: 'Receiving Google authorization…', pending_promotion: 'Saving connection…', verifying: 'Checking each selected service (1–2 minutes)…', applying: 'Removing access…', disconnecting: 'Disconnecting…', ready: 'Done.' };
-  const failures = { identity_mismatch: 'Choose this exact Google account when restarting consent.', missing_service_permission: 'Approve every selected service when restarting consent.', refresh_required: 'Reconnect this account.', broad_allowlist_requires_operator: 'An operator must narrow the caller allowlist before this account can be removed.', consent_expired: 'Consent expired. Restart Google consent.', project_setup_required: 'Finish Google setup below.', managed_policy_conflict: 'An operator must reconcile this account’s service policy before enrollment can proceed.', consent_denied: 'Google consent was canceled.', provider_unavailable: 'The service check failed. Try again.' };
-  const hint = failures[operation.error_code] || operation.recovery || operation.error_code;
-  return (phases[operation.phase] || operation.phase || operation.status) + (hint ? ' ' + hint : '') + (operation.propagation_complete_at * 1000 > Date.now() ? ' Takes effect by ' + time(operation.propagation_complete_at) + '.' : '');
+function operationText(op, email) {
+  const phases = { preparing_consent: 'Preparing Google consent…', preparing_recovery: 'Resuming saved authorization…', checking_candidate: 'Checking connection…', applying_access: 'Applying tool access change…', removing: 'Disconnecting…', propagating: 'Applying access change…', disconnected: 'Disconnected.', failed: 'Last attempt failed.', canceled: 'Consent canceled.', authorizing: 'Waiting for Google approval.', validating: 'Checking connection…', exchanging: 'Receiving Google authorization…', pending_promotion: 'Saving connection…', verifying: 'Checking connection…', applying: 'Removing access…', disconnecting: 'Disconnecting…', ready: 'Connection check complete.' };
+  const failures = { identity_mismatch: 'Choose ' + email + ' at Google, then approve the selected services.', missing_service_permission: 'Approve every selected service when restarting Google consent.', refresh_required: 'Reconnect this account.', broad_allowlist_requires_operator: 'Contact the operator to narrow the caller allowlist, then retry.', consent_expired: 'Consent expired. Restart Google consent.', application_setup_required: 'gogcli-proxy is not ready to connect this account. Contact the operator, then retry.', managed_policy_conflict: 'Contact the operator to reconcile this account’s service policy, then retry.', consent_denied: 'Google consent was canceled. Restart Google consent.', workspace_restricted: 'This account’s Workspace administrator must approve gogcli-proxy. Contact the administrator, then restart consent.', api_disabled: 'gogcli-proxy is not ready for this service. Contact the operator, then retry.', provider_unavailable: 'The connection check failed. Retry the saved authorization if available.' };
+  return (phases[op.phase] || op.phase || op.status) + (op.error_code ? ' ' + (failures[op.error_code] || op.recovery || 'Retry, or contact the operator if the problem continues.') : '') + (op.propagation_complete_at * 1000 > Date.now() ? ' Takes effect by ' + time(op.propagation_complete_at) + '.' : '');
+}
+function primaryFor(account, draft) {
+  const op = account.latest_operation, additions = draft.services.filter(name => !installedServices(account).includes(name));
+  if (active(op) && op.phase !== 'authorizing') return { text: operationText(op, account.email), disabled: true };
+  if (op?.phase === 'authorizing') return { text: canContinue(op) ? 'Continue Google consent' : 'Restart Google consent', action: 'enrollments' };
+  if (account.recovery_available) return { text: 'Retry connection', action: 'recoveries' };
+  if (!installed(account)) return { text: 'Connect', action: 'enrollments' };
+  if (!account.uses_current_app || account.connection_status === 'needs_attention') return { text: 'Reconnect', action: 'enrollments' };
+  if (additions.length) return { text: 'Reconnect to add ' + serviceLabels(additions), action: 'enrollments' };
+  return { text: 'Check connection', action: 'verifications' };
+}
+function renderAccount(account, row, index) {
+  const draft = draftFor(account), op = account.latest_operation, primary = primaryFor(account, draft), hasInstalled = installed(account);
+  const open = row.querySelector('details')?.open; row.replaceChildren();
+  element('h3', account.email, row);
+  let state = hasInstalled ? account.uses_current_app ? account.connection_status === 'connected' ? 'Connected' : 'Reconnect required' : 'Reconnect required for gogcli-proxy' : 'Not connected';
+  if (active(op)) state = op.phase === 'authorizing' ? 'Waiting for Google approval' : primary.text;
+  else if (account.recovery_available) state = 'Connection check needs retry';
+  element('p', state, row);
+  if (hasInstalled && !account.uses_current_app) element('p', account.connection_status === 'connected' ? 'Your existing connection still works. It stays available until the replacement succeeds.' : 'Your existing connection is retained and needs repair. Reconnect to replace its authorization.', row);
+  element('p', 'Tool access: ' + (active(op) && ['access', 'disconnect'].includes(op.kind) ? 'applying change…' : account.owner_access_enabled === false ? 'paused' : account.owner_access_enabled && hasInstalled ? 'enabled' : 'available after connection'), row);
+  element('p', 'Connected services: ' + (installedServices(account).length ? serviceLabels(installedServices(account)) : 'none'), row);
+  (account.services || []).forEach(service => element('p', serviceLabels([service.name]) + ': ' + (service.authorization_status === 'granted' ? 'authorized' : service.authorization_status) + ' · last check ' + (service.last_verification_status === 'succeeded' ? 'passed' : (service.last_verification_status || 'not checked').replaceAll('_', ' ')) + ' · ' + time(service.last_verified_at), row).className = 'small');
+  if (op?.phase === 'authorizing' && !canContinue(op)) element('p', op.consent_expires_at * 1000 <= Date.now() ? 'Google consent expired. Restart to get a new approval link.' : 'Google consent cannot continue in this owner session. Restart Google consent.', row);
+  if (op) element('p', (hasInstalled && op.status === 'failed' && op.kind === 'enrollment' ? 'Last reconnect failed. ' : '') + operationText(op, account.email), row).className = 'small';
+  const status = element('p', draft.dirty ? 'Service choices will be saved when you connect.' : '', row); status.id = 'account-status-' + index; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.tabIndex = -1;
+  const fields = element('fieldset', '', row); element('legend', 'Services', fields);
+  snapshot.serviceOptions.forEach(service => {
+    const label = element('label', '', fields); label.className = 'check'; const input = element('input', '', label); input.type = 'checkbox'; input.checked = draft.services.includes(service.name); input.dataset.service = service.name; input.dataset.focus = service.name;
+    input.disabled = installedServices(account).includes(service.name) || pending.has(account.email) || active(op);
+    label.append(document.createTextNode(service.label + ' — ' + service.description));
+    input.addEventListener('change', () => { draft.services = [...fields.querySelectorAll('input:checked')].map(item => item.dataset.service); draft.dirty = true; renderAccounts(); });
+  });
+  const needsReady = primary.action === 'enrollments' && !canContinue(op) && (!snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]));
+  if (needsReady) status.textContent = 'gogcli-proxy is not ready to connect this account' + (draft.services.some(name => !snapshot.application.apiConfirmed?.[name]) ? ' for ' + serviceLabels(draft.services.filter(name => !snapshot.application.apiConfirmed?.[name])) : '') + '. Contact the operator, then retry.';
+  if (primary.action === 'enrollments') element('p', 'Choose this account at Google and approve the selected services. ' + (account.owner_access_enabled === false ? 'Tool access will remain paused.' : 'Connecting enables access for your authorized tools.'), row);
+  const main = button(row, primary.text, () => act(account, primary.action, status)); main.dataset.focus = 'primary'; main.className = primary.action === 'enrollments' ? 'connect-account' : ''; main.disabled = primary.disabled || needsReady || pending.has(account.email);
+  const options = element('details', '', row); options.open = !!open; element('summary', 'Connection options', options).dataset.focus = 'options';
+  if (hasInstalled) {
+    element('p', 'Installed services stay selected. Reconnect can add services; contact the operator to change service restrictions.', options).className = 'small';
+    button(options, 'Check connection', () => act(account, 'verifications', status)).disabled = active(op);
+    const reconnect = button(options, 'Reconnect', () => act(account, 'enrollments', status, true)); reconnect.disabled = active(op) || !snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]);
+    const access = button(options, account.owner_access_enabled === false ? 'Resume tool access' : 'Pause tool access', () => act(account, 'access', status)); access.dataset.restrictive = account.owner_access_enabled === false ? '' : 'true'; access.disabled = active(op) && account.owner_access_enabled === false;
+    const disconnect = button(options, 'Disconnect', () => { if (confirm('Disconnect ' + account.email + '? Your Google data is not affected.')) act(account, 'connection', status); }); disconnect.dataset.restrictive = op?.kind === 'disconnect' && active(op) ? '' : 'true';
+    const google = element('a', 'Revoke at Google ↗', options); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer';
+  }
+  if (op?.phase === 'authorizing') button(options, 'Restart Google consent', () => act(account, 'enrollments', status, true)).disabled = !snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]);
+  if (options.children.length === 1) options.remove();
+  options.querySelectorAll('button').forEach((control, number) => { control.dataset.focus = 'option-' + number; if (pending.has(account.email) || active(op) && op.phase !== 'authorizing' && control.dataset.restrictive !== 'true') control.disabled = true; });
 }
 function renderAccounts() {
-  const openOptions = new Set([...$('accounts').querySelectorAll('details[open]')].map(node => node.closest('.account').dataset.email));
-  $('accounts').replaceChildren();
-  message('connectedCount', snapshot.accounts.filter(account => account.connection_status === 'connected').length + ' of ' + snapshot.accounts.length + ' connected');
-  snapshot.accounts.forEach((account, index) => {
-    const draft = draftFor(account), installed = ['connected', 'needs_attention'].includes(account.connection_status), op = account.latest_operation;
-    const row = element('article', '', $('accounts')); row.className = 'account'; row.dataset.email = account.email;
-    element('h3', account.email, row); element('p', 'Status: ' + account.connection_status.replaceAll('_', ' ') + (account.installed_project_id ? ' · ' + account.installed_project_id : ''), row);
-    (account.services || []).forEach(service => element('p', (snapshot.serviceOptions.find(item => item.name === service.name)?.label || service.name) + ': ' + (service.authorization_status === 'granted' ? 'granted' : service.authorization_status) + ' · last check ' + (service.last_verification_status === 'succeeded' ? 'passed' : (service.last_verification_status || 'not checked').replaceAll('_', ' ')) + ' · ' + time(service.last_verified_at), row));
-    if (op) element('p', 'Latest attempt: ' + operationText(op), row).className = 'small';
-    const status = element('p', draft.dirty ? 'Unsaved changes.' : '', row); status.id = 'account-status-' + index; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-    const fields = element('fieldset', '', row); element('legend', 'Services', fields);
-    snapshot.serviceOptions.forEach(service => {
-      const label = element('label', '', fields); label.className = 'check'; const input = element('input', '', label); input.type = 'checkbox'; input.checked = draft.services.includes(service.name);
-      input.disabled = installed && (account.services || []).some(item => item.name === service.name);
-      label.append(document.createTextNode(service.label + ' — ' + service.description)); input.addEventListener('change', () => { draft.services = [...fields.querySelectorAll('input:checked')].map(item => item.dataset.service); draft.dirty = true; renderAccounts(); $('accounts').children[index].querySelector('[data-service="' + service.name + '"]').focus(); }); input.dataset.service = service.name;
-    });
-    if (!installed) {
-      const label = element('label', '', row); label.className = 'check'; const input = element('input', '', label); input.type = 'checkbox'; input.className = 'owner-access'; input.checked = draft.ownerAccessEnabled;
-      label.append(document.createTextNode('Allow my tools to use this account')); input.addEventListener('change', () => { draft.ownerAccessEnabled = input.checked; draft.dirty = true; renderAccounts(); $('accounts').children[index].querySelector('.owner-access').focus(); });
-    } else element('p', 'My tools: ' + (active(op) && op.kind === 'access' ? account.owner_access_enabled ? 'enabling…' : 'removing…' : account.owner_access_enabled ? 'enabled' : 'off'), row);
-    const selected = snapshot.projects.find(item => item.projectId === draft.projectId);
-    const differentApp = installed && account.installed_project_id && draft.projectId !== account.installed_project_id;
-    const changingApp = differentApp && !account.recovery_available;
-    const needsSetup = !selected?.clientConfigured || draft.services.some(name => !selected?.apiConfirmed?.[name]);
-    const prepare = needsSetup && (!installed || changingApp || op?.phase === 'authorizing') && !account.recovery_available && !canContinue(op);
-    if (prepare) status.textContent = 'Complete Google setup above for this project. ' + setupStatus(selected || { projectId: draft.projectId });
-    const primary = element('button', op?.phase === 'authorizing' ? canContinue(op) ? 'Continue Google consent' : 'Restart Google consent' : account.recovery_available ? 'Retry saved authorization' : changingApp ? 'Connect with selected app' : installed ? 'Check saved connection' : draft.ownerAccessEnabled ? 'Connect and enable my tools' : 'Connect Google only', row); primary.type = 'button'; primary.disabled = prepare || pending.has(account.email) || (active(op) && op.phase !== 'authorizing');
-    if (op?.phase === 'authorizing' || changingApp || (!installed && !account.recovery_available)) { primary.className = 'connect-account'; primary.dataset.project = draft.projectId; }
-    primary.addEventListener('click', () => act(account, op?.phase === 'authorizing' ? 'enrollments' : account.recovery_available ? 'recoveries' : changingApp ? 'enrollments' : installed ? 'verifications' : 'enrollments', status));
-    const secondary = element('details', '', row); secondary.open = openOptions.has(account.email); element('summary', installed ? 'Connection options' : 'Advanced options', secondary);
-    const projectLabel = element('label', 'Google project (advanced)', secondary); const select = element('select', '', projectLabel); choices(select, draft.projectId); select.addEventListener('change', () => { draft.projectId = select.value; draft.dirty = true; renderAccounts(); });
-    if (op?.phase === 'authorizing') button(secondary, 'Restart Google consent', () => act(account, 'enrollments', status, true));
-    if (installed) button(secondary, 'Reconnect / add selected service', () => act(account, 'enrollments', status, true));
-    if (account.recovery_available) button(secondary, 'Retry saved authorization', () => act(account, 'recoveries', status));
-    if (installed) button(secondary, account.owner_access_enabled ? 'Remove my tools’ access' : 'Enable my tools’ access', () => act(account, 'access', status));
-    if (installed || account.connection_status === 'disconnecting') button(secondary, 'Disconnect', () => { if (confirm('Disconnect ' + account.email + '? Your Google data is not affected.')) act(account, 'connection', status); });
-    if (installed) { const google = element('a', 'Revoke at Google ↗', secondary); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer'; }
-    if (pending.has('shared-app')) row.querySelectorAll('input, select, button').forEach(control => { control.disabled = true; });
-  });
-  renderSetupStatus();
+  const focused = document.activeElement, email = focused.closest?.('.account')?.dataset.email, focusKey = focused.dataset?.focus;
+  const complete = snapshot.accounts.filter(account => account.uses_current_app && account.connection_status === 'connected' && account.services?.length && account.services.every(service => service.authorization_status === 'granted' && service.last_verification_status === 'succeeded')).length;
+  const previous = snapshot.accounts.filter(account => installed(account) && !account.uses_current_app).length;
+  message('connectedCount', complete + ' of ' + snapshot.accounts.length + ' connected to gogcli-proxy' + (previous ? '; ' + previous + ' existing connection' + (previous === 1 ? '' : 's') + ' awaiting reconnection' : ''));
+  snapshot.accounts.forEach(account => { if (!order.includes(account.email)) order.push(account.email); });
+  for (const savedEmail of order) {
+    const account = snapshot.accounts.find(item => item.email === savedEmail); if (!account) continue;
+    let row = [...$('accounts').children].find(node => node.dataset.email === savedEmail);
+    if (!row) { row = element('article', '', $('accounts')); row.className = 'account'; row.dataset.email = savedEmail; row.tabIndex = -1; }
+    renderAccount(account, row, order.indexOf(savedEmail));
+  }
+  if (email && focusKey) { const row = [...$('accounts').children].find(node => node.dataset.email === email), control = row?.querySelector('[data-focus="' + focusKey + '"]'); (control && !control.disabled ? control : row)?.focus({ preventScroll: true }); }
 }
 function button(parent, text, action) { const node = element('button', text, parent); node.type = 'button'; node.addEventListener('click', action); return node; }
 async function act(account, action, status, restart = false) {
-  if (pending.has(account.email)) return;
+  if (pending.has(account.email) || !action) return;
   pending.add(account.email); status.textContent = 'Saving…';
   try {
-    const draft = draftFor(account), route = accountRoute(account.email), operation = account.latest_operation;
-    const continuing = action === 'enrollments' && !restart && canContinue(operation);
-    if (action === 'enrollments' && !continuing) {
-      if (!draft.services.length) throw new Error('Select at least one service.');
-      if (account.latest_operation?.phase !== 'authorizing') await request(route, 'PUT', { projectId: draft.projectId, services: draft.services });
-    }
+    const draft = draftFor(account), op = account.latest_operation, continuing = action === 'enrollments' && !restart && canContinue(op);
+    if (action === 'enrollments' && !continuing && !draft.services.length) throw new Error('Select at least one service.');
     const method = action === 'connection' ? 'DELETE' : action === 'access' ? 'PUT' : 'POST';
-    const body = action === 'connection' ? undefined : action === 'access' ? { enabled: !account.owner_access_enabled } : action === 'enrollments' ? continuing ? operation.continuation_request : { projectId: draft.projectId, services: draft.services, ownerAccessEnabled: ['connected', 'needs_attention'].includes(account.connection_status) ? account.owner_access_enabled : draft.ownerAccessEnabled, ...(account.latest_operation?.phase === 'authorizing' ? { restart: true } : {}) } : {};
-    const key = account.email + ':' + action + ':' + JSON.stringify(body);
-    if (!keys.has(key)) keys.set(key, crypto.randomUUID());
-    const result = await request(route + '/' + action, method, body, method === 'POST' ? { 'Idempotency-Key': continuing ? operation.continuation_key : keys.get(key) } : {}); keys.delete(key); if (action === 'enrollments' && !continuing) draft.dirty = false;
+    const body = action === 'connection' ? undefined : action === 'access' ? { enabled: account.owner_access_enabled === false } : action === 'enrollments' ? continuing ? op.continuation_request : { services: draft.services, ownerAccessEnabled: account.owner_access_enabled !== false, ...(op?.phase === 'authorizing' ? { restart: true } : {}) } : {};
+    const key = account.email + ':' + action + ':' + JSON.stringify(body); if (!keys.has(key)) keys.set(key, crypto.randomUUID());
+    const result = await request(accountRoute(account.email) + '/' + action, method, body, method === 'POST' ? { 'Idempotency-Key': continuing ? op.continuation_key : keys.get(key) } : {}); keys.delete(key);
     if (result.authorizationUrl) { const url = new URL(result.authorizationUrl); if (url.origin !== 'https://accounts.google.com') throw new Error('Unexpected consent address. Refresh and retry.'); location.assign(url.href); }
-    else { drafts.delete(account.email); await loadSetup(); }
+    else { drafts.delete(account.email); pending.delete(account.email); await loadSetup(); }
   } catch (error) { status.textContent = error.message; status.classList.add('error'); }
   finally { pending.delete(account.email); }
 }
 async function loadSetup() {
   if (loading) return; loading = true; clearTimeout(pollTimer);
   try {
-    const first = !snapshot; snapshot = await request('setup'); csrfToken = snapshot.csrfToken;
-    const selected = $('projectId').value || snapshot.defaultProjectId;
-    $('projectId').replaceChildren(); choices($('projectId'), selected); $('callbackUrl').value = snapshot.callbackUrl;
-    if (!projectDirty) renderProject();
-    if (first) openNextStep();
+    snapshot = await request('setup'); csrfToken = snapshot.csrfToken;
     snapshot.accounts.forEach(account => { if (!drafts.get(account.email)?.dirty && !pending.has(account.email)) drafts.delete(account.email); }); renderAccounts();
     $('guide').hidden = false; $('loginLink').hidden = true; message('pageStatus', '');
-    $('callerIdentity').textContent = snapshot.ownerCallerArn ? '“My tools” means ' + snapshot.ownerCallerArn : '';
-    $('cliConfig').textContent = JSON.stringify({ proxy_base_url: snapshot.proxyUrl, proxy_api_key: '<your API key>', aws_profile: 'krae-jdev-dev-prd' }, null, 2);
+    const operation = new URLSearchParams(location.search).get('operation');
+    if (operation && !callbackFocused) { const account = snapshot.accounts.find(item => item.latest_operation?.id === operation); if (account) { [...$('accounts').children].find(row => row.dataset.email === account.email)?.focus(); callbackFocused = true; } }
     if (snapshot.accounts.some(account => active(account.latest_operation))) pollTimer = setTimeout(loadSetup, 5000);
   } catch (error) { message('pageStatus', error.message, true); }
   finally { loading = false; }
 }
 $('refresh').addEventListener('click', loadSetup);
-$('projectId').addEventListener('change', () => { renderProject(); openNextStep(); });
-$('connectAccounts').addEventListener('click', () => { const target = connectionTarget(); if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); } });
-$('publishingConfirmed').addEventListener('change', markProjectDirty);
-$('saveDefault').addEventListener('click', async () => {
-  if ($('saveDefault').disabled) return;
-  const dirty = snapshot.accounts.filter(account => drafts.get(account.email)?.dirty);
-  if (dirty.length) { message('defaultStatus', 'Save or discard unsaved account changes for ' + dirty.map(account => account.email).join(', ') + '. Finish connecting or reconnecting those accounts to save their changes, or reload this page to discard the drafts before applying this app.', true); return; }
-  const projectId = project().projectId, accounts = [...snapshot.accounts]; let current = 'the default application';
-  pending.add('shared-app'); renderAccounts(); message('defaultStatus', 'Saving application choices…');
-  try {
-    await request('setup', 'PUT', { defaultProjectId: projectId });
-    for (const account of accounts) {
-      if (account.selected_project_id === projectId) continue;
-      current = account.email;
-      await request(accountRoute(account.email), 'PUT', { projectId, services: accountServices(account) });
-      if (!drafts.get(account.email)?.dirty) drafts.delete(account.email);
-    }
-    await loadSetup(); message('defaultStatus', 'Application choices saved. Connect each account with this app to approve Google consent.');
-  } catch (error) { await loadSetup(); message('defaultStatus', 'Could not update ' + current + ': ' + error.message + ' Saved choices remain in effect. Resolve this error, then choose Use this app for all accounts again.', true); }
-  finally { pending.delete('shared-app'); renderAccounts(); }
-});
-$('saveProject').addEventListener('click', async () => {
-  try { const apiConfirmed = {}; $('apiConfirmations').querySelectorAll('input').forEach(input => { apiConfirmed[input.dataset.service] = input.checked; });
-    const missing = requiredServices(project()).filter(name => apiConfirmed[name] !== true);
-    if (missing.length) {
-      message('projectSaveStatus', 'Confirm ' + serviceLabels(missing) + ' API access before saving. Enable the missing APIs in step 1, then check them here.', true);
-      $('appSettings').open = true; $('confirmStep').open = true; $('apiConfirmations').querySelector('[data-service="' + missing[0] + '"]').focus(); return;
-    }
-    await request('projects/' + encodeURIComponent(project().projectId) + '/setup', 'PUT', { clientRevision: reviewedProjectRevision, publishingConfirmed: $('publishingConfirmed').checked, apiConfirmed });
-    projectDirty = false; await loadSetup(); message('projectSaveStatus', setupStatus(project())); openNextStep();
-  } catch (error) { message('projectSaveStatus', error.message, true); }
-});
 $('addAccountsForm').addEventListener('submit', async event => {
   event.preventDefault(); const emails = [...new Set($('newEmails').value.split(/[,\n]+/).map(email => email.trim().toLowerCase()).filter(Boolean))];
   if (!emails.length || emails.some(email => email.length > 254 || !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))) { message('addStatus', 'Enter valid emails separated by commas or new lines.', true); return; }
-  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { projectId: snapshot.defaultProjectId, services: ['gmail', 'drive'] });
+  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { services: ['gmail', 'drive'] });
     $('newEmails').value = ''; message('addStatus', 'Added.'); await loadSetup();
   } catch (error) { message('addStatus', error.message, true); }
-});
-async function copy(value, status, fallback) { try { await navigator.clipboard.writeText(value); message(status, 'Copied.'); } catch (_) { if (fallback) { fallback.focus(); fallback.select(); } message(status, 'Copy failed. Select the text and copy it.'); } }
-$('copyCallback').addEventListener('click', () => copy($('callbackUrl').value, 'copyStatus', $('callbackUrl')));
-for (const [buttonId, inputId, statusId] of [['copyAppName', 'appName', 'appNameStatus'], ['copyWebClientName', 'webClientName', 'webClientNameStatus']]) {
-  $(buttonId).addEventListener('click', () => copy($(inputId).value, statusId, $(inputId)));
-}
-$('copyAdmin').addEventListener('click', () => copy($('adminInstructions').textContent, 'adminStatus'));
-$('credentialsForm').addEventListener('submit', async event => {
-  event.preventDefault(); const file = $('credentialsFile').files[0]; if (!file) return; $('importCredentials').disabled = true;
-  try {
-    if (file.size > 65536) throw new Error('Choose a JSON file smaller than 64 KiB.');
-    let data; try { data = JSON.parse(await file.text()); } catch (_) { throw new Error('Not a valid client JSON file.'); }
-    if (!data?.web || data.installed) throw new Error('Choose a Web application client, not a Desktop client.');
-    if (data.web.project_id !== project().projectId) throw new Error('This client belongs to another project. Select that project above.');
-    if (!data.web.redirect_uris?.includes($('callbackUrl').value)) throw new Error('The client is missing the redirect URI above. Add it, save, and download the JSON again.');
-    await request('projects/' + encodeURIComponent(project().projectId) + '/oauth-client', 'PUT', data); projectDirty = false; await loadSetup(); message('uploadStatus', 'Web client saved. Next: review APIs in step 4.'); $('appSettings').open = true; $('confirmStep').open = true;
-  } catch (error) { message('uploadStatus', error.message, true); }
-  finally { $('importCredentials').disabled = false; $('credentialsFile').value = ''; }
 });
 const recovery = new URLSearchParams(location.search).get('recovery');
 if (recovery) { $('recoveryStatus').hidden = false; $('recoveryStatus').textContent = recovery === 'owner-session-expired' ? 'Your session expired. Sign in, then restart consent for the waiting account.' : 'Google consent did not complete. See the account below.'; }
