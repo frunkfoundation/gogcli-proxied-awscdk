@@ -143,7 +143,7 @@ class InfrastructureContractTests(unittest.TestCase):
         self.assertEqual(application['organization'], variables['GOOGLE_APPLICATION_ORGANIZATION'])
         self.assertNotIn('GOOGLE_EXISTING_PROJECTS', variables)
         self.assertNotIn('GOOGLE_PROJECT_NUMBER', variables)
-        self.assertEqual(set(proxy['Environment']['Variables']['GOG_DEFAULT_SCOPES'].split(',')), {'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/drive'})
+        self.assertEqual(set(proxy['Environment']['Variables']['GOG_DEFAULT_SCOPES'].split(',')), {'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/calendar'})
         self.assertIn('ONBOARDING_TABLE', proxy['Environment']['Variables'])
         self.assertIn('ONBOARDING_SETUP_URL', proxy['Environment']['Variables'])
         outputs = self.template.to_json()['Outputs']
