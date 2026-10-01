@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy — gogcli-proxy</title><link rel="stylesheet" href="style.css">
+</head>
+<body><main>
+  <header><h1>Privacy policy</h1><p>gogcli-proxy · Effective September 30, 2026</p>
+    <p>Operated by K-Rae Collective (kraecollective.com). Contact <a href="mailto:jay@kraecollective.com">jay@kraecollective.com</a> for privacy questions or deletion requests.</p>
+  </header>
+  <section aria-labelledby="information"><h2 id="information">Information accessed and stored</h2>
+    <p>When you connect an account, the service obtains your Google account identity, email address, approved permissions, and OAuth credentials. Credentials let the service maintain the connection without receiving your Google password.</p>
+    <p>Depending on the services you approve, authorized requests may access Gmail messages, drafts, attachments, and labels; Drive files and their metadata; and Calendar calendars, events, and sharing settings. Permissions may also allow changes, sending mail, sharing resources, moving mail to Trash, and deleting Drive or Calendar resources.</p>
+    <p>Google content passes through the proxy to authorized tools. The proxy is not a mailbox, file, or calendar archive. It stores account settings, permission policies, connection and service-check results, and temporary authorization and recovery records. Operational logs may include account email, caller identity, API method and path, request identifiers, and outcome information.</p>
+  </section>
+  <section aria-labelledby="use"><h2 id="use">How information is used and shared</h2>
+    <p>Information is used to connect accounts, enforce access permissions, carry out authorized Google requests, check connections, recover interrupted authorization, and operate and secure the service.</p>
+    <p>Data is exchanged with Google to perform these functions and with tools permitted by the proxy's account and caller policies. Authorized tools may process or retain the content they receive under their own privacy practices. Review those practices before authorizing a tool, including an AI tool.</p>
+    <p>The service runs on Amazon Web Services, which processes stored credentials, account records, and operational data to provide hosting. The operator may access operational records to administer the service and resolve support or security issues.</p>
+    <p>We do not sell Google user data, use it for advertising, or use it to train generalized artificial-intelligence or machine-learning models. Any transfer to another application is limited to providing or improving the user-facing functions described here, subject to applicable Google requirements.</p>
+    <p>gogcli-proxy's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+  </section>
+  <section aria-labelledby="security"><h2 id="security">Security and retention</h2>
+    <p>OAuth credentials are stored encrypted in AWS Systems Manager Parameter Store. The service uses HTTPS and checks authenticated caller and account permissions. Operator sign-in uses a secure session cookie; these public pages use no advertising or analytics scripts.</p>
+    <p>Installed authorization is kept while an account remains connected. Temporary authorization and operation records have expiration and cleanup mechanisms. Account settings, audit records, operational logs, and backups can remain after disconnection for administration, security, or recovery; disconnection does not erase every retained record. Contact the operator to request deletion of retained personal records and discuss any applicable retention needs.</p>
+  </section>
+  <section aria-labelledby="control"><h2 id="control">Your choices and removal of access</h2>
+    <p>Choose services before connecting and approve the permissions at Google. You may decline consent. Adding a service requires additional Google approval. Existing installed permissions cannot be reduced merely by unchecking a box; disconnect and reconnect with the desired services, or ask the operator to restrict tool policies.</p>
+    <p><strong>Pause tool access</strong> withdraws the configured owner's tool access while keeping the connection. <strong>Disconnect</strong> removes the proxy's installed account credentials and connection access through its removal workflow. Previously authorized requests may finish during the bounded propagation interval.</p>
+    <p>Disconnecting the proxy does not revoke Google's consent record. To withdraw the Google grant, remove this application in <a href="https://myaccount.google.com/connections">Google's third-party connections settings</a>. This can affect other connections using the same account and application grant. Data already received by an authorized tool must be handled or deleted through that tool.</p>
+  </section>
+  <section aria-labelledby="changes"><h2 id="changes">Policy updates</h2>
+    <p>Updates are published on this page with a revised effective date. Contact the operator with questions about this policy or a proposed change in how your data is used.</p>
+  </section>
+  <footer><p><a href="about">gogcli-proxy homepage</a> · <a href="./">Connect accounts</a></p></footer>
+</main></body></html>

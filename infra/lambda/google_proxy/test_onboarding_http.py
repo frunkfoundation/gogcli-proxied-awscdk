@@ -46,6 +46,20 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(404, onboarding.handler({'path': '/prd/onboarding/../requirements.txt', 'httpMethod': 'GET'}, None)['statusCode'])
 
 
+    def test_public_home_and_privacy_need_no_session_or_workflow(self):
+        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
+            for route, title in (('about', 'gogcli-proxy'), ('privacy', 'Privacy policy')):
+                with self.subTest(route=route):
+                    result = onboarding.handler({'path': '/prd/onboarding/' + route,
+                        'httpMethod': 'GET'}, None)
+                    self.assertEqual(200, result['statusCode'])
+                    self.assertEqual('text/html', result['headers']['Content-Type'])
+                    self.assertIn(title, result['body'])
+                    self.assertIn('jay@kraecollective.com', result['body'])
+                    self.assertEqual('no-store', result['headers']['Cache-Control'])
+            auth.assert_not_called()
+            service.assert_not_called()
+
     def test_removed_application_mutations_are_not_routes(self):
         with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
             auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}

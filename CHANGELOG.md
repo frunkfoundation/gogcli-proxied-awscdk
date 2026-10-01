@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- OAuth: provide public application information and privacy policy pages for the canonical Google app.
+
 - Accounts: select Gmail, Google Drive, and Google Calendar by default for new connections; preserve subsequently saved service choices.
 
 - Breaking: the owner page connects accounts to one server-selected gogcli-proxy application. Remove project/default selectors and application-configuration HTTP routes; fresh account/enrollment requests reject project selection. Provision the existing application's Web client through the operator command.

@@ -89,7 +89,8 @@ def dispatch(event):
     headers = {key.lower(): value for key, value in (event.get('headers') or {}).items()}
     query = event.get('queryStringParameters') or {}
     assets = {'/onboarding/': ('index.html', 'text/html'), '/onboarding/app.js': ('app.js', 'text/javascript'),
-              '/onboarding/style.css': ('style.css', 'text/css')}
+              '/onboarding/style.css': ('style.css', 'text/css'),
+              '/onboarding/about': ('about.html', 'text/html'), '/onboarding/privacy': ('privacy.html', 'text/html')}
     if method == 'GET' and path == '/onboarding':
         return redirect(base_url())
     if method == 'GET' and path in assets:
