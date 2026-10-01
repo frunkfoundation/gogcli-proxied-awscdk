@@ -40,3 +40,9 @@ Independent read-only checks confirmed:
 - An unknown-state callback redirects to a clean public result without echoing the supplied code.
 
 Evidence: `/tmp/gogcli-cross-profile-deploy.log` and `/tmp/gogcli-cross-profile-runtime-verify-results.b1b6bvlk.log`. Verification performed only production metadata reads and HTTP GETs; no production link or Google consent was created.
+
+## Usability release
+
+Source commit `e405ea51` (owner/connection page controls) deployed 2026-10-01 05:11 UTC from `/Users/jay/Projects/gogcli-proxy` to `gogcli-prd` (`968138089939`, `us-east-2`, `GogcliGoogleProxyApi`, profile `krae-jdev-dev-prd`). The pre-deploy diff changed only the two Lambda code packages; `access.json` outputs are unchanged. The stack is `UPDATE_COMPLETE` and both functions are `Active`/`Successful`.
+
+Read-only checks: all seven public pages/assets match the commit byte-for-byte with no-store, no-referrer, and CSP headers. Unauthenticated owner setup returns 401 with a login URL. The live connect page runs the new script. Evidence: `/tmp/gogcli-ui-usability-deploy.1BDgdL`. No production link, consent, or account change was made; the authenticated owner page was not exercised.
