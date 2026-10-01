@@ -1,16 +1,17 @@
 openapi: 3.1.0
 info:
   title: Managed Google account connections and caller inventory
-  version: 3.0.0
-  description: 'Owner routes use the existing Authentik session. Mutations require
-    canonical Origin and session CSRF. POST account commands require scoped idempotency
-    keys; terminal diagnostics and replay results are retained for seven days, while
-    account state has no TTL. Incomplete commands return 202 with Location. Restrictive
-    changes remain applying at least 65 seconds after writes. Google consent and caller
-    access are separate. Secrets and provider response bodies are never returned.
-    Breaking owner-page contract: application selection and HTTP provisioning routes
-    are removed. Fresh requests reject projectId; exact accepted command replay retains
-    its original request.'
+  version: 3.1.0
+  description: 'Owner routes use the existing Authentik session. Mutations require canonical
+    Origin and session CSRF. POST account commands require scoped idempotency keys; terminal
+    diagnostics and replay results are retained for seven days, while account state has no TTL.
+    Incomplete commands return 202 with Location. Restrictive changes remain applying at least
+    65 seconds after writes. Google consent and caller access are separate. Secrets and provider
+    response bodies are never returned. Breaking owner-page contract: application selection
+    and HTTP provisioning routes are removed. Fresh requests reject projectId; exact accepted
+    command replay retains its original request. Account-specific connection links permit Google
+    authorization in separate browser profiles without owner sessions. Scoped cookies authorize
+    only one frozen enrollment; owner controls remain authenticated.'
 servers:
 - url: https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding
 security:
@@ -48,11 +49,12 @@ paths:
           $ref: '#/components/responses/Problem'
   /oauth/google/callback:
     get:
-      summary: Consume one session-bound Google consent attempt
-      description: Uses state, PKCE and nonce. An ambiguous code exchange is never
-        repeated. Candidate validation preserves installed credentials on failure.
-        Expired owner sessions return to owner sign-in and fresh consent. Codes and
-        tokens are never returned.
+      summary: Complete owner-bound or profile-bound Google consent
+      description: Persisted state/operation selects the required owner or scoped browser session;
+        a query parameter cannot select authority. PKCE, nonce, exact verified email, prior
+        subject and scopes remain checked. The one-shot exchange cannot repeat. Saved encrypted
+        responses resume validation. Invalid callbacks do not echo codes/state or redirect target
+        profiles into owner login.
       parameters:
       - name: state
         in: query
@@ -66,9 +68,11 @@ paths:
         schema: *id001
       responses:
         '303':
-          description: Fixed setup redirect with nonsecret operation or recovery information
+          description: Redirect to owner dashboard or scoped result with only nonsecret operation/recovery
+            information.
         default:
           $ref: '#/components/responses/Problem'
+      security: []
   /v1/setup:
     get:
       summary: Read canonical application readiness and independent account progress
@@ -152,13 +156,12 @@ paths:
                   type: boolean
                 restart: *id006
               additionalProperties: false
-      description: New consent always uses gogcli-proxy. Connect enables authorized
-        tools unless a saved pause exists; reconnect preserves desired access. ownerAccessEnabled
-        is optional and cannot override a saved pause. Continue reuses the exact accepted
-        body and original key, including historical fields if present; replay lookup
-        precedes fresh-command validation. An unused key during same-session consent
-        returns 409. Explicit restart uses a fresh key and restart:true. No consent
-        URL appears in ordinary setup.
+      description: New consent always uses gogcli-proxy. Connect enables authorized tools unless
+        a saved pause exists; reconnect preserves desired access. ownerAccessEnabled is optional
+        and cannot override a saved pause. Continue reuses the exact accepted body and original
+        key, including historical fields if present; replay lookup precedes fresh-command validation.
+        An unused key during same-session consent returns 409. Explicit restart uses a fresh
+        key and restart:true. No consent URL appears in ordinary setup.
   /v1/accounts/{email}/verifications:
     parameters:
     - $ref: '#/components/parameters/Email'
@@ -267,8 +270,8 @@ paths:
                 - accounts
                 - setup_url
         default:
-          description: Proxy or gateway admission error. Caller access and IAM/usage-plan
-            checks precede account metadata reads.
+          description: Proxy or gateway admission error. Caller access and IAM/usage-plan checks
+            precede account metadata reads.
           content:
             application/json:
               schema:
@@ -283,6 +286,200 @@ paths:
         UsagePlanKey: []
       description: AWS SigV4 and usage-plan key are both required. No Google routing/account
         headers or secret reads. Metadata visibility does not grant all service operations.
+  /v1/accounts/{email}/connection-links:
+    parameters:
+    - $ref: '#/components/parameters/Email'
+    post:
+      summary: Create a connection link for a separate Google browser profile
+      description: Reserves one enrollment with frozen account, services, client revision, and
+        saved access intent. Link may be claimed within 24 hours. Exact accepted retries reuse
+        the resource; replay never extends expiry. replace=true may supersede a waiting or authorizing
+        attempt, preserving installed credentials.
+      parameters: &id014
+      - &id010
+        $ref: '#/components/parameters/Origin'
+      - &id011
+        $ref: '#/components/parameters/CSRF'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                services: &id016
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum:
+                    - gmail
+                    - drive
+                    - calendar
+                replace:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: Created connection link; enrollment is awaiting the target profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionLink'
+          headers: &id015
+            Location:
+              required: true
+              schema: &id018
+                type: string
+                format: uri
+        default: &id009
+          $ref: '#/components/responses/Problem'
+  /v1/connection-links/{linkId}:
+    parameters:
+    - $ref: '#/components/parameters/LinkId'
+    get:
+      summary: Read owner-only link metadata without its capability
+      responses:
+        '200':
+          description: Nonsecret frozen link metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionLink'
+        default: *id009
+    delete:
+      summary: Cancel a waiting or authorizing connection link
+      description: Generation-fenced cancellation preserves installed authorization. Repeated
+        cancellation succeeds; exchange or validation already in progress requires the existing
+        restrictive owner controls.
+      parameters:
+      - *id010
+      - *id011
+      responses:
+        '204':
+          description: Canceled or already canceled.
+        default: *id009
+  /connect:
+    get:
+      security: []
+      summary: Open public connection landing shell
+      description: Fragment capability is removed from history before a same-origin JSON claim.
+        GET does not claim or start Google consent. No owner sign-in.
+      responses:
+        '200':
+          description: Connection page shell.
+          content:
+            text/html:
+              schema: &id012
+                type: string
+        default: *id009
+  /connect/result:
+    get:
+      security: []
+      summary: Open scoped connection result shell
+      parameters:
+      - name: operation
+        in: query
+        schema: *id012
+      - name: recovery
+        in: query
+        schema: *id012
+      description: The shell is public; account/operation data requires the matching scoped
+        cookie. OAuth codes and state are removed by callback redirect.
+      responses:
+        '200':
+          description: Connection result shell.
+          content:
+            text/html:
+              schema: *id012
+        default: *id009
+  /connection/v1/claims:
+    post:
+      security: []
+      summary: Claim a secret link into this browser profile
+      description: Requires exact canonical Origin. First claim binds a random per-operation
+        browser cookie atomically with account-generation authority. A claimed link can resume
+        only with its matching cookie. No owner identity or account inventory is returned.
+      parameters:
+      - $ref: '#/components/parameters/Origin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                linkId:
+                  type: string
+                  pattern: ^cl_[1-9A-HJ-NP-Za-km-z]{22}$
+                capability:
+                  type: string
+                  minLength: 32
+                  maxLength: 128
+              required:
+              - linkId
+              - capability
+      responses:
+        '200':
+          description: Operation claimed or resumed in the matching profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopedConnection'
+          headers:
+            Set-Cookie:
+              schema: *id012
+              description: Secure HttpOnly SameSite=Lax per-operation cookie; server deadline
+                is fixed at mint plus 25 hours.
+        default: *id009
+  /connection/v1/operations/{operationId}:
+    parameters:
+    - $ref: '#/components/parameters/OperationId'
+    get:
+      security: &id013
+      - ConnectionSession: []
+      summary: Read only this profile-bound operation
+      description: New account generation invalidates the scoped session. Polling does not start
+        consent, perform retries, or expose owner recovery artifacts.
+      responses:
+        '200':
+          description: Saved safe scoped progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopedConnection'
+        default: *id009
+  /connection/v1/operations/{operationId}/consents:
+    parameters:
+    - $ref: '#/components/parameters/OperationId'
+    post:
+      security: *id013
+      summary: Start or continue the frozen Google consent attempt
+      description: Requires scoped cookie, exact Origin, scoped CSRF, and Idempotency-Key. Empty
+        body only. Reopening may use a fresh key to return the same still-valid authorization
+        URL without minting state or exchanging a code. Google consent lasts 30 minutes independently
+        of link claim expiry. Terminal attempts need a new owner link.
+      parameters: *id014
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '202':
+          description: Persisted consent progress; URL present only when authorizing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopedConnection'
+          headers: *id015
+        default: *id009
 components:
   securitySchemes:
     OwnerSession:
@@ -293,13 +490,20 @@ components:
       type: apiKey
       in: header
       name: Authorization
-      description: AWS Signature Version 4, service execute-api, region us-east-2.
-        API Gateway verifies the IAM principal.
+      description: AWS Signature Version 4, service execute-api, region us-east-2. API Gateway
+        verifies the IAM principal.
     UsagePlanKey:
       type: apiKey
       in: header
       name: X-API-Key
       description: Usage-plan admission; not caller identity.
+    ConnectionSession:
+      type: apiKey
+      in: header
+      name: Cookie
+      description: Browser-managed HttpOnly Secure SameSite=Lax cookie named __Host-gog-connect-{operationId}.
+        Only the matching operation is authorized; this does not establish an owner session.
+      x-cookie-name-template: __Host-gog-connect-{operationId}
   parameters:
     Origin:
       name: Origin
@@ -334,6 +538,13 @@ components:
       in: path
       required: true
       schema: *id001
+    LinkId:
+      name: linkId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^cl_[1-9A-HJ-NP-Za-km-z]{22}$
   responses:
     Accepted:
       description: Persisted command accepted; resume by polling Location
@@ -348,9 +559,9 @@ components:
           schema:
             $ref: '#/components/schemas/Operation'
     Problem:
-      description: Safe RFC 9457 error; 409 means stale revision, conflicting account
-        work, or operator-managed permission conflict. 401 provides fixed owner login
-        URL.
+      description: Safe RFC 9457 error. Owner-session 401 includes fixed loginUrl; scoped-session
+        401 instead asks for the original profile or a fresh owner-generated link. 409 identifies
+        conflicting or superseded account work without provider response bodies.
       content:
         application/problem+json:
           schema:
@@ -424,8 +635,8 @@ components:
             type: boolean
           uses_current_app:
             type: boolean
-            description: Installed authorization belongs to the configured canonical
-              application; connection and check status remain separate.
+            description: Installed authorization belongs to the configured canonical application;
+              connection and check status remain separate.
     Operation:
       type: object
       properties:
@@ -462,20 +673,25 @@ components:
         authorizationUrl:
           type: string
           format: uri
-          description: Returned only for current consent continuation, never logged
-            or stored by clients.
+          description: Returned only for current consent continuation, never logged or stored
+            by clients.
         continuation_key:
           type: string
-          description: 'Owner setup only: original nonsecret command key for consent
-            continuation.'
+          description: 'Owner setup only: original nonsecret command key for consent continuation.'
         continuation_request:
           type: object
-          description: 'Owner setup only: exact original enrollment body to reuse
-            with continuation_key.'
+          description: 'Owner setup only: exact original enrollment body to reuse with continuation_key.'
         consent_session_matches:
           type: boolean
-          description: 'Owner setup only: whether Continue is bound to the current
-            owner session.'
+          description: 'Owner setup only: whether Continue is bound to the current owner session.'
+        auth_mode:
+          type: string
+          enum:
+          - owner
+          - connection
+        connection_link_id: *id012
+        connection_expires_at: &id017
+          type: integer
       required:
       - id
       - kind
@@ -522,10 +738,81 @@ components:
           - organization
           - clientConfigured
           - apiConfirmed
-          description: Read-only imported configuration and revision-bound operator
-            confirmations; not proof Google permits a specific account.
+          description: Read-only imported configuration and revision-bound operator confirmations;
+            not proof Google permits a specific account.
       required:
       - csrfToken
       - application
       - serviceOptions
       - accounts
+    ConnectionLink:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id012
+        operationId: *id012
+        email:
+          type: string
+          format: email
+        services: *id016
+        expiresAt: *id017
+        status: &id019
+          type: string
+          enum:
+          - accepted
+          - running
+          - applying
+          - succeeded
+          - failed
+          - canceled
+        phase: *id012
+        operationUrl: *id018
+        connectionUrl:
+          type: string
+          format: uri
+          description: Secret fragment-bearing link, returned only by usable owner mint/replay;
+            never in general snapshots or metadata. Keep private.
+      required:
+      - id
+      - operationId
+      - email
+      - services
+      - expiresAt
+      - status
+      - phase
+      - operationUrl
+    ScopedConnection:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id012
+        operationId: *id012
+        email:
+          type: string
+          format: email
+        services: *id016
+        status: *id019
+        phase: *id012
+        canContinue:
+          type: boolean
+        expiresAt: *id017
+        consentExpiresAt: *id017
+        errorCode: *id012
+        safeMessage: *id012
+        csrfToken: *id012
+        resultUrl: *id018
+        authorizationUrl:
+          type: string
+          format: uri
+          description: Only consent POST returns the frozen Google URL while its attempt remains
+            valid.
+      required:
+      - id
+      - email
+      - services
+      - status
+      - phase
+      - canContinue
+      - expiresAt
+      - csrfToken
+      - resultUrl

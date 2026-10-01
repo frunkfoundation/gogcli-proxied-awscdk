@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accounts: generate account-specific connection links for Google accounts in separate browser profiles, without an Authentik login in the target profile; retain authenticated owner controls, exact-account checks, and durable consent recovery.
+
 - Accounts: distinguish approved Google permissions from completed proxy checks, explain the access-cache wait, and remove repeated connection progress and unchecked timestamps.
 
 - OAuth: provide public application information and privacy policy pages for the canonical Google app.

@@ -41,12 +41,24 @@ def callback(service, state, code, session_id, error):
     if not op or op.get("state_hash") != digest(str(state)) or op.get("session_hash") != digest(session_id):
         raise WorkflowError(400, "invalid_state", "This consent callback does not match the owner session.")
     account = service.account(op["owner"], op["email"])
-    if account.get("generation") != op["generation"] or account.get("active_operation") != op["id"]:
+    connection = op.get("auth_mode") == "connection"
+    if connection and op.get("connection_session_expires_at", 0) <= int(time.time()):
+        raise WorkflowError(400, "invalid_state", "This connection session expired.")
+    if account.get("generation") != op["generation"] or (account.get("active_operation") != op["id"] and not (connection and op["phase"] in {"ready", "failed", "canceled"})):
         raise WorkflowError(400, "invalid_state", "This consent attempt has been superseded.")
+    if connection and op["phase"] != "authorizing":
+        return public_operation(op)
     if int(time.time()) >= op["consent_expires_at"]:
         raise WorkflowError(400, "consent_expired", "Start a fresh consent attempt.")
-    op = service.store.transition(op["pk"], "authorizing", {"phase": "exchanging", "status": "running",
-        "next_attempt": int(time.time()) + 120}, conditions={"state_hash": digest(str(state)), "session_hash": digest(session_id)})
+    try:
+        op = service.store.transition(op["pk"], "authorizing", {"phase": "exchanging", "status": "running",
+            "next_attempt": int(time.time()) + 120}, conditions={"state_hash": digest(str(state)), "session_hash": digest(session_id)})
+    except WorkflowError:
+        if connection:
+            current = service.store.get(op["pk"])
+            if current and current["phase"] != "authorizing":
+                return callback(service, state, code, session_id, error)
+        raise
     saved = False
     try:
         if error or not code:

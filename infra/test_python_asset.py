@@ -16,7 +16,10 @@ class PythonAssetTests(unittest.TestCase):
             for name in ('handler.py', 'onboarding.py', 'onboarding_services.py',
                          'google/auth/__init__.py', 'authlib/__init__.py',
                          'requests/__init__.py', 'assets/onboarding/index.html',
-                         'assets/onboarding/app.js', 'assets/onboarding/style.css'):
+                         'assets/onboarding/app.js', 'assets/onboarding/style.css',
+                         'assets/onboarding/connect.html', 'assets/onboarding/connect.js',
+                         'onboarding_links.py', 'onboarding_links_store.py',
+                         'onboarding_connection_http.py'):
                 self.assertTrue((output / name).is_file(), name)
             self.assertFalse(list(output.glob('test_*.py')))
             self.assertFalse(list(output.rglob('__pycache__')))

@@ -7,6 +7,7 @@ from onboarding_auth import AuthError, OwnerAuth
 from onboarding_google import GoogleClient
 from onboarding_operations import OnboardingService
 from test_onboarding_lifecycle import MemoryStore
+from onboarding_store import digest
 
 
 class BoundaryTests(unittest.TestCase):
@@ -75,23 +76,34 @@ class BoundaryTests(unittest.TestCase):
 class CallbackRecoveryTests(unittest.TestCase):
     setUp = BoundaryTests.setUp
 
+    def owner_state(self, service):
+        state, operation_id = 'private-state-' + 'x' * 32, 'op_' + '1' * 22
+        store = MemoryStore()
+        store.put({'pk': 'STATE#' + digest(state), 'operation_id': operation_id})
+        store.put({'pk': 'OP#' + operation_id, 'id': operation_id,
+                   'state_hash': digest(state), 'auth_mode': 'owner', 'phase': 'authorizing'})
+        service.return_value.store = store
+        return state
+
     def test_expired_google_callback_drops_code_and_preserves_workflow(self):
         with patch.object(onboarding, 'get_auth') as factory, patch.object(onboarding, 'get_service') as service:
             factory.return_value.session.side_effect = AuthError(401, 'login_required', 'Sign in.')
+            state = self.owner_state(service)
             event = {'path': '/onboarding/oauth/google/callback', 'httpMethod': 'GET',
-                     'queryStringParameters': {'code': 'private-google-code', 'state': 'private-state'}}
+                     'queryStringParameters': {'code': 'private-google-code', 'state': state}}
             response = onboarding.handler(event, None)
             self.assertEqual(303, response['statusCode'])
             self.assertEqual('https://api.example/prd/onboarding/?recovery=owner-session-expired', response['headers']['Location'])
             self.assertNotIn('private-', str(response))
-            service.assert_not_called()
+            service.return_value.callback.assert_not_called()
 
     def test_browser_callback_failure_redirects_to_saved_progress(self):
         with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
             auth.return_value.session.return_value = {'owner': 'jay', 'session_id': 'session'}
             service.return_value.callback.side_effect = AuthError(400, 'consent_expired', 'Start again.')
+            state = self.owner_state(service)
             response = onboarding.handler({'path': '/onboarding/oauth/google/callback', 'httpMethod': 'GET',
-                'queryStringParameters': {'code': 'private-code', 'state': 'private-state'}}, None)
+                'queryStringParameters': {'code': 'private-code', 'state': state}}, None)
             self.assertEqual(303, response['statusCode'])
             self.assertEqual('https://api.example/prd/onboarding/?recovery=consent-incomplete', response['headers']['Location'])
             self.assertNotIn('private-', str(response))

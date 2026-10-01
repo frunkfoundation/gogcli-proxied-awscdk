@@ -6,7 +6,7 @@ import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import unquote, urlsplit
 
 from onboarding_auth import AuthError, OwnerAuth
 
@@ -34,10 +34,10 @@ def response(status, value, content_type='application/json', extra=None):
     return {'statusCode': status, 'headers': headers, 'body': body}
 
 
-def problem(error):
+def problem(error, owner_login=True):
     value = {'type': 'urn:gogcli-proxy:onboarding:' + error.code, 'title': error.code.replace('_', ' '),
              'status': error.status, 'detail': error.detail}
-    if error.status == 401:
+    if error.status == 401 and owner_login:
         value['loginUrl'] = base_url() + 'auth/login'
     return response(error.status, value, 'application/problem+json')
 
@@ -70,11 +70,11 @@ def handler(event, context):
     try:
         return dispatch(event)
     except AuthError as error:
-        return problem(error)
+        return problem(error, '/connection/v1/' not in event.get('path', event.get('rawPath', '')))
     except Exception as error:
         # Workflow exceptions expose safe public details; upstream response bodies never do.
         if all(hasattr(error, name) for name in ('status', 'code', 'detail')):
-            return problem(error)
+            return problem(error, '/connection/v1/' not in event.get('path', event.get('rawPath', '')))
         print(json.dumps({'event': 'onboarding_request_failed', 'error_type': type(error).__name__}))
         return problem(AuthError(500, 'internal_error', 'The request could not be completed. Reload to check its status.'))
 
@@ -90,40 +90,39 @@ def dispatch(event):
     query = event.get('queryStringParameters') or {}
     assets = {'/onboarding/': ('index.html', 'text/html'), '/onboarding/app.js': ('app.js', 'text/javascript'),
               '/onboarding/style.css': ('style.css', 'text/css'),
+              '/onboarding/connect': ('connect.html', 'text/html'),
+              '/onboarding/connect/result': ('connect.html', 'text/html'),
+              '/onboarding/connect.js': ('connect.js', 'text/javascript'),
               '/onboarding/about': ('about.html', 'text/html'), '/onboarding/privacy': ('privacy.html', 'text/html')}
     if method == 'GET' and path == '/onboarding':
         return redirect(base_url())
     if method == 'GET' and path in assets:
         filename, content_type = assets[path]
-        return response(200, (Path(__file__).parent / 'assets' / 'onboarding' / filename).read_text(), content_type)
+        asset = (Path(__file__).parent / 'assets' / 'onboarding' / filename).read_text()
+        if filename == 'connect.html':
+            asset = asset.replace('__ONBOARDING_BASE__', base_url())
+        return response(200, asset, content_type)
     if method == 'GET' and path == '/onboarding/auth/login':
         location, set_cookie = get_auth().login()
         return redirect(location, set_cookie)
     if method == 'GET' and path == '/onboarding/auth/callback':
         return redirect(base_url(), get_auth().callback(query, headers))
-    if path != '/onboarding/oauth/google/callback' and not path.startswith('/onboarding/v1/'):
+    from onboarding_connection_http import google_callback, owner_dispatch, target_dispatch
+    if method == 'GET' and path == '/onboarding/oauth/google/callback':
+        return google_callback(query, headers)
+    if path.startswith('/onboarding/connection/v1/'):
+        return target_dispatch(event, method, path, headers)
+    if not path.startswith('/onboarding/v1/'):
         raise AuthError(404, 'not_found', 'Route not found.')
     auth = get_auth()
-    try:
-        session = auth.session(headers)
-    except AuthError as error:
-        if method == 'GET' and path == '/onboarding/oauth/google/callback' and error.status == 401:
-            # Drop Google's code/state; fresh consent binds to the new owner session.
-            return redirect(base_url() + '?recovery=owner-session-expired')
-        raise
+    session = auth.session(headers)
     if method not in ('GET', 'HEAD'):
         auth.check_mutation(headers, session)
-    service = get_service()
     owner = session['owner']
-    if method == 'GET' and path == '/onboarding/oauth/google/callback':
-        try:
-            operation = service.callback(query.get('state', ''), query.get('code', ''), session['session_id'], error=query.get('error'))
-        except Exception as error:
-            if all(hasattr(error, name) for name in ('status', 'code', 'detail')) and error.status < 500:
-                return redirect(base_url() + '?recovery=consent-incomplete')
-            raise
-        operation_id = operation.get('id', operation.get('operation_id', ''))
-        return redirect(base_url() + '?' + urlencode({'operation': operation_id}))
+    result = owner_dispatch(event, method, path, headers, owner)
+    if result is not None:
+        return result
+    service = get_service()
     if path == '/onboarding/v1/setup':
         if method == 'GET':
             data = service.setup(owner, session['session_id'])

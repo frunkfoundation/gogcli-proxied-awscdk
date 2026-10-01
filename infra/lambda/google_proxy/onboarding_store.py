@@ -34,7 +34,10 @@ class WorkflowError(Exception):
         self.status, self.code, self.detail = status, code, detail
 
 
-class Store:
+from onboarding_links_store import ConnectionStore
+
+
+class Store(ConnectionStore):
     def __init__(self, table, ssm, prefix):
         self.table, self.ssm, self.prefix = table, ssm, prefix.rstrip("/")
 
@@ -96,10 +99,14 @@ class Store:
                 "UpdateExpression": expression, "ExpressionAttributeNames": names, "ExpressionAttributeValues": values}}]
         if idem:
             actions.append({"Put": {"TableName": self.table.name, "Item": idem, "ConditionExpression": "attribute_not_exists(pk)"}})
+        if operation.get("connection_link_id"):
+            actions.extend(self.connection_accept_actions(operation, idem))
         old_id = account.get("active_operation")
         if supersede and old_id:
             old = self.get("OP#" + old_id)
             if old:
+                if operation.get("kind") == "enrollment" and old["phase"] not in {"awaiting_connection", "preparing_consent", "authorizing"}:
+                    raise WorkflowError(409, "operation_conflict", "Authorization has advanced; wait or use restrictive account controls.")
                 from onboarding_services import public_operation
                 canceled = {**old, "phase": "canceled", "status": "canceled", "updated_at": operation["created_at"],
                     "expires_at": operation["created_at"] + RETENTION, "error_code": "operation_superseded",

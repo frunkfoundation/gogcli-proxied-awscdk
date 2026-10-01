@@ -35,8 +35,10 @@ def enroll(service, owner, email, key, session_id, body):
     old = service.store.get("OP#" + account["active_operation"]) if account.get("active_operation") else None
     supersede = False
     if old:
-        if old["phase"] not in {"authorizing", "preparing_consent"}:
+        if old["phase"] not in {"awaiting_connection", "authorizing", "preparing_consent"}:
             raise WorkflowError(409, "operation_conflict", "The saved authorization is being checked; wait or disconnect.")
+        if old["phase"] == "awaiting_connection" and not body.get("restart", False):
+            raise WorkflowError(409, "operation_conflict", "Cancel or explicitly replace the waiting connection link.")
         same_session = old.get("session_hash") == digest(session_id)
         if old["phase"] == "preparing_consent" and old.get("next_attempt", 0) > int(time.time()) and same_session and not body.get("restart", False):
             raise WorkflowError(409, "operation_conflict", "Consent is being prepared; refresh saved progress or explicitly restart.")
@@ -118,6 +120,6 @@ def disconnect(service, owner, email):
         return {"email": email, "kind": "disconnect", "phase": "disconnected", "status": "succeeded"}
     op = service.accept(owner, account, "disconnect", "removing", changes={"desired_connection": "disconnected",
         "desired_owner_access": False, "connection_status": "disconnecting"},
-        details={"cleanup_refs": [active[field] for field in ("candidate_ref", "callback_ref", "attempt_ref") if active and active.get(field)]},
+        details={"cleanup_refs": [active[field] for field in ("candidate_ref", "callback_ref", "attempt_ref", "connection_link_ref") if active and active.get(field)]},
         supersede=True)
     return public_operation(op)

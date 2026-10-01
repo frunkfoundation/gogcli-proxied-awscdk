@@ -34,3 +34,9 @@ legend { font-size: 14px; font-weight: 600; }
 fieldset label { margin: 8px 0; }
 textarea { width: 100%; border: 1px solid #8c9db2; border-radius: 6px; padding: 11px 12px; font: inherit; }
 @media (max-width: 550px) { main { padding: 24px 16px 48px; } details, section { padding: 16px; } summary { font-size: 16px; } }
+
+.connection-link { border-left: 4px solid #527ead; padding: 12px 16px; margin-top: 16px; background: #eaf0f7; }
+.connection-link button { margin: 12px 8px 0 0; }
+.connection-url { font-size: 13px; }
+#connectionEmail { overflow-wrap: anywhere; }
+#refreshConnection { margin: 8px 0; }

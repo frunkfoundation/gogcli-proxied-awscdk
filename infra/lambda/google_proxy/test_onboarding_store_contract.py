@@ -73,3 +73,55 @@ class StoreContractTests(unittest.TestCase):
         wire = self.capture(lambda: self.store.confirm_project({'pk': 'CLIENT#project', 'revision': 'old'}, {'publishing_confirmed': True}))
         self.assertEqual('#revision = :revision', wire['ConditionExpression'])
         self.assertEqual({'S': 'old'}, wire['ExpressionAttributeValues'][':revision'])
+
+    def test_connection_link_acceptance_hash_lookup_is_atomic_with_generation_and_key(self):
+        op = {**self.operation, 'connection_link_id': 'cl_link', 'capability_hash': 'hashed-secret',
+              'connection_link_ref': '/test/onboarding/attempts/op_test/connection-link'}
+        idem = {'pk': 'IDEM#key', 'fingerprint': 'request', 'operation_id': op['id']}
+        wire = self.capture(lambda: self.store.accept(self.account, op, idem, {}))
+        self.assertEqual(6, len(wire['TransactItems']))
+        link = wire['TransactItems'][3]['Put']
+        self.assertEqual({'S': 'LINK#cl_link'}, link['Item']['pk'])
+        self.assertEqual({'S': 'hashed-secret'}, link['Item']['capability_hash'])
+        self.assertEqual('attribute_not_exists(pk)', link['ConditionExpression'])
+        for action in wire['TransactItems'][4:]:
+            update = action['Update']
+            self.assertEqual({'N': '604900'}, update['ExpressionAttributeValues'][':expires'])
+            self.assertIn('expires_at > :now', update['ConditionExpression'])
+        self.assertEqual({'S': 'LINKPREP#key'}, wire['TransactItems'][4]['Update']['Key']['pk'])
+        self.assertEqual({'S': 'LINKCLEANUP#op_test'}, wire['TransactItems'][5]['Update']['Key']['pk'])
+
+    def test_connection_claim_atomically_fences_first_binding_expiry_and_account(self):
+        op = {**self.operation, 'phase': 'awaiting_connection', 'link_expires_at': 300}
+        wire = self.capture(lambda: self.store.bind_connection(op, 'session-hash', 100))
+        put, account = wire['TransactItems']
+        self.assertIn('attribute_not_exists(session_hash)', put['Put']['ConditionExpression'])
+        self.assertIn('link_expires_at > :now', put['Put']['ConditionExpression'])
+        self.assertEqual({'S': 'session-hash'}, put['Put']['Item']['session_hash'])
+        self.assertEqual('#g = :g AND active_operation = :op', account['ConditionCheck']['ConditionExpression'])
+
+    def test_connection_continue_is_conditional_on_binding_and_waiting_phase(self):
+        op = {**self.operation, 'phase': 'awaiting_connection', 'session_hash': 'binding'}
+        wire = self.capture(lambda: self.store.start_connection(op, 'continue', 100))
+        put = wire['TransactItems'][0]['Put']
+        self.assertIn('session_hash = :session', put['ConditionExpression'])
+        self.assertEqual({'S': 'awaiting_connection'}, put['ExpressionAttributeValues'][':p'])
+        self.assertEqual({'S': 'preparing_consent'}, put['Item']['phase'])
+
+    def test_connection_cancel_invalidates_generation_in_same_phase_fenced_transaction(self):
+        op = {**self.operation, 'phase': 'authorizing', 'kind': 'enrollment'}
+        wire = self.capture(lambda: self.store.cancel_connection(op, 100))
+        put, update = wire['TransactItems']
+        self.assertEqual({'S': 'authorizing'}, put['Put']['ExpressionAttributeValues'][':p'])
+        self.assertEqual({'S': 'canceled'}, put['Put']['Item']['phase'])
+        self.assertIn('REMOVE active_operation', update['Update']['UpdateExpression'])
+        self.assertIn({'N': '3'}, update['Update']['ExpressionAttributeValues'].values())
+
+    def test_enrollment_replacement_cannot_cancel_an_exchange_that_won_the_race(self):
+        from onboarding_store import WorkflowError
+        old = {**self.operation, 'pk': 'OP#old', 'id': 'old', 'phase': 'exchanging'}
+        account = {**self.account, 'active_operation': 'old'}
+        replacement = {**self.operation, 'kind': 'enrollment'}
+        with patch.object(self.store, 'get', return_value=old), self.assertRaises(WorkflowError):
+            self.store.accept(account, replacement, None, {}, supersede=True)
+        self.assertIsNone(self.wire)

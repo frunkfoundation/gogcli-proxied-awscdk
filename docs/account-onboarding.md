@@ -8,9 +8,9 @@ see the [operator runbook](https://github.com/Frunk-Foundation/gogcli-proxied-aw
 
 ## Connect accounts
 
-Use this same page and owner sign-in for every Google account. You do not need
-to sign into the proxy separately as each account; choose the matching account
-when Google asks you to authorize it.
+Use the owner page to manage every account. If the Google account is in another
+browser profile, use a connection link as described below; that profile does
+not need an owner sign-in.
 
 Choose services and press **Connect** on an account. Select that exact account
 at Google and approve the selected permissions. Connecting enables access for
@@ -34,6 +34,28 @@ removed through reconnect.
 Google authorization and tool access are separate facts. Caller and account
 policies can narrow these permissions. A previous local gogcli setup does not
 establish a connection to this proxy.
+
+## Connect an account in another browser profile
+
+1. In the owner page, choose the services for the account and open **Connection options**.
+2. Choose **Generate connection link**, then **Copy connection link**.
+3. Switch to the browser profile where that Google account is signed in and paste the link into its address bar.
+4. Check the account name and services, then choose **Continue to Google** and approve access.
+5. The connection page shows progress and the result. The owner dashboard shows the same saved progress.
+
+The target profile does not need an `auth.k-rae.com` login. The link permits only
+this account's connection; it does not open the owner dashboard or its controls.
+The link is valid for 24 hours and binds to the first profile that opens it.
+Reopen in that same profile to continue. If it expires, is opened in the wrong
+profile, or you clear that profile's cookies, generate a replacement from the
+owner page. Keep connection links private.
+
+Google consent has its own 30-minute deadline after you start it. Starting
+consent before the link's expiry does not shorten that approval window. A failed
+or denied consent needs a fresh owner-generated link; saved credentials remain
+installed until a valid replacement succeeds. Cancel an unused link in the
+owner page, or replace it when you need to start again. Pausing or disconnecting
+from the owner page invalidates older connection attempts.
 
 ## Understand status and recover
 

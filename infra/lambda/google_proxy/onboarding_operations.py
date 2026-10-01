@@ -43,9 +43,12 @@ class OnboardingService:
         result = account_projection(account)
         latest = self.store.get("OP#" + account["latest_operation_id"]) if account.get("latest_operation_id") else None
         summary = public_operation(latest) if latest else account.get("latest_operation")
-        if latest and latest["phase"] == "authorizing":
+        if latest and latest["phase"] == "authorizing" and latest.get("auth_mode", "owner") == "owner":
             summary.update(continuation_key=latest.get("command_key", ""), continuation_request=latest.get("command_request", {}),
                 consent_session_matches=bool(session_id and latest.get("session_hash") == digest(session_id)))
+        if latest and latest.get("auth_mode") == "connection":
+            summary.update(auth_mode="connection", connection_link_id=latest["connection_link_id"],
+                connection_expires_at=latest["link_expires_at"])
         result.update(uses_current_app=bool(account.get("credential_revision") and account.get("installed_project_id") == application_project_id()),
             requested_services=account.get("requested_services", DEFAULT_SERVICES),
             owner_access_enabled=account.get("desired_owner_access", True),
@@ -141,8 +144,8 @@ class OnboardingService:
             raise WorkflowError(409, "operation_unavailable", "Refresh the saved account before retrying this command.")
         return pk, fingerprint, None
 
-    def accept(self, owner, account, kind, phase, changes=None, details=None, idem=None, supersede=False):
-        now, op_id = int(time.time()), new_id()
+    def accept(self, owner, account, kind, phase, changes=None, details=None, idem=None, supersede=False, operation_id=None):
+        now, op_id = int(time.time()), operation_id or new_id()
         op = {"pk": "OP#" + op_id, "id": op_id, "owner": owner, "email": account["email"], "kind": kind,
             "phase": phase, "status": "accepted", "generation": int(account["generation"]) + 1,
             "created_at": now, "updated_at": now, "attempts": 0, "next_attempt": now, **(details or {})}

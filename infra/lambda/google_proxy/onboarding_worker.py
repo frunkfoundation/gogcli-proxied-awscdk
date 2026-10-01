@@ -11,7 +11,7 @@ from onboarding_google import check_response
 from onboarding_services import probes, validate_probe
 from onboarding_store import Store, WorkflowError, new_id
 
-ACTIVE = {"preparing_consent", "authorizing", "exchanging", "validating", "preparing_recovery",
+ACTIVE = {"awaiting_connection", "preparing_consent", "authorizing", "exchanging", "validating", "preparing_recovery",
           "checking_candidate", "pending_promotion", "verifying", "applying_access", "removing", "propagating"}
 TERMINAL = {"ready", "failed", "canceled", "disconnected"}
 
@@ -100,7 +100,10 @@ def process(operation_id, store=None, http=None, now=None):
     changes = {"updated_at": now, "status": "running"}
     try:
         phase = op["phase"]
-        if phase in {"preparing_consent", "authorizing"}:
+        if phase == "awaiting_connection":
+            changes.update(phase="failed", status="failed", error_code="connection_link_expired",
+                recovery="Ask the owner for a fresh connection link.")
+        elif phase in {"preparing_consent", "authorizing"}:
             changes.update(phase="failed", status="failed", error_code="consent_expired",
                 recovery="Start fresh consent; existing installed access is preserved.")
         elif phase == "exchanging":
@@ -227,7 +230,7 @@ def enqueue(operation_id, delay=0):
 
 def cleanup(store, item):
     prefix = store.prefix + "/onboarding/"
-    for field, directory in (("candidate_ref", "candidates/"), ("callback_ref", "callbacks/"), ("attempt_ref", "attempts/"), ("secret_ref", "owner-logins/")):
+    for field, directory in (("candidate_ref", "candidates/"), ("callback_ref", "callbacks/"), ("attempt_ref", "attempts/"), ("connection_link_ref", "attempts/"), ("secret_ref", "owner-logins/")):
         reference = item.get(field, "")
         if reference.startswith(prefix + directory):
             store.secret_delete(reference)

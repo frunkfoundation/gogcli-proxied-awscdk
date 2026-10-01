@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 const apiBase = new URL('v1/', new URL('./', location.href));
 let snapshot, csrfToken = '', loading = false, pollTimer, callbackFocused = false;
+const connectionLinks = new Map(), connectionMetadata = new Map();
 const drafts = new Map(), pending = new Set(), keys = new Map(), order = [];
 function message(id, text, error = false) { $(id).textContent = text; $(id).classList.toggle('error', error); }
 function element(tag, text, parent) { const node = document.createElement(tag); if (text) node.textContent = text; if (parent) parent.append(node); return node; }
@@ -32,14 +33,17 @@ function draftFor(account) {
   return drafts.get(account.email);
 }
 function operationText(op, email, services) {
-  const phases = { preparing_consent: 'Preparing Google consent…', preparing_recovery: 'Resuming saved authorization…', checking_candidate: 'Checking connection…', applying_access: 'Applying tool access change…', removing: 'Disconnecting…', propagating: 'Applying access change…', disconnected: 'Disconnected.', failed: 'Last attempt failed.', canceled: 'Consent canceled.', authorizing: 'Waiting for Google approval.', validating: 'Checking connection…', exchanging: 'Receiving Google authorization…', pending_promotion: 'Saving connection…', verifying: 'Checking connection…', applying: 'Removing access…', disconnecting: 'Disconnecting…', ready: 'Connection check complete.' };
-  const failures = { identity_mismatch: 'Choose ' + email + ' at Google, then approve the selected services.', missing_service_permission: 'Approve every selected service when restarting Google consent.', refresh_required: 'Reconnect this account.', broad_allowlist_requires_operator: 'Contact the operator to narrow the caller allowlist, then retry.', consent_expired: 'Consent expired. Restart Google consent.', application_setup_required: 'gogcli-proxy is not ready to connect this account. Contact the operator, then retry.', managed_policy_conflict: 'Contact the operator to reconcile this account’s service policy, then retry.', consent_denied: 'Google consent was canceled. Restart Google consent.', workspace_restricted: 'This account’s Workspace administrator must approve gogcli-proxy. Contact the administrator, then restart consent.', api_disabled: 'gogcli-proxy is not ready for this service. Contact the operator, then retry.', provider_unavailable: 'The connection check failed. Retry the saved authorization if available.' };
+  const phases = { awaiting_connection: 'Waiting for connection in the account’s browser profile.', preparing_consent: 'Preparing Google consent…', preparing_recovery: 'Resuming saved authorization…', checking_candidate: 'Checking connection…', applying_access: 'Applying tool access change…', removing: 'Disconnecting…', propagating: 'Applying access change…', disconnected: 'Disconnected.', failed: 'Last attempt failed.', canceled: 'Consent canceled.', authorizing: 'Waiting for Google approval.', validating: 'Checking connection…', exchanging: 'Receiving Google authorization…', pending_promotion: 'Saving connection…', verifying: 'Checking connection…', applying: 'Removing access…', disconnecting: 'Disconnecting…', ready: 'Connection check complete.' };
+  const failures = { identity_mismatch: 'Choose ' + email + ' at Google, then approve the selected services.', missing_service_permission: 'Approve every selected service when restarting Google consent.', refresh_required: 'Reconnect this account.', broad_allowlist_requires_operator: 'Contact the operator to narrow the caller allowlist, then retry.', connection_link_expired: 'Connection link expired. Generate a replacement link.', consent_expired: 'Consent expired. Restart Google consent.', application_setup_required: 'gogcli-proxy is not ready to connect this account. Contact the operator, then retry.', managed_policy_conflict: 'Contact the operator to reconcile this account’s service policy, then retry.', consent_denied: 'Google consent was canceled. Restart Google consent.', workspace_restricted: 'This account’s Workspace administrator must approve gogcli-proxy. Contact the administrator, then restart consent.', api_disabled: 'gogcli-proxy is not ready for this service. Contact the operator, then retry.', provider_unavailable: 'The connection check failed. Retry the saved authorization if available.' };
   const waiting = op.propagation_complete_at * 1000 > Date.now();
   if (active(op) && op.phase === 'verifying' && op.promoted_at && !op.error_code) return 'Google approved access. ' + (waiting ? 'Waiting for the access update before checking ' + serviceLabels(services) + '. The connection check can start after ' + time(op.propagation_complete_at) + '.' : 'Checking ' + serviceLabels(services) + ' through gogcli-proxy…');
   return (phases[op.phase] || op.phase || op.status) + (op.error_code ? ' ' + (failures[op.error_code] || op.recovery || 'Retry, or contact the operator if the problem continues.') : '') + (waiting ? ' Waiting for the access update until ' + time(op.propagation_complete_at) + '.' : '');
 }
 function primaryFor(account, draft) {
   const op = account.latest_operation, additions = draft.services.filter(name => !installedServices(account).includes(name));
+  if (op?.auth_mode === 'connection' && !active(op) && op.status !== 'succeeded') return { text: 'Generate replacement link', action: 'connection-links' };
+  if (op?.phase === 'awaiting_connection') return { text: connectionLinks.has(account.email) && connectionLinks.get(account.email).expiresAt * 1000 > Date.now() ? 'Show connection link' : 'Generate replacement link', action: 'connection-links' };
+  if (op?.phase === 'authorizing' && op.auth_mode === 'connection') return { text: 'Waiting for Google approval…', disabled: true };
   if (active(op) && op.phase !== 'authorizing') return { text: ['checking_candidate', 'validating', 'verifying'].includes(op.phase) ? 'Checking…' : 'Working…', disabled: true };
   if (op?.phase === 'authorizing') return { text: canContinue(op) ? 'Continue Google consent' : 'Restart Google consent', action: 'enrollments' };
   if (account.recovery_available) return { text: 'Retry connection', action: 'recoveries' };
@@ -60,7 +64,7 @@ function renderAccount(account, row, index) {
   element('p', 'Tool access: ' + (active(op) && ['access', 'disconnect'].includes(op.kind) ? 'applying change…' : account.owner_access_enabled === false ? 'paused' : account.owner_access_enabled && hasInstalled ? checked ? 'enabled' : 'awaiting connection check' : 'available after connection'), row);
   element('p', (checked ? 'Connected services: ' : 'Authorized services: ') + (installedServices(account).length ? serviceLabels(installedServices(account)) : 'none'), row);
   (account.services || []).forEach(service => element('p', serviceLabels([service.name]) + ': ' + (service.authorization_status === 'granted' ? 'authorized' : service.authorization_status) + ' · last check ' + (service.last_verification_status === 'succeeded' ? 'passed' : (service.last_verification_status || 'not checked').replaceAll('_', ' ')) + (service.last_verified_at ? ' · ' + time(service.last_verified_at) : ''), row).className = 'small');
-  if (op?.phase === 'authorizing' && !canContinue(op)) element('p', op.consent_expires_at * 1000 <= Date.now() ? 'Google consent expired. Restart to get a new approval link.' : 'Google consent cannot continue in this owner session. Restart Google consent.', row);
+  if (op?.phase === 'authorizing' && op.auth_mode !== 'connection' && !canContinue(op)) element('p', op.consent_expires_at * 1000 <= Date.now() ? 'Google consent expired. Restart to get a new approval link.' : 'Google consent cannot continue in this owner session. Restart Google consent.', row);
   if (op && !active(op) && !(checked && op.status === 'succeeded' && op.phase === 'ready')) element('p', (hasInstalled && op.status === 'failed' && op.kind === 'enrollment' ? 'Last reconnect failed. ' : '') + operationText(op, account.email, installedServices(account)), row).className = 'small';
   const status = element('p', draft.dirty ? 'Service choices will be saved when you connect.' : '', row); status.id = 'account-status-' + index; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.tabIndex = -1;
   const fields = element('fieldset', '', row); element('legend', 'Services', fields);
@@ -70,11 +74,16 @@ function renderAccount(account, row, index) {
     label.append(document.createTextNode(service.label + ' — ' + service.description));
     input.addEventListener('change', () => { draft.services = [...fields.querySelectorAll('input:checked')].map(item => item.dataset.service); draft.dirty = true; renderAccounts(); });
   });
-  const needsReady = primary.action === 'enrollments' && !canContinue(op) && (!snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]));
+  const needsReady = ['enrollments', 'connection-links'].includes(primary.action) && !canContinue(op) && (!snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]));
   if (needsReady) status.textContent = 'gogcli-proxy is not ready to connect this account' + (draft.services.some(name => !snapshot.application.apiConfirmed?.[name]) ? ' for ' + serviceLabels(draft.services.filter(name => !snapshot.application.apiConfirmed?.[name])) : '') + '. Contact the operator, then retry.';
   if (primary.action === 'enrollments') element('p', 'Choose this account at Google and approve the selected services. ' + (account.owner_access_enabled === false ? 'Tool access will remain paused.' : 'Connecting enables access for your authorized tools.'), row);
-  const main = button(row, primary.text, () => act(account, primary.action, status)); main.dataset.focus = 'primary'; main.className = primary.action === 'enrollments' ? 'connect-account' : ''; main.disabled = primary.disabled || needsReady || pending.has(account.email);
+  if (op?.auth_mode === 'connection' && op.phase === 'authorizing') element('p', 'Continue Google approval in the browser profile where you opened the connection link.', row);
+  const main = button(row, primary.text, () => primary.action === 'connection-links' ? showOrMintLink(account, status) : act(account, primary.action, status)); main.dataset.focus = 'primary'; main.className = primary.action === 'enrollments' ? 'connect-account' : ''; main.disabled = primary.disabled || needsReady || pending.has(account.email);
   const options = element('details', '', row); options.open = !!open; element('summary', 'Connection options', options).dataset.focus = 'options';
+  element('p', 'Using a separate Google browser profile? Generate a link for the services selected above.', options).className = 'small';
+  const replaceLink = op?.auth_mode === 'connection' && ['awaiting_connection', 'authorizing'].includes(op.phase);
+  const linkAction = button(options, replaceLink ? 'Generate replacement link' : 'Generate connection link', () => mintLink(account, status, replaceLink)); linkAction.dataset.connectionLink = 'true';
+  linkAction.disabled = active(op) && !replaceLink || !snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]);
   if (hasInstalled) {
     element('p', 'Installed services stay selected. Reconnect can add services; contact the operator to change service restrictions.', options).className = 'small';
     button(options, 'Check connection', () => act(account, 'verifications', status)).disabled = active(op);
@@ -83,9 +92,10 @@ function renderAccount(account, row, index) {
     const disconnect = button(options, 'Disconnect', () => { if (confirm('Disconnect ' + account.email + '? Your Google data is not affected.')) act(account, 'connection', status); }); disconnect.dataset.restrictive = op?.kind === 'disconnect' && active(op) ? '' : 'true';
     const google = element('a', 'Revoke at Google ↗', options); google.href = 'https://myaccount.google.com/connections'; google.target = '_blank'; google.rel = 'noopener noreferrer';
   }
-  if (op?.phase === 'authorizing') button(options, 'Restart Google consent', () => act(account, 'enrollments', status, true)).disabled = !snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]);
+  if (op?.phase === 'authorizing' && op.auth_mode !== 'connection') button(options, 'Restart Google consent', () => act(account, 'enrollments', status, true)).disabled = !snapshot.application.clientConfigured || draft.services.some(name => !snapshot.application.apiConfirmed?.[name]);
+  renderConnectionLink(account, row, status);
   if (options.children.length === 1) options.remove();
-  options.querySelectorAll('button').forEach((control, number) => { control.dataset.focus = 'option-' + number; if (pending.has(account.email) || active(op) && op.phase !== 'authorizing' && control.dataset.restrictive !== 'true') control.disabled = true; });
+  options.querySelectorAll('button').forEach((control, number) => { control.dataset.focus = 'option-' + number; if (pending.has(account.email) || active(op) && op.phase !== 'authorizing' && control.dataset.restrictive !== 'true' && !(op.phase === 'awaiting_connection' && control.dataset.connectionLink === 'true')) control.disabled = true; });
 }
 function renderAccounts() {
   const focused = document.activeElement, email = focused.closest?.('.account')?.dataset.email, focusKey = focused.dataset?.focus;
@@ -102,6 +112,52 @@ function renderAccounts() {
   if (email && focusKey) { const row = [...$('accounts').children].find(node => node.dataset.email === email), control = row?.querySelector('[data-focus="' + focusKey + '"]'); (control && !control.disabled ? control : row)?.focus({ preventScroll: true }); }
 }
 function button(parent, text, action) { const node = element('button', text, parent); node.type = 'button'; node.addEventListener('click', action); return node; }
+function renderConnectionLink(account, row, status) {
+  const op = account.latest_operation, link = connectionLinks.get(account.email) || connectionMetadata.get(account.email);
+  if (!link || op?.id !== link.operationId || !['awaiting_connection', 'authorizing'].includes(op.phase)) return;
+  const panel = element('div', '', row); panel.className = 'connection-link';
+  element('p', 'Open this link in the browser profile for ' + account.email + '. No auth.k-rae.com sign-in is needed there.', panel);
+  element('p', 'Expires ' + time(link.expiresAt) + '.', panel).className = 'small';
+  if (link.expiresAt * 1000 <= Date.now()) { element('p', 'This link expired. Generate a replacement link.', panel); return; }
+  if (!link.connectionUrl || op.phase === 'authorizing') {
+    element('p', op.phase === 'authorizing' ? 'Google approval is in progress in the profile that opened this link.' : 'Generate a replacement link to copy it again.', panel);
+    button(panel, 'Cancel connection link', () => cancelLink(account, link.id, status)).disabled = pending.has(account.email); return;
+  }
+  const label = element('label', 'Connection link', panel), field = element('input', '', panel); field.className = 'connection-url'; field.readOnly = true; field.value = link.connectionUrl; field.id = 'connection-url-' + order.indexOf(account.email); label.htmlFor = field.id; field.dataset.focus = 'connection-url';
+  button(panel, 'Copy connection link', async () => {
+    try { await navigator.clipboard.writeText(link.connectionUrl); status.textContent = 'Connection link copied. Open it in the browser profile for ' + account.email + '.'; }
+    catch { field.focus(); field.select(); status.textContent = 'Select and copy the connection link above.'; }
+  }).dataset.focus = 'copy-connection-link';
+  button(panel, 'Cancel connection link', () => cancelLink(account, link.id, status)).disabled = pending.has(account.email);
+}
+async function showOrMintLink(account, status) {
+  const link = connectionLinks.get(account.email);
+  if (link && link.expiresAt * 1000 > Date.now()) { document.getElementById('connection-url-' + order.indexOf(account.email))?.focus(); return; }
+  await mintLink(account, status, true);
+}
+async function mintLink(account, status, replace = false) {
+  if (pending.has(account.email)) return;
+  const body = { services: draftFor(account).services, replace }, key = account.email + ':connection-links:' + JSON.stringify(body);
+  if (!body.services.length) { status.textContent = 'Select at least one service.'; return; }
+  if (!keys.has(key)) keys.set(key, crypto.randomUUID());
+  pending.add(account.email); status.textContent = 'Generating connection link…';
+  try {
+    const link = await request(accountRoute(account.email) + '/connection-links', 'POST', body, { 'Idempotency-Key': keys.get(key) });
+    keys.delete(key);
+    if (!link.connectionUrl) throw new Error('This link has expired or was canceled. Generate a replacement link.');
+    const url = new URL(link.connectionUrl); if (url.origin !== location.origin) throw new Error('Unexpected connection link address.');
+    connectionLinks.set(account.email, link); drafts.delete(account.email); pending.delete(account.email); await loadSetup();
+    document.getElementById('connection-url-' + order.indexOf(account.email))?.focus();
+  } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+  finally { pending.delete(account.email); }
+}
+async function cancelLink(account, linkId, status) {
+  if (pending.has(account.email)) return;
+  pending.add(account.email);
+  try { await request('connection-links/' + encodeURIComponent(linkId), 'DELETE'); connectionLinks.delete(account.email); pending.delete(account.email); await loadSetup(); }
+  catch (error) { status.textContent = error.message; status.classList.add('error'); }
+  finally { pending.delete(account.email); }
+}
 async function act(account, action, status, restart = false) {
   if (pending.has(account.email) || !action) return;
   pending.add(account.email); status.textContent = 'Saving…';
@@ -121,6 +177,10 @@ async function loadSetup() {
   if (loading) return; loading = true; clearTimeout(pollTimer);
   try {
     snapshot = await request('setup'); csrfToken = snapshot.csrfToken;
+    await Promise.all(snapshot.accounts.filter(account => account.latest_operation?.auth_mode === 'connection' && ['awaiting_connection', 'authorizing'].includes(account.latest_operation.phase)).map(async account => {
+      try { connectionMetadata.set(account.email, await request('connection-links/' + encodeURIComponent(account.latest_operation.connection_link_id))); } catch { connectionMetadata.delete(account.email); }
+    }));
+    for (const [email, link] of connectionLinks) if (snapshot.accounts.find(account => account.email === email)?.latest_operation?.id !== link.operationId) connectionLinks.delete(email);
     snapshot.accounts.forEach(account => { if (!drafts.get(account.email)?.dirty && !pending.has(account.email)) drafts.delete(account.email); }); renderAccounts();
     $('guide').hidden = false; $('loginLink').hidden = true; message('pageStatus', '');
     const operation = new URLSearchParams(location.search).get('operation');
