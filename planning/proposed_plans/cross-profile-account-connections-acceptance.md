@@ -1,6 +1,6 @@
 # Cross-profile account connections: acceptance evidence
 
-Status: implementation and local verification complete; production release pending.
+Status: implementation, local verification, production deployment, and independent read-only runtime verification complete.
 
 The isolated feature provides owner-generated, account-specific connection links. A target browser profile claims only the frozen operation, approves its matching Google account, and sees its result without an Authentik owner login. Owner management controls remain protected.
 
@@ -19,9 +19,24 @@ Google navigation was intercepted and marked offline. No real Google consent, Go
 
 ## Release
 
-Source: isolated feature worktree, integrated committed code to `/Users/jay/Projects/gogcli-proxy`.
+Source: isolated feature worktree, integrated committed code to `/Users/jay/Projects/gogcli-proxy`; deployed commit `5893406bf97181ba01cec54775296da4bbb86bb7`.
 Target: `gogcli-prd`, account `968138089939`, region `us-east-2`, stack `GogcliGoogleProxyApi`, profile `krae-jdev-dev-prd`.
 
 Page remains https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/ . The permanent Google callback remains unchanged.
 
 After release, the user generates a link from an account's Connection options and opens it in that account's Google browser profile. Software release and real account enrollment are separate outcomes.
+
+## Production verification
+
+Deployment completed on 2026-09-30. The stack is `UPDATE_COMPLETE`; both Lambda functions are `Active` with successful updates. Both deployed ZIP SHA256 hashes and all 28 committed source/assets match the release commit. Only the two Lambda code packages changed.
+
+Independent read-only checks confirmed:
+
+- All six existing invoke ARNs and the permanent Google callback are unchanged.
+- The single canonical Google application is configured, with Gmail, Drive, and Calendar APIs confirmed ready.
+- All eight accounts remain: one verified connection using the canonical application, seven not connected, and no active operations.
+- All six public pages/assets match committed source and retain no-store, no-referrer, and CSP headers.
+- Unauthenticated owner setup returns 401 with the owner login URL; scoped operation access returns 401 without an owner login URL.
+- An unknown-state callback redirects to a clean public result without echoing the supplied code.
+
+Evidence: `/tmp/gogcli-cross-profile-deploy.log` and `/tmp/gogcli-cross-profile-runtime-verify-results.b1b6bvlk.log`. Verification performed only production metadata reads and HTTP GETs; no production link or Google consent was created.

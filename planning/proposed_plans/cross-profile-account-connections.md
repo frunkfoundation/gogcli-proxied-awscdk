@@ -1,6 +1,6 @@
 # Proposed: account connection links across browser profiles
 
-Status: implemented and locally verified; committed-source integration, production deployment, and runtime verification pending. Real Google enrollment remains a user consent step.
+Status: implemented, integrated, deployed, and independently verified in production. Deployed source: `5893406bf97181ba01cec54775296da4bbb86bb7`. Real Google enrollment remains a user consent step; one account is connected and seven remain.
 Base: `4593f9dcbc410a76acd8864f316fa61a8af420db`.
 Worktree: `/Users/jay/Projects/worktrees/gogcli-proxy/cross-profile-connections`.
 Branch: `feat/cross-profile-account-connections`.
