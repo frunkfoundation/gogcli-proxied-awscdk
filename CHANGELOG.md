@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accounts: simplify the owner and connection pages with one status per account and connection links offered up front. Copy and Refresh now show visible feedback. Background refreshes no longer rebuild buttons mid-click or drop a just-created link, and a reloaded page offers one clear **Create new link** action.
+
 - Accounts: generate account-specific connection links for Google accounts in separate browser profiles, without an Authentik login in the target profile; retain authenticated owner controls, exact-account checks, and durable consent recovery.
 
 - Accounts: distinguish approved Google permissions from completed proxy checks, explain the access-cache wait, and remove repeated connection progress and unchecked timestamps.

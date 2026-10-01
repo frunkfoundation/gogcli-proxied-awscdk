@@ -40,7 +40,7 @@ def main():
             throw Error('historical installed connection counted as canonical');
           const old=document.querySelectorAll('.account')[0], fresh=document.querySelectorAll('.account')[1];
           if(!old.textContent.includes('existing connection still works') || !old.textContent.includes('Last reconnect failed') || !old.textContent.includes('Choose jay.jakosky@gmail.com')) throw Error('replacement failure hid installed evidence or wrong-account recovery');
-          if(old.querySelector('button').textContent!=='Reconnect' || fresh.querySelector('button').textContent!=='Connect') throw Error('primary actions wrong');
+          if(old.querySelector('[data-action=enrollments]').textContent!=='Reconnect in this browser' || fresh.querySelector('[data-action=enrollments]').textContent!=='Connect in this browser' || fresh.querySelector('button').dataset.action!=='link') throw Error('primary actions wrong');
           if(document.querySelector('.owner-access') || document.body.textContent.includes('Connect Google only')) throw Error('Connect needs another access decision');
           if([...document.querySelectorAll('[data-service="calendar"]')].some(input=>input.checked)) throw Error('Calendar implicitly selected');
           fresh.querySelector('[data-service="calendar"]').click();
@@ -52,16 +52,19 @@ def main():
         check("""
           const card=document.querySelectorAll('.account')[1];
           if(!card.querySelector('[data-service="calendar"]').checked || document.querySelector('#newEmails').value!=='bad email') throw Error('refresh lost draft');
-          if(!card.querySelector('button').disabled || !card.textContent.includes('Google Calendar') || !card.textContent.includes('Contact the operator')) throw Error('missing API not actionable');
+          if(![...card.querySelectorAll('.actions button')].every(button=>button.disabled) || !card.textContent.includes('Google Calendar') || !card.textContent.includes('Contact the operator')) throw Error('missing API not actionable');
+          if(!document.querySelector('#updated').textContent.startsWith('Updated')) throw Error('refresh gave no visible feedback');
           card.querySelector('[data-service="calendar"]').click();
           document.querySelectorAll('.account')[0].querySelector('details').open=true;
           card.querySelector('[data-service="drive"]').focus();
+          window.unchangedControl=document.querySelectorAll('.account')[2].querySelector('button');
         """)
         check("loadSetup()")
         browser("wait", "200")
         check("""
           const card=document.querySelectorAll('.account')[1];
           if(document.activeElement!==card.querySelector('[data-service="drive"]') || !document.querySelectorAll('.account')[0].querySelector('details').open) throw Error('polling lost focus or open options');
+          if(!window.unchangedControl.isConnected) throw Error('unchanged poll rebuilt controls under the pointer');
         """)
         saved = deepcopy(STATE["accounts"][0])
         now = int(time.time())
@@ -97,7 +100,7 @@ def main():
         check("""
           const card=document.querySelectorAll('.account')[0];
           if(!card.textContent.includes('Connected services: Gmail and Google Drive') || !document.querySelector('#connectedCount').textContent.startsWith('1 of 8')) throw Error('successful checks not presented as connected');
-          if(card.textContent.includes('Connection check complete.') || !card.textContent.includes('last check passed ·')) throw Error('completed status repeated or check timestamp missing');
+          if(card.textContent.includes('Connection check complete.') || !card.textContent.includes('Google Drive passed ·') || card.querySelector('.badge').textContent!=='Connected') throw Error('completed status repeated or check timestamp missing');
         """)
         STATE["accounts"][0] = saved
         STATE["application"]["clientConfigured"] = False
@@ -115,9 +118,9 @@ def main():
           const old=document.querySelectorAll('.account')[0];
           if(!document.querySelector('#connectedCount').textContent.startsWith('1 of 8')) throw Error('promoted canonical account not counted');
           old.querySelector('[data-service="calendar"]').click();
-          if(old.querySelector('button').textContent!=='Reconnect to add Google Calendar') throw Error('added service hidden in options');
+          if(!old.textContent.includes('Google Calendar will be added when you reconnect') || old.querySelector('[data-action=enrollments]').textContent!=='Reconnect in this browser') throw Error('added service hidden in options');
           if(!old.querySelector('[data-service="gmail"]').disabled || !old.querySelector('[data-service="drive"]').disabled) throw Error('installed services silently removable');
-          if(old.querySelectorAll('p')[2].textContent.includes('Calendar')) throw Error('draft service presented as installed');
+          if([...old.querySelectorAll('p')].find(node=>/^(Connected|Authorized) services:/.test(node.textContent)).textContent.includes('Calendar')) throw Error('draft service presented as installed');
         """)
         STATE["application"]["apiConfirmed"]["calendar"] = True
         STATE["accounts"][0]["connection_status"] = "needs_attention"
@@ -127,7 +130,7 @@ def main():
           if(!document.querySelector('#connectedCount').textContent.startsWith('0 of 8')) throw Error('needs_attention counted complete');
           const fresh=document.querySelectorAll('.account')[1];
           if(!fresh.textContent.includes('Tool access: paused') || !fresh.textContent.includes('Tool access will remain paused')) throw Error('paused initial Connect promises enabled tools');
-          fresh.querySelector('button').click();
+          fresh.querySelector('[data-action=enrollments]').click();
         """)
         browser("wait", "200")
         consent = CALLS[-1]

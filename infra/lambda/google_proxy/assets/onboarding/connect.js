@@ -20,12 +20,15 @@ function render(op) {
   const expiry = op.consentExpiresAt || op.expiresAt;
   $('connectionExpiry').textContent = expiry ? (op.consentExpiresAt ? 'Google approval expires ' : 'Connection link expires ') + time(expiry) + '.' : '';
   $('continueGoogle').hidden = !op.canContinue;
+  $('connectionHelp').hidden = !op.canContinue;
+  $('refreshConnection').hidden = op.status === 'succeeded';
+  $('connectionUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   $('continueGoogle').disabled = busy;
-  const phases = { awaiting_connection: 'Ready to connect. Check the account and selected services, then continue to Google.', preparing_consent: 'Preparing Google approval…', authorizing: 'Waiting for Google approval. Continue to return to the same approval.', exchanging: 'Receiving Google authorization…', validating: 'Checking your connection…', checking_candidate: 'Checking your connection…', pending_promotion: 'Saving your connection…', applying_access: 'Applying access…', verifying: 'Checking your connection…', ready: 'Your account is connected.' };
+  const phases = { awaiting_connection: 'Ready to connect. Check the account and selected services, then continue to Google.', preparing_consent: 'Preparing Google approval…', authorizing: 'Waiting for Google approval. Continue to return to the same approval.', exchanging: 'Receiving Google authorization…', validating: 'Checking your connection…', checking_candidate: 'Checking your connection…', pending_promotion: 'Saving your connection…', applying_access: 'Applying access…', verifying: 'Checking your connection…', ready: 'Your account is connected. You can close this tab.' };
   const expired = op.canContinue === false && (op.phase === 'awaiting_connection' || op.phase === 'authorizing' && op.consentExpiresAt * 1000 <= Date.now());
   const terminal = ['failed', 'canceled'].includes(op.status);
   const failures = { identity_mismatch: 'Google approved a different account. This connection requires ' + op.email + '.', missing_service_permission: 'Google did not approve every selected service.', consent_denied: 'Google approval was canceled.', consent_expired: 'Google approval expired.', connection_link_expired: 'This connection link expired.', refresh_required: 'Google did not provide the authorization needed to keep this account connected.' };
-  status((expired ? (op.phase === 'awaiting_connection' ? 'This connection link expired.' : 'Google approval expired.') : '') || failures[op.errorCode] || op.safeMessage || (terminal ? 'This connection did not complete.' : phases[op.phase] || (op.status === 'succeeded' ? 'Your account is connected.' : 'Connection in progress…')), terminal || expired);
+  status((expired ? (op.phase === 'awaiting_connection' ? 'This connection link expired.' : 'Google approval expired.') : '') || failures[op.errorCode] || op.safeMessage || (terminal ? 'This connection did not complete.' : phases[op.phase] || (op.status === 'succeeded' ? 'Your account is connected. You can close this tab.' : 'Connection in progress…')), terminal || expired);
   recovery(terminal || expired ? 'Ask the account owner for a new connection link. No sign-in to auth.k-rae.com is needed in this browser profile.' : '');
   clearTimeout(timer);
   if (['accepted', 'running', 'applying'].includes(op.status)) timer = setTimeout(load, 5000);
@@ -52,7 +55,10 @@ $('continueGoogle').addEventListener('click', async () => {
   } catch (error) { if (current !== revision) return; status(error.message, true); recovery('Use Continue to Google to retry this request, or ask the account owner for a new connection link.'); }
   finally { if (current === revision) { busy = false; $('continueGoogle').disabled = false; } }
 });
-$('refreshConnection').addEventListener('click', load);
+$('refreshConnection').addEventListener('click', async () => {
+  const control = $('refreshConnection'); control.disabled = true; control.textContent = 'Refreshing…';
+  await load(); control.disabled = false; control.textContent = 'Refresh status';
+});
 window.addEventListener('focus', () => { if (!busy) load(); });
 async function open() {
   const fragment = location.hash.slice(1), current = ++revision;

@@ -11,9 +11,12 @@
   <section id="connectionDetails" hidden aria-labelledby="connectionEmail">
     <h2 id="connectionEmail"></h2>
     <p id="connectionServices"></p><p id="connectionExpiry" class="small"></p>
-    <p>Use the browser profile for this account, then choose this exact account at Google. No auth.k-rae.com sign-in is needed here.</p>
-    <button id="continueGoogle" type="button" hidden>Continue to Google</button>
-    <button id="refreshConnection" type="button">Refresh status</button>
+    <p id="connectionHelp">Make sure this browser profile is signed in to this account, then continue. Choose the same account at Google. No auth.k-rae.com sign-in is needed here.</p>
+    <div class="connect-actions">
+      <button id="continueGoogle" type="button" hidden>Continue to Google</button>
+      <button id="refreshConnection" class="secondary" type="button">Refresh status</button>
+      <span id="connectionUpdated" class="small" role="status"></span>
+    </div>
   </section>
   <p id="connectionRecovery" class="notice" hidden></p>
   <noscript><p>Enable JavaScript to open this connection link.</p></noscript>

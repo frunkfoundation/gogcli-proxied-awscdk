@@ -87,12 +87,15 @@ def reopen_owner(url, count=None):
 
 def mint(url, email):
     reopen_owner(url)
-    check(OWNER, "const card=" + fixture.card(email) + ";card.querySelector('details').open=true;"
-          "const button=[...card.querySelectorAll('button')].find(node=>node.textContent==='Generate connection link');"
+    check(OWNER, "const card=" + fixture.card(email) + ";const details=card.querySelector('details');if(details)details.open=true;"
+          "const button=card.querySelector('[data-action=link]');"
           "if(!button) throw Error('missing owner mint action');button.click()")
     selector = '[data-email="' + email + '"] .connection-url'
     browser(OWNER, "wait", selector)
     link = browser(OWNER, "get", "value", selector).strip()
+    check(OWNER, "const card=" + fixture.card(email) + ",copy=card.querySelector('[data-action=copy]');navigator.clipboard.writeText=async text=>{window.copied=text};"
+          "copy.click();await new Promise(done=>setTimeout(done));"
+          "if(window.copied!==card.querySelector('.connection-url').value||copy.textContent!=='Copied ✓') throw Error('copy gave no feedback')")
     assert urlparse(link).fragment and not urlparse(link).query
     operation = fixture.SERVICE.account("fixture", email)["active_operation"]
     assert fixture.STORE.get("OP#" + operation)["phase"] == "awaiting_connection"
@@ -174,6 +177,8 @@ def main():
         browser(OWNER, "open", url)
         browser(OWNER, "cookies", "set", "__Host-gog-owner", "offline-owner", "--domain", "127.0.0.1", "--path", "/", "--secure", "--httpOnly", "--sameSite", "Lax")
         link, operation = mint(url, fixture.EMAIL)
+        reopen_owner(url)
+        check(OWNER, "const card=" + fixture.card(fixture.EMAIL) + ";if(card.querySelector('.connection-url')||card.querySelectorAll('[data-action=link]').length!==1||!card.textContent.includes('Links are shown only when created')) throw Error('reloaded link lacks one clear replacement action')")
         claim(TARGET_A, link, fixture.EMAIL)
         binding = fixture.STORE.get("OP#" + operation)["session_hash"]
         claim(TARGET_A, link, fixture.EMAIL)

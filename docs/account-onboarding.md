@@ -12,8 +12,9 @@ Use the owner page to manage every account. If the Google account is in another
 browser profile, use a connection link as described below; that profile does
 not need an owner sign-in.
 
-Choose services and press **Connect** on an account. Select that exact account
-at Google and approve the selected permissions. Connecting enables access for
+For an account signed in to the owner's browser profile, choose services and press
+**Connect in this browser**. Select that exact account at Google and approve the
+selected permissions. Connecting enables access for
 your authorized tools. If tool access was already paused, connection preserves
 that pause; use **Resume tool access** when you want to restore it.
 
@@ -21,8 +22,8 @@ Add addresses individually or paste a comma/newline-separated list in **Add
 accounts**. Eight is the current roster, not a limit. New accounts select Gmail,
 Drive, and Calendar by default. You can uncheck a service before connecting.
 Existing accounts keep their selected and installed services. For an existing
-connection without Calendar, choose **Reconnect to add Calendar**
-to approve it through fresh Google consent. Installed services cannot be silently
+connection without Calendar, select Calendar and reconnect (in this browser or
+through a connection link) to approve it through fresh Google consent. Installed services cannot be silently
 removed through reconnect.
 
 | Service | Access, subject to proxy policy |
@@ -37,8 +38,9 @@ establish a connection to this proxy.
 
 ## Connect an account in another browser profile
 
-1. In the owner page, choose the services for the account and open **Connection options**.
-2. Choose **Generate connection link**, then **Copy connection link**.
+1. In the owner page, choose the services for the account and press **Create connection link**.
+   For a connected account, it is under **Manage**.
+2. Press **Copy link**; the button confirms with **Copied ✓**.
 3. Switch to the browser profile where that Google account is signed in and paste the link into its address bar.
 4. Check the account name and services, then choose **Continue to Google** and approve access.
 5. The connection page shows progress and the result. The owner dashboard shows the same saved progress.
@@ -47,8 +49,10 @@ The target profile does not need an `auth.k-rae.com` login. The link permits onl
 this account's connection; it does not open the owner dashboard or its controls.
 The link is valid for 24 hours and binds to the first profile that opens it.
 Reopen in that same profile to continue. If it expires, is opened in the wrong
-profile, or you clear that profile's cookies, generate a replacement from the
-owner page. Keep connection links private.
+profile, or you clear that profile's cookies, create a new link from the
+owner page. The owner page shows a link only when it is created; after a reload,
+use **Create new link** if you no longer have it, which stops the old link.
+Keep connection links private.
 
 Google consent has its own 30-minute deadline after you start it. Starting
 consent before the link's expiry does not shorten that approval window. A failed
@@ -85,15 +89,16 @@ probes at that time; a CLI check additionally proves the actual caller's access.
 - If a Workspace administrator blocks the application, follow the contextual
   approval instructions for that account. Application configuration belongs to
   the operator.
-- **Refresh** reloads saved progress without submitting unfinished account edits.
-  An expired owner session requires signing in again.
+- **Refresh** reloads saved progress without submitting unfinished account edits
+  and shows when it last updated. The page also refreshes while work is in
+  progress. An expired owner session requires signing in again.
 
 Secrets and refresh tokens stay remotely in SSM SecureString. Never paste OAuth
 codes, secret JSON, or callback URLs containing codes into chat.
 
 ## Remove access or disconnect
 
-Use **Connection options** for connection checks, reconnect, pause/resume, and
+Use **Manage** for connection checks, reconnect, pause/resume, and
 disconnect. **Pause tool access** withdraws the configured owner's account access
 while retaining Google authorization. Reconnect preserves a saved pause.
 

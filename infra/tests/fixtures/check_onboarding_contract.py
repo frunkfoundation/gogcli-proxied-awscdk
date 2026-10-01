@@ -147,7 +147,7 @@ def reopen(url):
 
 
 def consent(email, services):
-    check(card(email) + ".querySelector('button').click()")
+    check(card(email) + ".querySelector('[data-action=enrollments]').click()")
     browser("wait", "--url", "https://accounts.google.com/**")
     check("if(!document.body.textContent.includes('offlineGoogle')) throw Error('Google navigation escaped interception')")
     query = parse_qs(urlparse(browser("get", "url").strip()).query)
