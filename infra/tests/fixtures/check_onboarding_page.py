@@ -1,6 +1,8 @@
 """Offline rendered account-page regression in an independent named browser."""
 import subprocess
 import threading
+import time
+from copy import deepcopy
 from http.server import HTTPServer
 from onboarding_page import CALLS, Handler, STATE
 
@@ -61,6 +63,43 @@ def main():
           const card=document.querySelectorAll('.account')[1];
           if(document.activeElement!==card.querySelector('[data-service="drive"]') || !document.querySelectorAll('.account')[0].querySelector('details').open) throw Error('polling lost focus or open options');
         """)
+        saved = deepcopy(STATE["accounts"][0])
+        now = int(time.time())
+        STATE["accounts"][0].update({"uses_current_app": True,
+            "services": [{"name": name, "authorization_status": "granted", "last_verification_status": "not_checked", "last_verified_at": 0} for name in ("gmail", "drive")],
+            "latest_operation": {"id": "op-promoted", "kind": "enrollment", "status": "running", "phase": "verifying",
+                "promoted_at": now, "authorization_written_at": now, "propagation_complete_at": now + 65}})
+        refresh()
+        check("""
+          const card=document.querySelectorAll('.account')[0], paragraphs=[...card.querySelectorAll('p')];
+          if(card.textContent.includes('Connected services:') || !card.textContent.includes('Authorized services: Gmail and Google Drive')) throw Error('unchecked authorization presented as connected services');
+          if(!document.querySelector('#connectedCount').textContent.startsWith('0 of 8')) throw Error('unchecked authorization counted connected');
+          if(paragraphs.filter(node=>node.textContent.includes('Google approved access.')).length!==1 || !card.textContent.includes('before checking Gmail and Google Drive') || !card.textContent.includes('can start after')) throw Error('promoted check lacks one clear status and cache wait');
+          if(card.textContent.includes('Takes effect by') || card.textContent.includes('not checked · not checked') || card.textContent.includes('Tool access: enabled')) throw Error('unverified check promises availability or repeats missing timestamp');
+          if(card.querySelector('button').textContent!=='Checking…' || !card.querySelector('button').disabled) throw Error('busy primary repeats status');
+          for(const label of ['Pause tool access','Disconnect']) if([...card.querySelectorAll('details button')].find(button=>button.textContent===label).disabled) throw Error('active check blocks restrictive action');
+          for(const label of ['Check connection','Reconnect']) if(![...card.querySelectorAll('details button')].find(button=>button.textContent===label).disabled) throw Error('active check permits overlapping operation');
+        """)
+        STATE["accounts"][0]["latest_operation"]["propagation_complete_at"] = now - 1
+        STATE["accounts"][0]["owner_access_enabled"] = False
+        refresh()
+        check("""
+          const card=document.querySelectorAll('.account')[0];
+          if(!card.textContent.includes('Checking Gmail and Google Drive through gogcli-proxy')) throw Error('expired cache wait still hides service check');
+          if(!card.textContent.includes('Tool access: paused') || ![...card.querySelectorAll('details button')].find(button=>button.textContent==='Resume tool access').disabled) throw Error('active check loses paused access or enables resume');
+          if([...card.querySelectorAll('details button')].find(button=>button.textContent==='Disconnect').disabled) throw Error('paused check blocks disconnect');
+        """)
+        STATE["accounts"][0]["owner_access_enabled"] = True
+        STATE["accounts"][0]["latest_operation"].update(status="succeeded", phase="ready", verified_at=now)
+        for service in STATE["accounts"][0]["services"]:
+            service.update(last_verification_status="succeeded", last_verified_at=now)
+        refresh()
+        check("""
+          const card=document.querySelectorAll('.account')[0];
+          if(!card.textContent.includes('Connected services: Gmail and Google Drive') || !document.querySelector('#connectedCount').textContent.startsWith('1 of 8')) throw Error('successful checks not presented as connected');
+          if(card.textContent.includes('Connection check complete.') || !card.textContent.includes('last check passed ·')) throw Error('completed status repeated or check timestamp missing');
+        """)
+        STATE["accounts"][0] = saved
         STATE["application"]["clientConfigured"] = False
         refresh()
         check("""
@@ -120,7 +159,7 @@ def main():
         check("document.querySelectorAll('details').forEach(node=>node.open=true); if(document.documentElement.scrollWidth>innerWidth) throw Error('mobile overflow')")
         browser("press", "Tab")
         check("if(document.activeElement===document.body) throw Error('keyboard focus lost')")
-        print("Passed account page: canonical count, eight saved cards, drafts/focus, service addition, readiness scope, recovery priority, paused Connect, independent accounts, callback focus, add accounts and mobile keyboard.")
+        print("Passed account page: verified connection status, promotion wait, restrictive actions, canonical count, eight saved cards, drafts/focus, service addition, readiness scope, recovery priority, paused Connect, independent accounts, callback focus, add accounts and mobile keyboard.")
     finally:
         browser("close")
         server.shutdown()

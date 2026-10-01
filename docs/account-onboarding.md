@@ -8,6 +8,10 @@ see the [operator runbook](https://github.com/Frunk-Foundation/gogcli-proxied-aw
 
 ## Connect accounts
 
+Use this same page and owner sign-in for every Google account. You do not need
+to sign into the proxy separately as each account; choose the matching account
+when Google asks you to authorize it.
+
 Choose services and press **Connect** on an account. Select that exact account
 at Google and approve the selected permissions. Connecting enables access for
 your authorized tools. If tool access was already paused, connection preserves
@@ -38,7 +42,12 @@ An account connected through the previous application needs **Reconnect**; its
 working connection remains available until the replacement succeeds. A failed
 reconnect does not discard installed access. Paused tool access is shown separately.
 
-Each service shows its last check and timestamp. Checks refresh authorization
+After Google approval, services are authorized but the proxy still needs to
+check them. A newly installed connection waits for the access cache to expire
+before those checks run. The page explains this waiting period; it counts the
+account as connected only after the selected-service checks pass.
+
+Each service shows its check status and, after a check runs, its timestamp. Checks refresh authorization
 and make read-only requests: Gmail profile and at most one message ID; Drive
 identity and at most one file ID; Calendar list with at most one calendar ID.
 Empty collections pass. Checks read no message bodies, file contents, or event

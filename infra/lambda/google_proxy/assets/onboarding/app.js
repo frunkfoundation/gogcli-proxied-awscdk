@@ -24,20 +24,23 @@ const accountServices = account => [...new Set([...(account.requested_services |
 const canContinue = op => op?.phase === 'authorizing' && op.consent_session_matches === true && op.continuation_key && op.continuation_request && op.consent_expires_at * 1000 > Date.now();
 const active = op => op && ['accepted', 'running', 'applying'].includes(op.status);
 const installed = account => ['connected', 'needs_attention'].includes(account.connection_status);
+const verified = account => account.connection_status === 'connected' && account.services?.length && account.services.every(service => service.authorization_status === 'granted' && service.last_verification_status === 'succeeded');
 const time = value => value ? new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString() : 'not checked';
 const serviceLabels = names => names.map(name => snapshot.serviceOptions.find(service => service.name === name)?.label || name).join(' and ');
 function draftFor(account) {
   if (!drafts.has(account.email)) drafts.set(account.email, { services: accountServices(account), dirty: false });
   return drafts.get(account.email);
 }
-function operationText(op, email) {
+function operationText(op, email, services) {
   const phases = { preparing_consent: 'Preparing Google consent…', preparing_recovery: 'Resuming saved authorization…', checking_candidate: 'Checking connection…', applying_access: 'Applying tool access change…', removing: 'Disconnecting…', propagating: 'Applying access change…', disconnected: 'Disconnected.', failed: 'Last attempt failed.', canceled: 'Consent canceled.', authorizing: 'Waiting for Google approval.', validating: 'Checking connection…', exchanging: 'Receiving Google authorization…', pending_promotion: 'Saving connection…', verifying: 'Checking connection…', applying: 'Removing access…', disconnecting: 'Disconnecting…', ready: 'Connection check complete.' };
   const failures = { identity_mismatch: 'Choose ' + email + ' at Google, then approve the selected services.', missing_service_permission: 'Approve every selected service when restarting Google consent.', refresh_required: 'Reconnect this account.', broad_allowlist_requires_operator: 'Contact the operator to narrow the caller allowlist, then retry.', consent_expired: 'Consent expired. Restart Google consent.', application_setup_required: 'gogcli-proxy is not ready to connect this account. Contact the operator, then retry.', managed_policy_conflict: 'Contact the operator to reconcile this account’s service policy, then retry.', consent_denied: 'Google consent was canceled. Restart Google consent.', workspace_restricted: 'This account’s Workspace administrator must approve gogcli-proxy. Contact the administrator, then restart consent.', api_disabled: 'gogcli-proxy is not ready for this service. Contact the operator, then retry.', provider_unavailable: 'The connection check failed. Retry the saved authorization if available.' };
-  return (phases[op.phase] || op.phase || op.status) + (op.error_code ? ' ' + (failures[op.error_code] || op.recovery || 'Retry, or contact the operator if the problem continues.') : '') + (op.propagation_complete_at * 1000 > Date.now() ? ' Takes effect by ' + time(op.propagation_complete_at) + '.' : '');
+  const waiting = op.propagation_complete_at * 1000 > Date.now();
+  if (active(op) && op.phase === 'verifying' && op.promoted_at && !op.error_code) return 'Google approved access. ' + (waiting ? 'Waiting for the access update before checking ' + serviceLabels(services) + '. The connection check can start after ' + time(op.propagation_complete_at) + '.' : 'Checking ' + serviceLabels(services) + ' through gogcli-proxy…');
+  return (phases[op.phase] || op.phase || op.status) + (op.error_code ? ' ' + (failures[op.error_code] || op.recovery || 'Retry, or contact the operator if the problem continues.') : '') + (waiting ? ' Waiting for the access update until ' + time(op.propagation_complete_at) + '.' : '');
 }
 function primaryFor(account, draft) {
   const op = account.latest_operation, additions = draft.services.filter(name => !installedServices(account).includes(name));
-  if (active(op) && op.phase !== 'authorizing') return { text: operationText(op, account.email), disabled: true };
+  if (active(op) && op.phase !== 'authorizing') return { text: ['checking_candidate', 'validating', 'verifying'].includes(op.phase) ? 'Checking…' : 'Working…', disabled: true };
   if (op?.phase === 'authorizing') return { text: canContinue(op) ? 'Continue Google consent' : 'Restart Google consent', action: 'enrollments' };
   if (account.recovery_available) return { text: 'Retry connection', action: 'recoveries' };
   if (!installed(account)) return { text: 'Connect', action: 'enrollments' };
@@ -46,19 +49,19 @@ function primaryFor(account, draft) {
   return { text: 'Check connection', action: 'verifications' };
 }
 function renderAccount(account, row, index) {
-  const draft = draftFor(account), op = account.latest_operation, primary = primaryFor(account, draft), hasInstalled = installed(account);
+  const draft = draftFor(account), op = account.latest_operation, primary = primaryFor(account, draft), hasInstalled = installed(account), checked = verified(account);
   const open = row.querySelector('details')?.open; row.replaceChildren();
   element('h3', account.email, row);
-  let state = hasInstalled ? account.uses_current_app ? account.connection_status === 'connected' ? 'Connected' : 'Reconnect required' : 'Reconnect required for gogcli-proxy' : 'Not connected';
-  if (active(op)) state = op.phase === 'authorizing' ? 'Waiting for Google approval' : primary.text;
+  let state = hasInstalled ? account.uses_current_app ? account.connection_status === 'connected' ? checked ? 'Connected' : 'Authorized; connection not verified' : 'Reconnect required' : 'Reconnect required for gogcli-proxy' : 'Not connected';
+  if (active(op)) state = operationText(op, account.email, installedServices(account));
   else if (account.recovery_available) state = 'Connection check needs retry';
   element('p', state, row);
   if (hasInstalled && !account.uses_current_app) element('p', account.connection_status === 'connected' ? 'Your existing connection still works. It stays available until the replacement succeeds.' : 'Your existing connection is retained and needs repair. Reconnect to replace its authorization.', row);
-  element('p', 'Tool access: ' + (active(op) && ['access', 'disconnect'].includes(op.kind) ? 'applying change…' : account.owner_access_enabled === false ? 'paused' : account.owner_access_enabled && hasInstalled ? 'enabled' : 'available after connection'), row);
-  element('p', 'Connected services: ' + (installedServices(account).length ? serviceLabels(installedServices(account)) : 'none'), row);
-  (account.services || []).forEach(service => element('p', serviceLabels([service.name]) + ': ' + (service.authorization_status === 'granted' ? 'authorized' : service.authorization_status) + ' · last check ' + (service.last_verification_status === 'succeeded' ? 'passed' : (service.last_verification_status || 'not checked').replaceAll('_', ' ')) + ' · ' + time(service.last_verified_at), row).className = 'small');
+  element('p', 'Tool access: ' + (active(op) && ['access', 'disconnect'].includes(op.kind) ? 'applying change…' : account.owner_access_enabled === false ? 'paused' : account.owner_access_enabled && hasInstalled ? checked ? 'enabled' : 'awaiting connection check' : 'available after connection'), row);
+  element('p', (checked ? 'Connected services: ' : 'Authorized services: ') + (installedServices(account).length ? serviceLabels(installedServices(account)) : 'none'), row);
+  (account.services || []).forEach(service => element('p', serviceLabels([service.name]) + ': ' + (service.authorization_status === 'granted' ? 'authorized' : service.authorization_status) + ' · last check ' + (service.last_verification_status === 'succeeded' ? 'passed' : (service.last_verification_status || 'not checked').replaceAll('_', ' ')) + (service.last_verified_at ? ' · ' + time(service.last_verified_at) : ''), row).className = 'small');
   if (op?.phase === 'authorizing' && !canContinue(op)) element('p', op.consent_expires_at * 1000 <= Date.now() ? 'Google consent expired. Restart to get a new approval link.' : 'Google consent cannot continue in this owner session. Restart Google consent.', row);
-  if (op) element('p', (hasInstalled && op.status === 'failed' && op.kind === 'enrollment' ? 'Last reconnect failed. ' : '') + operationText(op, account.email), row).className = 'small';
+  if (op && !active(op) && !(checked && op.status === 'succeeded' && op.phase === 'ready')) element('p', (hasInstalled && op.status === 'failed' && op.kind === 'enrollment' ? 'Last reconnect failed. ' : '') + operationText(op, account.email, installedServices(account)), row).className = 'small';
   const status = element('p', draft.dirty ? 'Service choices will be saved when you connect.' : '', row); status.id = 'account-status-' + index; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.tabIndex = -1;
   const fields = element('fieldset', '', row); element('legend', 'Services', fields);
   snapshot.serviceOptions.forEach(service => {
@@ -86,7 +89,7 @@ function renderAccount(account, row, index) {
 }
 function renderAccounts() {
   const focused = document.activeElement, email = focused.closest?.('.account')?.dataset.email, focusKey = focused.dataset?.focus;
-  const complete = snapshot.accounts.filter(account => account.uses_current_app && account.connection_status === 'connected' && account.services?.length && account.services.every(service => service.authorization_status === 'granted' && service.last_verification_status === 'succeeded')).length;
+  const complete = snapshot.accounts.filter(account => account.uses_current_app && verified(account)).length;
   const previous = snapshot.accounts.filter(account => installed(account) && !account.uses_current_app).length;
   message('connectedCount', complete + ' of ' + snapshot.accounts.length + ' connected to gogcli-proxy' + (previous ? '; ' + previous + ' existing connection' + (previous === 1 ? '' : 's') + ' awaiting reconnection' : ''));
   snapshot.accounts.forEach(account => { if (!order.includes(account.email)) order.push(account.email); });

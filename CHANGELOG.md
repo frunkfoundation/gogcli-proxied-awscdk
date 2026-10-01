@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accounts: distinguish approved Google permissions from completed proxy checks, explain the access-cache wait, and remove repeated connection progress and unchecked timestamps.
+
 - OAuth: provide public application information and privacy policy pages for the canonical Google app.
 
 - Accounts: select Gmail, Google Drive, and Google Calendar by default for new connections; preserve subsequently saved service choices.
