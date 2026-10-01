@@ -6,6 +6,8 @@ Google describes personal-use applications as fewer than 100 users known persona
 
 ## Public pages and Branding
 
+Release verified September 30, 2026 from commit `29daa2f8`: both public URLs below return HTTP 200 without authentication, exact committed assets and both Lambda ZIPs match, and stack/Lambda updates completed successfully. Account API sign-in and permanent OAuth callbacks remain unchanged. The operator must still save Branding and switch Google publishing to **In production**; AWS deployment does not change Google publishing status.
+
 Deploy the public page change before supplying these URLs to Google. Pages must return HTTP 200 without authentication.
 
 | Branding field | Value |
