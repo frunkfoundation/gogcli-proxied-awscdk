@@ -54,3 +54,5 @@ The account-only implementation is now the live page. Existing installed account
 ## Three-service defaults follow-up
 
 The owner requested all three services selected by default. All eight current accounts now request Gmail, Drive, and Calendar; installed grants, access flags, and generations remain unchanged, and no consent was started. New accounts default to all three, while subsequent explicit service choices are preserved.
+
+Follow-up source commit `877e6f3e` is deployed and verified. All 138 backend tests and the rendered new-account defaults regression passed. Both live Lambda packages match the 21 committed files and checksums; stack and functions completed successfully. Exact public assets, cache/auth guards, callbacks, and six invoke grants pass. Live setup confirms all three services ready and selected for all eight accounts.
