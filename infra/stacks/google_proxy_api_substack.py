@@ -14,6 +14,7 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_route53 as route53
 from aws_cdk import aws_route53_targets as targets
+from aws_cdk import aws_s3 as s3
 from .python_asset import python_asset
 from constructs import Construct
 
@@ -59,6 +60,24 @@ class GoogleProxyApi(Construct):
         )
         proxy_logs.grant_write(proxy_role)
 
+        downloads = s3.Bucket(
+            self, "Downloads", encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL, enforce_ssl=True,
+            object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+            removal_policy=RemovalPolicy.RETAIN,
+            lifecycle_rules=[s3.LifecycleRule(prefix="downloads/", expiration=Duration.days(1),
+                abort_incomplete_multipart_upload_after=Duration.days(1))],
+        )
+        downloads.add_to_resource_policy(iam.PolicyStatement(
+            effect=iam.Effect.DENY, principals=[iam.AnyPrincipal()],
+            actions=["s3:GetObject"], resources=[downloads.arn_for_objects("downloads/*")],
+            conditions={"NumericGreaterThan": {"s3:signatureAge": 300000}},
+        ))
+        proxy_role.add_to_policy(iam.PolicyStatement(
+            actions=["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            resources=[downloads.arn_for_objects("downloads/*")],
+        ))
+
         proxy_fn = lambda_.Function(
             self,
             "GoogleProxyHandler",
@@ -72,6 +91,7 @@ class GoogleProxyApi(Construct):
             timeout=Duration.seconds(props.lambda_timeout_seconds),
             memory_size=props.lambda_memory_mb,
             environment={
+                "GOG_DOWNLOAD_BUCKET": downloads.bucket_name,
                 "GOG_SSM_PREFIX": props.ssm_prefix,
                 "GOG_POLICY_ENABLED": os.getenv("GOG_POLICY_ENABLED", "true"),
                 "GOG_POLICY_SSM_PREFIX": os.getenv(

@@ -107,6 +107,7 @@ def _sanitize_outgoing_headers(in_headers: Mapping[str, Any]) -> Dict[str, str]:
         "x-api-key",
         "x-gog-account",
         "x-gog-google-host",
+        "x-gog-response-mode",
         "x-forwarded-for",
         "x-forwarded-proto",
         "x-forwarded-port",

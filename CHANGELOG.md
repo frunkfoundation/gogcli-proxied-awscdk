@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Proxy: stream full Drive downloads and exports to the CLI through private S3 staging and five-minute signed links, preserving account and operation policy checks and avoiding the Lambda response-size limit. Staging is bounded to 256 MiB and the request deadline.
+
 - Accounts: simplify the owner and connection pages with one status per account and connection links offered up front. Copy and Refresh now show visible feedback. Background refreshes no longer rebuild buttons mid-click or drop a just-created link, and a reloaded page offers one clear **Create new link** action.
 
 - Accounts: generate account-specific connection links for Google accounts in separate browser profiles, without an Authentik login in the target profile; retain authenticated owner controls, exact-account checks, and durable consent recovery.

@@ -56,6 +56,45 @@ class InfrastructureContractTests(unittest.TestCase):
             self.assertTrue(properties['RoleName'].startswith(self.binding['role_prefix'] + '-'))
             self.assertEqual(self.binding['permissions_boundary_arn'], properties['PermissionsBoundary'])
 
+    def test_download_storage_is_private_expiring_and_scoped_to_proxy(self):
+        buckets = self.template.find_resources('AWS::S3::Bucket')
+        self.assertEqual(1, len(buckets))
+        bucket_id, bucket = next(iter(buckets.items()))
+        self.assertEqual('Retain', bucket['DeletionPolicy'])
+        self.assertEqual('Retain', bucket['UpdateReplacePolicy'])
+        self.template.has_resource_properties('AWS::S3::Bucket', {
+            'BucketEncryption': {'ServerSideEncryptionConfiguration': [
+                {'ServerSideEncryptionByDefault': {'SSEAlgorithm': 'AES256'}}]},
+            'PublicAccessBlockConfiguration': {'BlockPublicAcls': True, 'BlockPublicPolicy': True,
+                'IgnorePublicAcls': True, 'RestrictPublicBuckets': True},
+            'OwnershipControls': {'Rules': [{'ObjectOwnership': 'BucketOwnerEnforced'}]},
+            'LifecycleConfiguration': {'Rules': [Match.object_like({
+                'Prefix': 'downloads/', 'Status': 'Enabled', 'ExpirationInDays': 1,
+                'AbortIncompleteMultipartUpload': {'DaysAfterInitiation': 1}})]}})
+        proxy_id, proxy = next((key, value['Properties'])
+            for key, value in self.template.find_resources('AWS::Lambda::Function').items()
+            if value['Properties']['Handler'] == 'handler.handler')
+        self.assertEqual({'Ref': bucket_id}, proxy['Environment']['Variables']['GOG_DOWNLOAD_BUCKET'])
+        role_id = proxy['Role']['Fn::GetAtt'][0]
+        permissions = [(policy['Properties'], statement)
+            for policy in self.template.find_resources('AWS::IAM::Policy').values()
+            for statement in policy['Properties']['PolicyDocument']['Statement']
+            if any(action.startswith('s3:') for action in
+                ([statement['Action']] if isinstance(statement['Action'], str) else statement['Action']))]
+        self.assertEqual(1, len(permissions))
+        policy, statement = permissions[0]
+        self.assertEqual([{'Ref': role_id}], policy['Roles'])
+        self.assertEqual({'s3:GetObject', 's3:PutObject', 's3:DeleteObject'}, set(statement['Action']))
+        download_arn = {'Fn::Join': ['', [{'Fn::GetAtt': [bucket_id, 'Arn']}, '/downloads/*']]}
+        self.assertEqual(download_arn, statement['Resource'])
+        policies = next(iter(self.template.find_resources('AWS::S3::BucketPolicy').values()))
+        statements = policies['Properties']['PolicyDocument']['Statement']
+        self.assertTrue(any(item['Effect'] == 'Deny' and item.get('Condition', {}).get('Bool') ==
+            {'aws:SecureTransport': 'false'} for item in statements))
+        self.assertTrue(any(item['Effect'] == 'Deny' and item['Action'] == 's3:GetObject'
+            and item['Resource'] == download_arn and item.get('Condition', {}).get('NumericGreaterThan') ==
+            {'s3:signatureAge': 300000} for item in statements))
+
     def test_secret_deletion_is_limited_to_account_lifecycle_and_temporary_parameters(self):
         deletion_resources = []
         for policy in self.template.find_resources('AWS::IAM::Policy').values():

@@ -145,5 +145,7 @@ access/disconnect controls. Local account aliases remain available.
 
 Transmitted bodies are limited to 4 MiB including encoding. Responses must fit
 6 MiB serialized Lambda envelopes; binary payloads have a lower ceiling because
-of base64 overhead. Large uploads, downloads, and exports may exceed these bounds.
-This stabilization does not add a large-file transfer path.
+of base64 overhead. Full Drive downloads and exports use private S3 staging instead,
+up to 256 MiB within the request deadline. This CLI follows the five-minute signed
+link automatically. Staged objects expire through a one-day lifecycle. Signed links
+remain usable until expiry even if proxy account access is subsequently paused.

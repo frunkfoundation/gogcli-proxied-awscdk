@@ -56,7 +56,9 @@ Direct-token and ADC modes are unsupported for managed account API calls.
 Maps/Places, public YouTube API-key modes, and Pub/Sub subscribers retain separate
 Google Cloud project credentials. Managed authentication commands inspect remote
 accounts and direct enrollment to the owner page. Transmitted request bodies are
-limited to 4 MiB; serialized responses must fit 6 MiB. Run `just proxy-test` for
+limited to 4 MiB; ordinary serialized responses must fit 6 MiB. Full Drive downloads
+and exports use private S3 staging with five-minute signed links, consumed automatically
+by this CLI, up to 256 MiB within the request deadline. Run `just proxy-test` for
 the offline Lambda contract checks.
 
 ## Quick start

@@ -13,7 +13,7 @@ class PythonAssetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertTrue(LocalPythonBundling(entry).try_bundle(directory, None))
             output = Path(directory)
-            for name in ('handler.py', 'onboarding.py', 'onboarding_services.py',
+            for name in ('handler.py', 'downloads.py', 'onboarding.py', 'onboarding_services.py',
                          'google/auth/__init__.py', 'authlib/__init__.py',
                          'requests/__init__.py', 'assets/onboarding/index.html',
                          'assets/onboarding/app.js', 'assets/onboarding/style.css',

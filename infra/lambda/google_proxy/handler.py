@@ -6,11 +6,12 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from credentials import mint_access_token
+from downloads import read_proxy_response
 from errors import ProxyError, remaining_seconds
 from policy import _evaluate_policy, _compose_policy_documents, _normalize_policy_document
 from proxy_http import (
     _build_query_keys, _build_query_string, _extract_account_domain, _get_header,
-    _normalize_email, _read_event_body, _sanitize_outgoing_headers, read_response, request_headers,
+    _normalize_email, _read_event_body, _sanitize_outgoing_headers, request_headers,
 )
 from routing import RoutingError, resolve_google_host_and_path
 from urllib.parse import urlsplit
@@ -385,7 +386,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             timeout=(connect_timeout, upstream_budget - connect_timeout),
         )
 
-        response = read_response(resp, max_bytes=max_resp, deadline=deadline)
+        response = read_proxy_response(resp, method=method, url=prepared.url, headers=headers,
+                                       max_bytes=max_resp, deadline=deadline)
         if policy_is_enabled:
             _maybe_emit_policy_event(policy_decision, policy_ctx, int(resp.status_code))
         return response

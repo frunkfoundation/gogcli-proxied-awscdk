@@ -329,11 +329,11 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 		r.Host = endpoint.Host
 	}
 
-	// Required routing/auth headers for the proxy.
 	if r.Header == nil {
 		r.Header = make(http.Header)
 	}
 
+	setProxyDownloadMode(r, req)
 	r.Header.Set("x-api-key", t.APIKey)
 
 	if !t.Inventory {
@@ -375,7 +375,7 @@ func (t *apiGatewayProxyTransport) RoundTrip(req *http.Request) (*http.Response,
 		return nil, fmt.Errorf("proxy roundtrip: %w", err)
 	}
 
-	return resp, nil
+	return t.downloadResponse(req, resp)
 }
 
 // payloadSHA256Hex returns the SHA256 of the request body without consuming it.

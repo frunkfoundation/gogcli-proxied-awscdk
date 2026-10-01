@@ -425,7 +425,30 @@ Trigger failures are logged but do not change allow/deny results.
 
 The request body cap is 4 MiB. `GOG_MAX_REQUEST_BYTES` may lower it, but cannot raise it. This leaves room for ordinary API Gateway event/base64 overhead below Lambda's 6 MiB invocation limit. Gmail's upstream 35 MiB raw-message limit does not apply to this proxy; the proxy body cap includes MIME/base64/JSON content transmitted to Google.
 
-Responses have both a streamed raw-body cap (`GOG_MAX_RESPONSE_BYTES`, default 5,500,000 bytes) and a hard 6 MiB cap on the serialized Lambda response, including headers, base64 expansion, JSON escaping, and the response envelope. Oversized responses return HTTP 502, and upstream response streams are always closed.
+Ordinary responses have both a streamed raw-body cap (`GOG_MAX_RESPONSE_BYTES`, default 5,500,000 bytes) and a hard 6 MiB cap on the serialized Lambda response, including headers, base64 expansion, JSON escaping, and the response envelope. Oversized responses return HTTP 502, and upstream response streams are always closed.
+
+Full Drive media downloads and exports opt into `X-GOG-Response-Mode: signed-url`.
+After the existing caller/account/operation authorization, successful full responses
+are staged in Lambda temporary storage (256 MiB maximum) and uploaded to the
+stack-owned private, AES256-encrypted, TLS-only S3 bucket. The header is removed
+before Google forwarding. The proxy returns a bounded
+`application/vnd.gog.download+json` envelope containing a five-minute presigned
+GET URL, the original status and sanitized headers, and the staged byte count.
+The Go transport consumes the envelope internally and streams the S3 response
+using a fresh request with no proxy credentials. It rejects redirects, invalid
+destinations, and incomplete transfers. Metadata, range responses, and upstream
+errors retain their ordinary response contract. See
+[the download contract](../docs/proxy-downloads.openapi.yaml).
+
+The proxy role has Get/Put/Delete access only to `downloads/*`; clients need no S3
+IAM grant. Bucket policy limits signed GET age to five minutes. Objects expire
+through a one-day lifecycle, with asynchronous S3 cleanup. A signed link is a
+temporary bearer capability and remains usable until expiration even after proxy
+access is paused; neither link nor content is logged. Failed staging returns no
+link and attempts object cleanup; lifecycle expiry also handles interrupted work.
+There is no persisted operation to resume: retrying the read creates a new opaque
+object without mutating Google data. Do not publish these links or make the bucket
+public. Retaining the bucket preserves lifecycle cleanup across stack removal.
 
 Token minting and forwarding share a request budget capped at 27 seconds, or two seconds less than the Lambda invocation's remaining time if shorter. Connect/read timeouts use each phase's remaining budget, token refresh retries are bounded by its refresh deadline, and streamed chunks are checked against the request deadline. Expired budgets return HTTP 504 before starting another phase.
 

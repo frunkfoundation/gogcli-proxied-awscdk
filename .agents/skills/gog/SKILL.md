@@ -59,8 +59,10 @@ as proof of authorization.
 Gmail uses `gmail.modify`; extra settings scopes and permanent deletion are not
 included. Drive uses full `drive` scope, with caller/account policy restricting
 operations independently. Bodies are limited to 4 MiB; serialized Lambda
-responses to 6 MiB, including binary encoding overhead. Do not promise large-file
-transfers or bypass the proxy.
+responses to 6 MiB, including binary encoding overhead. Full Drive downloads and
+exports use private S3 staging automatically, up to 256 MiB within the proxy request
+deadline. Signed links expire after five minutes; never print them. Range requests
+and other API responses retain the buffered response limit. Do not bypass the proxy.
 
 ## Safe use
 
