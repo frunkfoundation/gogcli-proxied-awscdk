@@ -39,15 +39,18 @@ The implementation-turn read-only metadata check found eight saved accounts, one
 
 Production target remains `gogcli-prd`, account `968138089939`, region `us-east-2`, stack `GogcliGoogleProxyApi`, profile `krae-jdev-dev-prd`.
 
-Release completed from canonical source commit `67121f96` to the target above. The newest Web-client JSON in Downloads on `cocos` passed project, endpoint, and exact callback validation and was imported through the operator command. Gmail/Drive are confirmed ready; Calendar API enablement remains unobserved and publishing status is recorded as `unknown`.
+Release completed from canonical source commit `67121f96` to the target above. The newest Web-client JSON in Downloads on `cocos` passed project, endpoint, and exact callback validation and was imported through the operator command. Gmail, Drive, and Calendar are confirmed ready; the owner supplied Console evidence showing Calendar API Enabled. Publishing status remains recorded as `unknown`.
 
 The pre-deployment check found eight accounts, no active account operations, and zero canonical installed connections. CDK changed only both Lambda packages and singular onboarding environment variables. The stack reached `UPDATE_COMPLETE`; both Lambdas are Active with successful updates. Deployed ZIP hashes and 21 committed source/assets/requirements files match. Six invoke grants and permanent callbacks are unchanged. Live source setup reads preserve eight accounts and the configured singular application. Public assets match exactly with `no-store`; owner API/authentication guards pass.
 
 Remaining steps:
 
-1. Observe Calendar API enablement in the canonical Google project and update operator readiness when confirmed.
-2. Reconnect the personal account through the live page, verify selected-service checks and authorized caller access, then continue the remaining accounts.
+1. Reconnect the personal account through the live page, verify selected-service checks and authorized caller access, then continue the remaining accounts.
 
 Published account URL after release: https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/
 
 The account-only implementation is now the live page. Existing installed account credentials remain preserved; software deployment has not enrolled the eight accounts. No Google content mutation or real consent was performed by release verification.
+
+## Three-service defaults follow-up
+
+The owner requested all three services selected by default. All eight current accounts now request Gmail, Drive, and Calendar; installed grants, access flags, and generations remain unchanged, and no consent was started. New accounts default to all three, while subsequent explicit service choices are preserved.

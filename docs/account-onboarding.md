@@ -14,9 +14,10 @@ your authorized tools. If tool access was already paused, connection preserves
 that pause; use **Resume tool access** when you want to restore it.
 
 Add addresses individually or paste a comma/newline-separated list in **Add
-accounts**. Eight is the current roster, not a limit. New accounts select Gmail
-and Drive; Calendar is optional. Existing accounts keep their selected and
-installed services. Select Calendar and choose **Reconnect to add Calendar**
+accounts**. Eight is the current roster, not a limit. New accounts select Gmail,
+Drive, and Calendar by default. You can uncheck a service before connecting.
+Existing accounts keep their selected and installed services. For an existing
+connection without Calendar, choose **Reconnect to add Calendar**
 to approve it through fresh Google consent. Installed services cannot be silently
 removed through reconnect.
 

@@ -20,7 +20,7 @@ async function request(route, method = 'GET', body, headers = {}) {
 }
 const accountRoute = email => 'accounts/' + encodeURIComponent(email);
 const installedServices = account => (account.services || []).map(service => service.name);
-const accountServices = account => [...new Set([...(account.requested_services || ['gmail', 'drive']), ...installedServices(account)])];
+const accountServices = account => [...new Set([...(account.requested_services || ['gmail', 'drive', 'calendar']), ...installedServices(account)])];
 const canContinue = op => op?.phase === 'authorizing' && op.consent_session_matches === true && op.continuation_key && op.continuation_request && op.consent_expires_at * 1000 > Date.now();
 const active = op => op && ['accepted', 'running', 'applying'].includes(op.status);
 const installed = account => ['connected', 'needs_attention'].includes(account.connection_status);
@@ -130,7 +130,7 @@ $('refresh').addEventListener('click', loadSetup);
 $('addAccountsForm').addEventListener('submit', async event => {
   event.preventDefault(); const emails = [...new Set($('newEmails').value.split(/[,\n]+/).map(email => email.trim().toLowerCase()).filter(Boolean))];
   if (!emails.length || emails.some(email => email.length > 254 || !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email))) { message('addStatus', 'Enter valid emails separated by commas or new lines.', true); return; }
-  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { services: ['gmail', 'drive'] });
+  try { for (const email of emails) if (!snapshot.accounts.some(account => account.email === email)) await request(accountRoute(email), 'PUT', { services: ['gmail', 'drive', 'calendar'] });
     $('newEmails').value = ''; message('addStatus', 'Added.'); await loadSetup();
   } catch (error) { message('addStatus', error.message, true); }
 });

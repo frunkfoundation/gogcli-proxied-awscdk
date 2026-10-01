@@ -15,7 +15,7 @@ SERVICE_OPTIONS = [
 ]
 IDENTITY_SCOPES = ["openid", "email"]
 SCOPES_BY_SERVICE = {item["name"]: item["scope"] for item in SERVICE_OPTIONS}
-DEFAULT_SERVICES = ["gmail", "drive"]
+DEFAULT_SERVICES = ["gmail", "drive", "calendar"]
 
 
 def selected_services(value):

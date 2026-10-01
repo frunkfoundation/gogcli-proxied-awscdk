@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accounts: select Gmail, Google Drive, and Google Calendar by default for new connections; preserve subsequently saved service choices.
+
 - Breaking: the owner page connects accounts to one server-selected gogcli-proxy application. Remove project/default selectors and application-configuration HTTP routes; fresh account/enrollment requests reject project selection. Provision the existing application's Web client through the operator command.
 - Accounts: show connection progress, requested/installed services, consent continuation and recovery, and pause/resume controls. Preserve working credentials on failed replacements and saved access pauses on reconnect.
 - Proxy: support optional Calendar consent and checks alongside Gmail and Drive; configuration review remains bound to the imported client revision, with Google Testing supported.

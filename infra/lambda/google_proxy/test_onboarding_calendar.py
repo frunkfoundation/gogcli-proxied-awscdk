@@ -16,6 +16,21 @@ class CalendarContracts(unittest.TestCase):
     def setUp(self):
         lifecycle.AccountLifecycleTests.setUp(self)
 
+    def test_new_account_defaults_to_all_three_services(self):
+        account = self.service.save_account("owner", "new@example.com", {})
+        self.assertEqual(["gmail", "drive", "calendar"], account["requested_services"])
+        self.assertEqual(account["requested_services"],
+            self.store.get("ACCOUNT#new@example.com")["requested_services"])
+
+    def test_explicit_service_choices_survive_saving_without_services(self):
+        for services in (["gmail", "drive"], ["calendar"]):
+            with self.subTest(services=services):
+                expected = services
+                account = self.service.save_account("owner", "new@example.com", {"services": services})
+                self.assertEqual(expected, account["requested_services"])
+                account = self.service.save_account("owner", "new@example.com", {})
+                self.assertEqual(expected, account["requested_services"])
+
     def decision(self, document, method, host, path):
         policy = _compose_policy_documents([_normalize_policy_document(document, source="default", source_rank=0)])
         return _evaluate_policy(policy, {"method": method, "host": host, "path": path,
@@ -37,7 +52,7 @@ class CalendarContracts(unittest.TestCase):
             "state", "verifier", "nonce", "jay@example.com", ["calendar"])
         self.assertEqual(["openid", "email", "https://www.googleapis.com/auth/calendar"],
             parse_qs(urlsplit(url).query)["scope"][0].split())
-        self.assertEqual(["gmail", "drive"], DEFAULT_SERVICES)
+        self.assertEqual(["gmail", "drive", "calendar"], DEFAULT_SERVICES)
 
     def test_calendar_policy_allows_calendar_writes_and_excludes_other_services(self):
         document = service_policy(["calendar"])

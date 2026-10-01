@@ -106,7 +106,14 @@ def main():
         check("if(document.activeElement.dataset.email!=='jay.jakosky@gmail.com') throw Error('callback did not focus operation account')")
         check("document.querySelector('#newEmails').value='new@example.com, second@example.com';document.querySelector('#addAccountsForm').requestSubmit()")
         browser("wait", "200")
-        check("if(document.querySelectorAll('.account').length!==10 || document.querySelector('#newEmails').value) throw Error('add accounts failed')")
+        check("""
+          if(document.querySelectorAll('.account').length!==10 || document.querySelector('#newEmails').value) throw Error('add accounts failed');
+          for (const email of ['new@example.com', 'second@example.com']) {
+            const card=[...document.querySelectorAll('.account')].find(node=>node.dataset.email===email);
+            const selected=[...card.querySelectorAll('[data-service]:checked')].map(input=>input.dataset.service);
+            if(JSON.stringify(selected)!==JSON.stringify(['gmail','drive','calendar'])) throw Error('new account must default to all three services');
+          }
+        """)
         if any(call["body"].get("projectId") for call in CALLS):
             raise AssertionError("fresh command selected project")
         browser("set", "viewport", "390", "844")

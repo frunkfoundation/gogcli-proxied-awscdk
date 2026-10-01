@@ -36,7 +36,7 @@ Successful delivery means:
 
 Read-only production metadata was checked at `2026-09-30T22:37:44Z`, using explicit profile `krae-jdev-dev-prd`, AWS account `968138089939`, region `us-east-2`.
 
-- Eight account records exist. Their saved service choices are Gmail and Drive; Calendar remains optional.
+- Eight account records exist. At the initial baseline their saved choices were Gmail and Drive. The owner subsequently requested all three selected by default.
 - `jay.jakosky@gmail.com` has a working installed connection through the previous application.
 - The other seven accounts are not connected.
 - The canonical application's Web-client JSON has not been imported into the proxy. Only a previous application's client record exists.
@@ -95,7 +95,7 @@ Keep email addresses and account order stable across polling. Avoid moving focus
 | --- | --- | --- |
 | Gmail | Read, send, label, and move mail to Trash | Selected for new accounts |
 | Google Drive | Read, create, change, share, and delete Drive files | Selected for new accounts |
-| Google Calendar | Read, create, change, share, and delete calendars and events | Optional |
+| Google Calendar | Read, create, change, share, and delete calendars and events | Selected for new accounts |
 
 Keep `gmail.modify`, `drive`, and `calendar`, plus the current identity scopes. Do not add broader Gmail permanent-deletion or settings scopes. The extra `gmail.drafts` scope is not required by this product flow.
 
@@ -266,7 +266,7 @@ Use existing meaningful tests wherever they already prove the contract. Red → 
 | Initial journey | A preconfigured app loads eight cards; select services → Connect → intercepted Google consent using fixed client, with no intervening app/default/setup action |
 | Return/reopen | Accepted progress survives reload; Google callback returns focus to the correct card; account count changes only after successful validation/promotion |
 | Prior working connection | Old installed credential remains usable on denied/failed replacement; canonical success replaces it and updates progress truthfully |
-| Services | Gmail/Drive defaults preserved; Calendar optional; Calendar-only and added-Calendar consent/probes correct; selecting a service does not present it as installed |
+| Services | All three services selected by default; explicit choices preserved; Calendar-only and added-Calendar consent/probes correct; selecting a service does not present it as installed |
 | Recovery | Correct priority of continuation, restart, saved recovery, checks, and new consent; saved code is not exchanged twice; recovery survives operation expiry; old-page exact replays/callbacks complete across deployment for both historical and canonical clients without accepting new project-bearing commands |
 | Access | Normal initial Connect enables intended authorized tools; an existing saved pause survives first consent and reconnect; delayed work cannot restore withdrawn access; disconnect respects propagation |
 | Failure scope | Missing app or Calendar API does not remove working-account controls or block unrelated Gmail/Drive work; safe actionable error copy |
