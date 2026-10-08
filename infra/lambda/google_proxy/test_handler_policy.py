@@ -1,6 +1,9 @@
 import unittest
 
-import handler
+import policy as policy_engine
+import proxy_authorization as authorization
+import proxy_config
+from errors import ProxyError
 
 
 class PolicyEngineTests(unittest.TestCase):
@@ -29,10 +32,10 @@ class PolicyEngineTests(unittest.TestCase):
         }
 
     def _normalize(self, doc, *, source="default", source_rank=0):
-        return handler._normalize_policy_document(doc, source=source, source_rank=source_rank)
+        return policy_engine._normalize_policy_document(doc, source=source, source_rank=source_rank)
 
     def test_default_deny_when_no_rule_matches(self):
-        policy = handler._compose_policy_documents(
+        policy = policy_engine._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -53,12 +56,12 @@ class PolicyEngineTests(unittest.TestCase):
             ]
         )
 
-        decision = handler._evaluate_policy(policy, self._ctx(method="POST"))
+        decision = policy_engine._evaluate_policy(policy, self._ctx(method="POST"))
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("default_effect", decision["reason"])
 
     def test_allows_matching_read_rule(self):
-        policy = handler._compose_policy_documents(
+        policy = policy_engine._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -80,12 +83,12 @@ class PolicyEngineTests(unittest.TestCase):
                 )
             ]
         )
-        decision = handler._evaluate_policy(policy, self._ctx(path="/gmail/v1/users/me/messages"))
+        decision = policy_engine._evaluate_policy(policy, self._ctx(path="/gmail/v1/users/me/messages"))
         self.assertEqual("allow", decision["effect"])
         self.assertEqual("gmail-read", decision["rule_id"])
 
     def test_deny_mutation_by_higher_priority(self):
-        policy = handler._compose_policy_documents(
+        policy = policy_engine._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -109,12 +112,12 @@ class PolicyEngineTests(unittest.TestCase):
                 )
             ]
         )
-        decision = handler._evaluate_policy(policy, self._ctx(method="POST"))
+        decision = policy_engine._evaluate_policy(policy, self._ctx(method="POST"))
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("deny-mutations", decision["rule_id"])
 
     def test_forbidden_query_key_blocks(self):
-        policy = handler._compose_policy_documents(
+        policy = policy_engine._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -135,12 +138,12 @@ class PolicyEngineTests(unittest.TestCase):
                 )
             ]
         )
-        decision = handler._evaluate_policy(policy, self._ctx(query_keys=["uploadtype"]))
+        decision = policy_engine._evaluate_policy(policy, self._ctx(query_keys=["uploadtype"]))
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("default", decision["source"])
 
     def test_domain_constraint(self):
-        policy = handler._compose_policy_documents(
+        policy = policy_engine._compose_policy_documents(
             [
                 self._normalize(
                     {
@@ -158,9 +161,9 @@ class PolicyEngineTests(unittest.TestCase):
                 )
             ]
         )
-        denied = handler._evaluate_policy(policy, self._ctx(account_email="jay@example.com"))
+        denied = policy_engine._evaluate_policy(policy, self._ctx(account_email="jay@example.com"))
         self.assertEqual("deny", denied["effect"])
-        allowed = handler._evaluate_policy(policy, self._ctx(account_email="jay@frunkholdings.ltd"))
+        allowed = policy_engine._evaluate_policy(policy, self._ctx(account_email="jay@frunkholdings.ltd"))
         self.assertEqual("allow", allowed["effect"])
 
     def test_source_precedence_on_same_priority(self):
@@ -196,13 +199,13 @@ class PolicyEngineTests(unittest.TestCase):
             source="account",
             source_rank=2,
         )
-        policy = handler._compose_policy_documents([default_doc, account_doc])
-        decision = handler._evaluate_policy(policy, self._ctx())
+        policy = policy_engine._compose_policy_documents([default_doc, account_doc])
+        decision = policy_engine._evaluate_policy(policy, self._ctx())
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("account-deny", decision["rule_id"])
 
     def test_invalid_policy_unknown_key_fails_closed(self):
-        with self.assertRaises(handler.ProxyError):
+        with self.assertRaises(ProxyError):
             self._normalize(
                 {
                     "version": 1,
@@ -213,7 +216,7 @@ class PolicyEngineTests(unittest.TestCase):
             )
 
     def test_load_effective_policy_merges_sources(self):
-        original = handler._ssm_get_policy_json
+        original = proxy_config._ssm_get_policy_json
         try:
             caller_id = "caller-a"
             account = "jay@frunkholdings.ltd"
@@ -224,12 +227,12 @@ class PolicyEngineTests(unittest.TestCase):
                     "default_effect": "deny",
                     "rules": [{"id": "base", "effect": "allow", "match": {"methods": ["GET"]}}],
                 },
-                f"{policy_prefix}/caller/{handler._b64url_nopad(caller_id)}": {
+                f"{policy_prefix}/caller/{authorization._b64url_nopad(caller_id)}": {
                     "version": 1,
                     "default_effect": "deny",
                     "rules": [{"id": "caller-rule", "effect": "allow", "priority": 10, "match": {"hosts": ["gmail.googleapis.com"]}}],
                 },
-                f"{policy_prefix}/account/{handler._b64url_nopad(account)}": {
+                f"{policy_prefix}/account/{authorization._b64url_nopad(account)}": {
                     "version": 1,
                     "default_effect": "deny",
                     "rules": [{"id": "account-rule", "effect": "deny", "priority": 20, "match": {"methods": ["POST"]}}],
@@ -239,23 +242,23 @@ class PolicyEngineTests(unittest.TestCase):
             def fake_get(name):
                 return store.get(name)
 
-            handler._ssm_get_policy_json = fake_get
-            policy = handler._load_effective_policy(policy_prefix, caller_id, account)
+            proxy_config._ssm_get_policy_json = fake_get
+            policy = authorization._load_effective_policy(policy_prefix, caller_id, account)
         finally:
-            handler._ssm_get_policy_json = original
+            proxy_config._ssm_get_policy_json = original
 
-        decision = handler._evaluate_policy(policy, self._ctx(method="POST"))
+        decision = policy_engine._evaluate_policy(policy, self._ctx(method="POST"))
         self.assertEqual("deny", decision["effect"])
         self.assertEqual("account-rule", decision["rule_id"])
 
     def test_load_effective_policy_requires_any_doc(self):
-        original = handler._ssm_get_policy_json
+        original = proxy_config._ssm_get_policy_json
         try:
-            handler._ssm_get_policy_json = lambda _: None
-            with self.assertRaises(handler.ProxyError):
-                handler._load_effective_policy("/gogcli-proxy/policy", "caller-b", "jay@example.com")
+            proxy_config._ssm_get_policy_json = lambda _: None
+            with self.assertRaises(ProxyError):
+                authorization._load_effective_policy("/gogcli-proxy/policy", "caller-b", "jay@example.com")
         finally:
-            handler._ssm_get_policy_json = original
+            proxy_config._ssm_get_policy_json = original
 
 
 if __name__ == "__main__":

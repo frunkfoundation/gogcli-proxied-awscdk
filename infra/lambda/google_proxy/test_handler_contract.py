@@ -6,6 +6,9 @@ from unittest.mock import Mock, patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+import policy as policy_engine
+import proxy_authorization as authorization
+import proxy_config
 import credentials
 import handler
 
@@ -23,7 +26,7 @@ class ProxyContractTests(unittest.TestCase):
         self.env.start()
         self.http_patch = patch.object(handler, "_HTTP", self.http)
         self.http_patch.start()
-        self.ssm = patch.object(handler, "_ssm_get_json", side_effect=lambda name: {"emails": ["*"]} if "/allow/" in name else self.cfg)
+        self.ssm = patch.object(proxy_config, "_ssm_get_json", side_effect=lambda name: {"emails": ["*"]} if "/allow/" in name else self.cfg)
         self.ssm.start()
         self.addCleanup(self.env.stop)
         self.addCleanup(self.http_patch.stop)
@@ -212,10 +215,39 @@ class ProxyContractTests(unittest.TestCase):
         self.assertEqual(200, self.invoke(headers=headers, multiValueHeaders={key: [value] for key, value in headers.items()})["statusCode"])
 
     def test_policy_receives_prepared_path_not_escaped_unreserved_original(self):
-        policy = handler._compose_policy_documents([handler._normalize_policy_document({"rules": [{"effect": "allow", "match": {"path_regex": "^/gmail/v1/users/me/labels$"}}]}, source="default", source_rank=0)])
-        with patch.dict(os.environ, {"GOG_POLICY_ENABLED": "true"}), patch.object(handler, "_load_effective_policy", return_value=policy):
+        policy = policy_engine._compose_policy_documents([policy_engine._normalize_policy_document({"rules": [{"effect": "allow", "match": {"path_regex": "^/gmail/v1/users/me/labels$"}}]}, source="default", source_rank=0)])
+        with patch.dict(os.environ, {"GOG_POLICY_ENABLED": "true"}), patch.object(authorization, "_load_effective_policy", return_value=policy):
             self.assertEqual(200, self.invoke(path="/gmail/v1/users/me/%6cabels")["statusCode"])
         self.assertEqual("/gmail/v1/users/me/labels", self.http.send.call_args.args[0].path_url)
+
+
+    def test_policy_events_report_prepared_destination_and_outcome(self):
+        for effect, expected_status in (("allow", 200), ("deny", 403)):
+            with self.subTest(effect=effect):
+                document = {"rules": [{"id": "matched-rule", "effect": effect,
+                    "match": {"path_regex": "^/gmail/v1/users/me/labels$"},
+                    "on_match": {"emit_event": True, "event_type": "audit"}}]}
+                effective = policy_engine._compose_policy_documents([
+                    policy_engine._normalize_policy_document(document, source="default", source_rank=0)])
+                events = Mock()
+                self.http.send.reset_mock()
+                with patch.dict(os.environ, {"GOG_POLICY_ENABLED": "true", "GOG_POLICY_EVENTS_ENABLED": "true",
+                        "GOG_POLICY_EVENT_BUS_ARN": "test-bus"}), \
+                        patch.object(authorization, "_load_effective_policy", return_value=effective), \
+                        patch.object(authorization, "_EVENTS", events):
+                    response = self.invoke(path="/gmail/v1/users/me/%6cabels")
+                self.assertEqual(expected_status, response["statusCode"])
+                events.put_events.assert_called_once()
+                entry = events.put_events.call_args.kwargs["Entries"][0]
+                self.assertEqual("test-bus", entry["EventBusName"])
+                self.assertEqual("audit", entry["DetailType"])
+                detail = json.loads(entry["Detail"])
+                self.assertEqual(effect, detail["decision"])
+                self.assertEqual(expected_status, detail["status_code"])
+                self.assertEqual("/gmail/v1/users/me/labels", detail["path"])
+                self.assertEqual("matched-rule", detail["rule_id"])
+                if effect == "deny":
+                    self.http.send.assert_not_called()
 
 
 if __name__ == "__main__":

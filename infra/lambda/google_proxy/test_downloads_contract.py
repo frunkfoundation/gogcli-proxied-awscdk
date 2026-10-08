@@ -5,6 +5,8 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+import policy as policy_engine
+import proxy_authorization as authorization
 import test_handler_contract
 
 
@@ -77,7 +79,7 @@ class DownloadContractTests(unittest.TestCase):
         self.s3.put_object.assert_not_called()
 
     def test_account_denial_precedes_staging(self):
-        with patch.object(test_handler_contract.handler, "_is_allowed", return_value=False):
+        with patch.object(authorization, "_is_allowed", return_value=False):
             self.assertEqual(403, self.download()["statusCode"])
         self.http.send.assert_not_called()
         self.s3.put_object.assert_not_called()
@@ -128,13 +130,13 @@ class DownloadContractTests(unittest.TestCase):
         response.close.assert_called_once()
 
     def test_policy_denial_precedes_google_and_s3(self):
-        policy = test_handler_contract.handler._compose_policy_documents([
-            test_handler_contract.handler._normalize_policy_document({"rules": [
+        policy = policy_engine._compose_policy_documents([
+            policy_engine._normalize_policy_document({"rules": [
                 {"effect": "deny", "match": {"path_regex": ".*"}},
             ]}, source="default", source_rank=0),
         ])
         with patch.dict(os.environ, {"GOG_POLICY_ENABLED": "true"}), \
-                patch.object(test_handler_contract.handler, "_load_effective_policy", return_value=policy):
+                patch.object(authorization, "_load_effective_policy", return_value=policy):
             self.assertEqual(403, self.download()["statusCode"])
         self.http.send.assert_not_called()
         self.s3.put_object.assert_not_called()

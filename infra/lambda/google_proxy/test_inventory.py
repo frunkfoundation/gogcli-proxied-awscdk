@@ -1,6 +1,7 @@
 import json
 import unittest
 from unittest.mock import Mock, patch
+import proxy_config
 import handler
 import inventory
 
@@ -12,7 +13,7 @@ class InventoryTests(unittest.TestCase):
     def invoke(self, allow=None, **overrides):
         event = {'httpMethod': 'GET', 'path': '/proxy/v1/accounts', 'requestContext': {'identity': {'userArn': 'arn:aws:iam::123456789012:role/agent'}}}
         event.update(overrides)
-        with patch.object(handler, '_ssm_get_json', return_value=allow), patch.object(handler, '_HTTP') as http:
+        with patch.object(proxy_config, '_ssm_get_json', return_value=allow), patch.object(handler, '_HTTP') as http:
             response = handler.handler(event, None)
             http.post.assert_not_called()
             http.send.assert_not_called()
