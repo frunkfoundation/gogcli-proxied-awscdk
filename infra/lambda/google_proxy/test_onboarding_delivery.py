@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import patch
 import onboarding_worker as worker
+import onboarding_runtime as runtime
 from test_onboarding_lifecycle import MemoryStore
 
 
@@ -18,7 +19,7 @@ class DeliveryTests(unittest.TestCase):
         self.event = {'Records': [{'eventSource': 'aws:sqs', 'eventSourceARN': 'dlq', 'messageId': 'delivery', 'body': self.operation_id}]}
 
     def invoke(self):
-        with patch.object(worker, 'runtime_store', return_value=self.store), patch('time.time', return_value=100), patch.dict('os.environ', {'ONBOARDING_DLQ_ARN': 'dlq'}):
+        with patch.object(runtime, 'runtime_store', return_value=self.store), patch('time.time', return_value=100), patch.dict('os.environ', {'ONBOARDING_DLQ_ARN': 'dlq'}):
             return worker.handler(self.event, None)
 
     def assert_retry(self):

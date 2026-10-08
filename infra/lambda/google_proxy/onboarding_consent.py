@@ -3,7 +3,8 @@ import secrets
 import time
 
 from onboarding_services import public_operation, requested_scopes
-from onboarding_store import WorkflowError, account_parameter, digest, new_id
+from errors import WorkflowError
+from onboarding_store import account_parameter, digest, new_id
 
 
 def consent_response(service, op, session_id):
@@ -83,25 +84,38 @@ def callback(service, state, code, session_id, error):
         raise WorkflowError(400, error_code, "Google consent did not complete; start a fresh attempt.") from None
 
 
-def validate_candidate(service, op):
-    client = service.store.secret_get(op["client_ref"])
-    exchange = service.store.secret_get(op["callback_ref"])
+def validate_candidate(store, google, op):
+    client = store.secret_get(op["client_ref"])
+    exchange = store.secret_get(op["callback_ref"])
     tokens = exchange["tokens"]
-    account = service.store.get("ACCOUNT#" + op["email"]) or {}
+    account = store.get("ACCOUNT#" + op["email"]) or {}
     identity = exchange.get("verified_identity")
     if not identity:
-        identity = service.google.identity(tokens, client, exchange["nonce"], op["email"], op["services"], account.get("google_subject"))
+        identity = google.identity(tokens, client, exchange["nonce"], op["email"], op["services"], account.get("google_subject"))
         exchange["verified_identity"] = identity
-        service.store.secret_put(op["callback_ref"].removeprefix(service.store.prefix + "/onboarding/"), exchange)
+        store.secret_put(op["callback_ref"].removeprefix(store.prefix + "/onboarding/"), exchange)
     refresh = tokens.get("refresh_token")
     if not refresh and account.get("google_subject") == identity["subject"]:
-        old = service.store.optional_secret(account_parameter(service.store.prefix, op["email"]))
+        old = store.optional_secret(account_parameter(store.prefix, op["email"]))
         if old and old.get("client_id") == client["client_id"]:
             refresh = old.get("refresh_token")
     if not refresh:
         raise WorkflowError(400, "refresh_required", "Google did not supply durable authorization; restart consent.")
     credentials = {"type": "oauth_refresh", "client_id": client["client_id"], "client_secret": client["client_secret"],
         "refresh_token": refresh, "scopes": requested_scopes(op["services"]), "credential_revision": op["id"]}
-    candidate = service.store.secret_put("candidates/" + op["id"], credentials)
+    candidate = store.secret_put("candidates/" + op["id"], credentials)
     return {"phase": "checking_candidate", "candidate_ref": candidate, "google_subject": identity["subject"],
         "granted_scopes": identity["granted_scopes"], "identity_complete": True, "credential_revision": op["id"]}
+
+
+def prepare_recovery(store, op, now):
+    source = store.optional_secret(op["recovery_source_ref"])
+    if not source:
+        raise WorkflowError(409, "consent_required", "Saved authorization expired; restart consent.")
+    callback = op["recovery_source_kind"] == "callback"
+    suffix = ("callbacks/" if callback else "candidates/") + op["id"]
+    if not callback:
+        source["credential_revision"] = op["id"]
+    ref = store.secret_put(suffix, source)
+    return {"phase": "validating" if callback else "checking_candidate", "callback_ref" if callback else "candidate_ref": ref,
+        "next_attempt": now, "credential_revision": op["id"]}

@@ -4,6 +4,9 @@ import hashlib
 import json
 import uuid
 
+from errors import WorkflowError
+from onboarding_links_store import ConnectionStore
+
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 RETENTION = 604800
 
@@ -26,15 +29,6 @@ def encoded(value):
 
 def account_parameter(prefix, email):
     return prefix.rstrip("/") + "/google/accounts/" + encoded(email)
-
-
-class WorkflowError(Exception):
-    def __init__(self, status, code, detail):
-        super().__init__(detail)
-        self.status, self.code, self.detail = status, code, detail
-
-
-from onboarding_links_store import ConnectionStore
 
 
 class Store(ConnectionStore):

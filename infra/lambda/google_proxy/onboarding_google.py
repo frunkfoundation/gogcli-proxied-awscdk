@@ -5,7 +5,7 @@ import time
 from urllib.parse import urlencode
 
 from onboarding_services import normalized_scopes, probes, requested_scopes, validate_probe
-from onboarding_store import WorkflowError
+from errors import WorkflowError
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"

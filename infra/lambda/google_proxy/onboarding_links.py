@@ -3,8 +3,9 @@ import secrets
 import time
 
 from onboarding_operations import application_project_id, email_address
-from onboarding_services import selected_services
-from onboarding_store import WorkflowError, digest
+from onboarding_enrollment import enrollment_client, enrollment_services
+from errors import WorkflowError
+from onboarding_store import digest
 
 
 class ConnectionLinks:
@@ -55,13 +56,10 @@ class ConnectionLinks:
         account = self.service.account(owner, email)
         if account.get('connection_status') == 'disconnecting':
             raise WorkflowError(409, 'disconnect_in_progress', 'Wait for account removal.')
-        services = selected_services(body.get('services', account.get('installed_services') or account['requested_services']))
-        if not set(account.get('installed_services', [])).issubset(services):
-            raise WorkflowError(409, 'scope_removal_requires_policy', 'Reconnect preserves installed services.')
+        services = enrollment_services(account, body, 'Reconnect preserves installed services.')
         project = application_project_id()
-        client = self.store.get('CLIENT#' + project)
-        if not client or not client.get('secret_ref') or not client.get('revision') or any(not client.get('api_confirmed', {}).get(name) for name in services):
-            raise WorkflowError(409, 'application_setup_required', 'The application is not ready to connect this account.')
+        client = enrollment_client(self.store, project, services,
+            'The application is not ready to connect this account.')
         old = self.store.get('OP#' + account['active_operation']) if account.get('active_operation') else None
         if account.get('active_operation') and (not old or old['phase'] not in {'awaiting_connection', 'preparing_consent', 'authorizing'} or not body.get('replace')):
             raise WorkflowError(409, 'operation_conflict', 'Finish current work or explicitly replace its consent attempt.')

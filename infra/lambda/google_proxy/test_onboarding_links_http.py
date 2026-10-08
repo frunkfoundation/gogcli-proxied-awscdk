@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from unittest.mock import patch
 
 import onboarding
+import onboarding_runtime as runtime
 from onboarding_auth import OwnerAuth
 import test_onboarding_links
 
@@ -20,10 +21,10 @@ class ConnectionHTTPTests(unittest.TestCase):
         auth.origin = 'https://app.example'
         auth.session = lambda headers: ({'owner': 'owner', 'session_id': 'owner-session', 'csrf': 'owner-csrf'}
                                         if headers.get('cookie') == 'owner' else self.no_owner())
-        factory = patch.object(onboarding, 'get_auth', return_value=auth)
+        factory = patch.object(runtime, 'get_auth', return_value=auth)
         factory.start()
         self.addCleanup(factory.stop)
-        service = patch.object(onboarding, 'get_service', return_value=self.service)
+        service = patch.object(runtime, 'get_service', return_value=self.service)
         service.start()
         self.addCleanup(service.stop)
 

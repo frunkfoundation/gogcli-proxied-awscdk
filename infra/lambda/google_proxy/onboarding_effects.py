@@ -3,7 +3,8 @@ import os
 import time
 
 from onboarding_services import content_hash, service_policy
-from onboarding_store import WorkflowError, account_parameter, encoded, new_id
+from errors import WorkflowError
+from onboarding_store import account_parameter, encoded, new_id
 
 
 def caller_arn(owner_caller):

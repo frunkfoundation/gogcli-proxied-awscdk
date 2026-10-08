@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 LAMBDA = Path(__file__).resolve().parents[2] / "lambda/google_proxy"
 sys.path.insert(0, str(LAMBDA))
 import onboarding
+import onboarding_runtime as runtime
 import onboarding_worker as worker
 from onboarding_auth import OwnerAuth
 from onboarding_google import GoogleClient
@@ -82,8 +83,8 @@ class GoogleTransportFixture:
 STORE = MemoryStore()
 HTTP = GoogleTransportFixture()
 SERVICE = OnboardingService(STORE, GoogleClient(HTTP), "https://example.invalid/google-callback")
-onboarding.get_service = lambda: SERVICE
-onboarding.get_auth = lambda: OwnerFixture()
+runtime.get_service = lambda: SERVICE
+runtime.get_auth = lambda: OwnerFixture()
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -1,66 +1,12 @@
 """Dedicated owner UI/API Lambda. Existing signed Gmail proxy stays separate."""
-import base64
 import json
-import os
 import re
-from decimal import Decimal
-from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from onboarding_auth import AuthError, OwnerAuth
-
-
-@lru_cache(maxsize=1)
-def get_auth():
-    return OwnerAuth()
-
-
-@lru_cache(maxsize=1)
-def get_service():
-    from onboarding_operations import build_service
-    return build_service()
-
-
-def base_url():
-    return os.environ['ONBOARDING_BASE_URL'].rstrip('/') + '/'
-
-
-def response(status, value, content_type='application/json', extra=None):
-    headers = {'Content-Type': content_type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-               'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"}
-    headers.update(extra or {})
-    body = json.dumps(value, default=lambda item: int(item) if isinstance(item, Decimal) else str(item)) if content_type.endswith('json') else value
-    return {'statusCode': status, 'headers': headers, 'body': body}
-
-
-def problem(error, owner_login=True):
-    value = {'type': 'urn:gogcli-proxy:onboarding:' + error.code, 'title': error.code.replace('_', ' '),
-             'status': error.status, 'detail': error.detail}
-    if error.status == 401 and owner_login:
-        value['loginUrl'] = base_url() + 'auth/login'
-    return response(error.status, value, 'application/problem+json')
-
-
-def json_body(event):
-    raw = event.get('body') or ''
-    if len(raw) > 90000:
-        raise AuthError(413, 'body_too_large', 'Upload JSON smaller than 64 KiB.')
-    try:
-        if event.get('isBase64Encoded'):
-            raw = base64.b64decode(raw, validate=True).decode('utf-8')
-        if len(raw.encode('utf-8')) > 65536:
-            raise AuthError(413, 'body_too_large', 'Upload JSON smaller than 64 KiB.')
-        value = json.loads(raw)
-    except (ValueError, UnicodeError):
-        raise AuthError(400, 'invalid_json', 'Provide a JSON object.') from None
-    if not isinstance(value, dict):
-        raise AuthError(400, 'invalid_json', 'Provide a JSON object.')
-    return value
-
-
-def redirect(location, set_cookie=None):
-    return response(303, '', 'text/plain', {'Location': location, **({'Set-Cookie': set_cookie} if set_cookie else {})})
+from errors import AuthError, WorkflowError
+from onboarding_http import base_url, json_body, problem, redirect, response
+import onboarding_runtime as runtime
 
 
 def handler(event, context):
@@ -69,12 +15,9 @@ def handler(event, context):
         return worker(event, context)
     try:
         return dispatch(event)
-    except AuthError as error:
+    except (AuthError, WorkflowError) as error:
         return problem(error, '/connection/v1/' not in event.get('path', event.get('rawPath', '')))
     except Exception as error:
-        # Workflow exceptions expose safe public details; upstream response bodies never do.
-        if all(hasattr(error, name) for name in ('status', 'code', 'detail')):
-            return problem(error, '/connection/v1/' not in event.get('path', event.get('rawPath', '')))
         print(json.dumps({'event': 'onboarding_request_failed', 'error_type': type(error).__name__}))
         return problem(AuthError(500, 'internal_error', 'The request could not be completed. Reload to check its status.'))
 
@@ -103,10 +46,10 @@ def dispatch(event):
             asset = asset.replace('__ONBOARDING_BASE__', base_url())
         return response(200, asset, content_type)
     if method == 'GET' and path == '/onboarding/auth/login':
-        location, set_cookie = get_auth().login()
+        location, set_cookie = runtime.get_auth().login()
         return redirect(location, set_cookie)
     if method == 'GET' and path == '/onboarding/auth/callback':
-        return redirect(base_url(), get_auth().callback(query, headers))
+        return redirect(base_url(), runtime.get_auth().callback(query, headers))
     from onboarding_connection_http import google_callback, owner_dispatch, target_dispatch
     if method == 'GET' and path == '/onboarding/oauth/google/callback':
         return google_callback(query, headers)
@@ -114,7 +57,7 @@ def dispatch(event):
         return target_dispatch(event, method, path, headers)
     if not path.startswith('/onboarding/v1/'):
         raise AuthError(404, 'not_found', 'Route not found.')
-    auth = get_auth()
+    auth = runtime.get_auth()
     session = auth.session(headers)
     if method not in ('GET', 'HEAD'):
         auth.check_mutation(headers, session)
@@ -122,7 +65,7 @@ def dispatch(event):
     result = owner_dispatch(event, method, path, headers, owner)
     if result is not None:
         return result
-    service = get_service()
+    service = runtime.get_service()
     if path == '/onboarding/v1/setup':
         if method == 'GET':
             data = service.setup(owner, session['session_id'])

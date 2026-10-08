@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accounts: expose public error details only for known authentication and workflow failures; unexpected provider errors return a generic failure.
+
 - Proxy: stream full Drive downloads and exports to the CLI through private S3 staging and five-minute signed links, preserving account and operation policy checks and avoiding the Lambda response-size limit. Staging is bounded to 256 MiB and the request deadline.
 
 - Accounts: simplify the owner and connection pages with one status per account and connection links offered up front. Copy and Refresh now show visible feedback. Background refreshes no longer rebuild buttons mid-click or drop a just-created link, and a reloaded page offers one clear **Create new link** action.

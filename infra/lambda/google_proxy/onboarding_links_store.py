@@ -2,11 +2,13 @@
 import secrets
 import time
 
+from errors import WorkflowError
+
 RETENTION = 604800
 
 
 def prepare_link(store, idem_pk, fingerprint):
-    from onboarding_store import WorkflowError, digest, new_id
+    from onboarding_store import digest, new_id
     pk = 'LINKPREP#' + idem_pk.removeprefix('IDEM#')
     existing = store.get(pk)
     if existing:
@@ -86,7 +88,6 @@ class ConnectionStore:
         return updated
 
     def bind_connection(self, op, session_hash, now):
-        from onboarding_store import WorkflowError
         if op['phase'] != 'awaiting_connection':
             raise WorkflowError(409, 'operation_conflict', 'Connection link is no longer available.')
         return self._connection_transaction(op, {'session_hash': session_hash}, now, binding=session_hash)

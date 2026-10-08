@@ -2,6 +2,7 @@
 import copy
 import json
 import onboarding
+import onboarding_runtime as runtime
 import os
 import unittest
 from unittest.mock import patch
@@ -91,7 +92,7 @@ class ApplicationContractTests(unittest.TestCase):
                 idem = self.store.get(operation['idempotency_pk'])
                 idem['fingerprint'] = content_hash(original)
                 self.store.put(idem)
-                with patch.dict(os.environ, {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/'}), patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
+                with patch.dict(os.environ, {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/'}), patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service', return_value=self.service):
                     auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
                     result = onboarding.handler({'path': '/onboarding/v1/accounts/jay@example.com/enrollments',
                         'httpMethod': 'POST', 'headers': {'Idempotency-Key': project}, 'body': json.dumps(copy.deepcopy(original))}, None)
@@ -105,7 +106,7 @@ class ApplicationContractTests(unittest.TestCase):
                 self.service.import_client({'web': {'client_id': 'replacement', 'client_secret': 'new',
                     'project_id': 'gogcli-proxy', 'redirect_uris': [self.service.callback_url]}})
                 state = self.store.secret_get(operation['attempt_ref'])['state']
-                with patch.dict(os.environ, {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/'}), patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
+                with patch.dict(os.environ, {'ONBOARDING_BASE_URL': 'https://app.example/onboarding/'}), patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service', return_value=self.service):
                     auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
                     result = onboarding.handler({'path': '/onboarding/oauth/google/callback', 'httpMethod': 'GET',
                         'queryStringParameters': {'state': state, 'code': 'synthetic-code'}}, None)

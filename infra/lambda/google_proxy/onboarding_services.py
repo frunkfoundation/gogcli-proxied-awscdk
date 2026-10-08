@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-from onboarding_store import WorkflowError
+from errors import WorkflowError
 
 SERVICE_OPTIONS = [
     {"name": "gmail", "label": "Gmail", "apiName": "gmail.googleapis.com", "scope": "https://www.googleapis.com/auth/gmail.modify",

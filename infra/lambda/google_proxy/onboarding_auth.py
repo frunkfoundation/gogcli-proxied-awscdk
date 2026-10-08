@@ -15,14 +15,10 @@ from authlib.integrations.requests_client import OAuth2Session
 from authlib.jose import JsonWebToken
 from authlib.oidc.core import CodeIDToken
 
+from errors import AuthError
+
 COOKIE = '__Host-gog-owner'
 LOGIN_COOKIE = '__Host-gog-login'
-
-
-class AuthError(Exception):
-    def __init__(self, status, code, detail):
-        super().__init__(detail)
-        self.status, self.code, self.detail = status, code, detail
 
 
 def digest(value):

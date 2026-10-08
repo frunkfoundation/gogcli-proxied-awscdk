@@ -3,11 +3,14 @@ import unittest
 from unittest.mock import Mock, patch
 
 import onboarding
+import onboarding_http
+import onboarding_runtime as runtime
 from onboarding_auth import AuthError, OwnerAuth
 from onboarding_google import GoogleClient
 from onboarding_operations import OnboardingService
 from test_onboarding_lifecycle import MemoryStore
 from onboarding_store import digest
+from errors import WorkflowError
 
 
 class BoundaryTests(unittest.TestCase):
@@ -27,17 +30,34 @@ class BoundaryTests(unittest.TestCase):
         auth.check_mutation({'origin': auth.origin, 'x-csrf-token': 'correct'}, session)
 
     def test_unauthenticated_write_never_reaches_workflow(self):
-        with patch.object(onboarding, 'get_auth') as factory, patch.object(onboarding, 'get_service') as service:
+        with patch.object(runtime, 'get_auth') as factory, patch.object(runtime, 'get_service') as service:
             factory.return_value.session.side_effect = AuthError(401, 'login_required', 'Sign in.')
             response = onboarding.handler({'path': '/onboarding/v1/enrollments', 'httpMethod': 'POST'}, None)
             self.assertEqual(401, response['statusCode'])
             self.assertEqual('application/problem+json', response['headers']['Content-Type'])
             service.assert_not_called()
 
+    def test_only_known_public_errors_expose_safe_details(self):
+        upstream = type('UpstreamError', (Exception,), {'status': 409, 'code': 'private_provider_code',
+                                                      'detail': 'private-provider-response'})()
+        for error, status, detail in ((WorkflowError(409, 'operation_conflict', 'Finish current work.'),
+                                      409, 'Finish current work.'), (upstream, 500, None)):
+            with self.subTest(error=type(error).__name__), patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service') as service:
+                auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session', 'csrf': 'csrf'}
+                service.return_value.setup.side_effect = error
+                result = onboarding.handler({'path': '/onboarding/v1/setup', 'httpMethod': 'GET'}, None)
+                self.assertEqual(status, result['statusCode'])
+                self.assertEqual('application/problem+json', result['headers']['Content-Type'])
+                if detail:
+                    self.assertEqual(detail, json.loads(result['body'])['detail'])
+                else:
+                    self.assertEqual('internal_error', json.loads(result['body'])['type'].rsplit(':', 1)[-1])
+                    self.assertNotIn('private', result['body'])
+
     def test_json_object_and_size_checked_before_workflow(self):
         for body in ('[]', '{', 'x' * 65537):
             with self.subTest(body=body[:5]), self.assertRaises(AuthError):
-                onboarding.json_body({'body': body})
+                onboarding_http.json_body({'body': body})
 
     def test_generated_stage_prefix_routes_to_fixed_assets(self):
         with patch.dict('os.environ', {'ONBOARDING_BASE_URL': 'https://api.example/prd/onboarding/'}):
@@ -48,7 +68,7 @@ class BoundaryTests(unittest.TestCase):
 
 
     def test_public_home_and_privacy_need_no_session_or_workflow(self):
-        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
+        with patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service') as service:
             for route, title in (('about', 'gogcli-proxy'), ('privacy', 'Privacy policy')):
                 with self.subTest(route=route):
                     result = onboarding.handler({'path': '/prd/onboarding/' + route,
@@ -62,7 +82,7 @@ class BoundaryTests(unittest.TestCase):
             service.assert_not_called()
 
     def test_removed_application_mutations_are_not_routes(self):
-        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
+        with patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service') as service:
             auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
             for route in ('setup', 'projects/gogcli-proxy/oauth-client', 'projects/gogcli-proxy/setup'):
                 result = onboarding.handler({'path': '/onboarding/v1/' + route,
@@ -86,7 +106,7 @@ class CallbackRecoveryTests(unittest.TestCase):
         return state
 
     def test_expired_google_callback_drops_code_and_preserves_workflow(self):
-        with patch.object(onboarding, 'get_auth') as factory, patch.object(onboarding, 'get_service') as service:
+        with patch.object(runtime, 'get_auth') as factory, patch.object(runtime, 'get_service') as service:
             factory.return_value.session.side_effect = AuthError(401, 'login_required', 'Sign in.')
             state = self.owner_state(service)
             event = {'path': '/onboarding/oauth/google/callback', 'httpMethod': 'GET',
@@ -98,7 +118,7 @@ class CallbackRecoveryTests(unittest.TestCase):
             service.return_value.callback.assert_not_called()
 
     def test_browser_callback_failure_redirects_to_saved_progress(self):
-        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service') as service:
+        with patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service') as service:
             auth.return_value.session.return_value = {'owner': 'jay', 'session_id': 'session'}
             service.return_value.callback.side_effect = AuthError(400, 'consent_expired', 'Start again.')
             state = self.owner_state(service)
@@ -127,9 +147,9 @@ class ClientImportTests(unittest.TestCase):
 
     def upload(self):
         try:
-            return onboarding.response(200, self.service.import_client(self.document))
+            return onboarding_http.response(200, self.service.import_client(self.document))
         except Exception as error:
-            return onboarding.problem(error)
+            return onboarding_http.problem(error)
 
     def enroll_in_testing(self, api_confirmed):
         self.assertEqual(200, self.upload()['statusCode'])
@@ -137,7 +157,7 @@ class ClientImportTests(unittest.TestCase):
         self.service.review_application( {'clientRevision': revision,
             'publishingStatus': 'testing', 'apiConfirmed': api_confirmed})
         self.service.save_account('owner', 'jay@example.com', {'services': ['drive']})
-        with patch.object(onboarding, 'get_auth') as auth, patch.object(onboarding, 'get_service', return_value=self.service):
+        with patch.object(runtime, 'get_auth') as auth, patch.object(runtime, 'get_service', return_value=self.service):
             auth.return_value.session.return_value = {'owner': 'owner', 'session_id': 'session'}
             return onboarding.handler({'path': '/onboarding/v1/accounts/jay@example.com/enrollments',
                 'httpMethod': 'POST', 'headers': {'Idempotency-Key': 'testing-consent'}, 'body': '{}'}, None)

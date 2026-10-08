@@ -4,16 +4,18 @@ import re
 import secrets
 from urllib.parse import unquote, urlencode, urlsplit
 
-from onboarding_auth import AuthError, cookie, read_cookie
+from errors import AuthError, WorkflowError
+from onboarding_auth import cookie, read_cookie
+from onboarding_http import base_url, json_body, redirect, response
+import onboarding_runtime as runtime
 
 ID = r'[a-z]{2}_[1-9A-HJ-NP-Za-km-z]{22}'
 TOKEN = re.compile(r'[A-Za-z0-9_-]{32,128}')
 
 
 def links():
-    from onboarding import base_url, get_service
     from onboarding_links import ConnectionLinks
-    return ConnectionLinks(get_service(), base_url())
+    return ConnectionLinks(runtime.get_service(), base_url())
 
 
 def cookie_name(operation_id):
@@ -28,7 +30,6 @@ def scoped_session(headers, operation_id):
 
 
 def same_origin(headers):
-    from onboarding import base_url
     base = urlsplit(base_url())
     if headers.get('origin') != base.scheme + '://' + base.netloc:
         raise AuthError(403, 'csrf_rejected', 'Open the connection page before continuing.')
@@ -42,14 +43,12 @@ def idempotency_key(headers):
 
 
 def scoped_projection(connection, value, session_id):
-    from onboarding import base_url
     operation_id = value['id']
     return {**value, 'csrfToken': connection.csrf(operation_id, session_id),
             'resultUrl': base_url() + 'connect/result?' + urlencode({'operation': operation_id})}
 
 
 def target_dispatch(event, method, path, headers):
-    from onboarding import base_url, json_body, response
     if method == 'POST' and path == '/onboarding/connection/v1/claims':
         same_origin(headers)
         body = json_body(event)
@@ -84,7 +83,6 @@ def target_dispatch(event, method, path, headers):
 
 
 def owner_dispatch(event, method, path, headers, owner):
-    from onboarding import base_url, json_body, response
     match = re.fullmatch(r'/onboarding/v1/accounts/([^/]+)/connection-links', path)
     if match and method == 'POST':
         body = json_body(event)
@@ -102,7 +100,6 @@ def owner_dispatch(event, method, path, headers, owner):
 
 
 def google_callback(query, headers):
-    from onboarding import base_url, get_auth, get_service, redirect
     failure = base_url() + 'connect/result?recovery=consent-incomplete'
     state = query.get('state', '')
     if not isinstance(state, str) or not TOKEN.fullmatch(state):
@@ -116,13 +113,11 @@ def google_callback(query, headers):
             session_id = scoped_session(headers, op['id'])
             # Verify authority before disclosing an operation ID in the redirect.
             connection.operation(op['id'], session_id)
-        except Exception as error:
-            if isinstance(error, AuthError) or all(hasattr(error, name) for name in ('status', 'code', 'detail')):
-                return redirect(failure)
-            raise
+        except (AuthError, WorkflowError):
+            return redirect(failure)
         location = base_url() + 'connect/result?' + urlencode({'operation': op['id']})
         try:
-            get_service().callback(state, query.get('code', ''), session_id, error=query.get('error'))
+            runtime.get_service().callback(state, query.get('code', ''), session_id, error=query.get('error'))
         except Exception as error:
             # Saved progress remains readable, including a failed or interrupted exchange.
             print('{"event":"connection_callback_failed","error_type":"' + type(error).__name__ + '"}')
@@ -130,15 +125,15 @@ def google_callback(query, headers):
     if op.get('auth_mode', 'owner') != 'owner':
         return redirect(failure)
     try:
-        session = get_auth().session(headers)
+        session = runtime.get_auth().session(headers)
     except AuthError as error:
         if error.status == 401:
             return redirect(base_url() + '?recovery=owner-session-expired')
         raise
     try:
-        value = get_service().callback(state, query.get('code', ''), session['session_id'], error=query.get('error'))
-    except Exception as error:
-        if all(hasattr(error, name) for name in ('status', 'code', 'detail')) and error.status < 500:
+        value = runtime.get_service().callback(state, query.get('code', ''), session['session_id'], error=query.get('error'))
+    except (AuthError, WorkflowError) as error:
+        if error.status < 500:
             return redirect(base_url() + '?recovery=consent-incomplete')
         raise
     return redirect(base_url() + '?' + urlencode({'operation': value.get('id', value.get('operation_id', ''))}))

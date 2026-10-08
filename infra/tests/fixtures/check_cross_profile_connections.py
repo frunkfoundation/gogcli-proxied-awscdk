@@ -165,7 +165,7 @@ def main():
         GOOGLE_CALLBACK_URL=fixture.SERVICE.callback_url, PROXY_BASE_URL="https://fixture.invalid/prd/", PROXY_API_KEY_ID="fixture",
         ONBOARDING_OWNER_CALLER_ARN="arn:aws:iam::123456789012:role/fixture-owner",
         ONBOARDING_VERIFIER_ROLE_ARN="arn:aws:iam::123456789012:role/fixture-verifier")
-    fixture.onboarding.get_auth = lambda: OwnerFixture()
+    fixture.runtime.get_auth = lambda: OwnerFixture()
     fixture.SERVICE.import_client({"web": {"project_id": fixture.PROJECT, "client_id": "offline-canonical-client",
         "client_secret": "offline-secret", "redirect_uris": [fixture.SERVICE.callback_url]}})
     fixture.SERVICE.review_application({"clientRevision": fixture.STORE.get("CLIENT#" + fixture.PROJECT)["revision"],

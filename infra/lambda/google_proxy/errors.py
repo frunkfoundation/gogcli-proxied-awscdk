@@ -15,3 +15,15 @@ def remaining_seconds(deadline: float, *, limit: float = 27) -> float:
     if remaining <= 0:
         raise ProxyError(504, "proxy request deadline exceeded")
     return remaining
+
+
+class AuthError(Exception):
+    def __init__(self, status, code, detail):
+        super().__init__(detail)
+        self.status, self.code, self.detail = status, code, detail
+
+
+class WorkflowError(Exception):
+    def __init__(self, status, code, detail):
+        super().__init__(detail)
+        self.status, self.code, self.detail = status, code, detail

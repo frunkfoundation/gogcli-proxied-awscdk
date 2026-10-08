@@ -9,7 +9,10 @@ import requests
 from onboarding_effects import apply_access, promote, remove_connection
 from onboarding_google import check_response
 from onboarding_services import probes, validate_probe
-from onboarding_store import Store, WorkflowError, new_id
+from errors import WorkflowError
+from onboarding_store import new_id
+from onboarding_consent import prepare_recovery, validate_candidate
+import onboarding_runtime as runtime
 
 ACTIVE = {"awaiting_connection", "preparing_consent", "authorizing", "exchanging", "validating", "preparing_recovery",
           "checking_candidate", "pending_promotion", "verifying", "applying_access", "removing", "propagating"}
@@ -20,14 +23,6 @@ def aws_client(service):
     import boto3
     from botocore.config import Config
     return boto3.client(service, config=Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1}))
-
-
-def runtime_store():
-    import boto3
-    from botocore.config import Config
-    table = boto3.resource("dynamodb", config=Config(connect_timeout=2, read_timeout=3,
-        retries={"total_max_attempts": 1})).Table(os.environ["ONBOARDING_TABLE"])
-    return Store(table, aws_client("ssm"), os.environ["GOG_SSM_PREFIX"])
 
 
 def signed_headers(url, email, host, api_key):
@@ -74,7 +69,7 @@ def finish(store, operation, lease, changes):
 
 
 def process(operation_id, store=None, http=None, now=None):
-    store, http, now = store or runtime_store(), http or requests.Session(), int(time.time() if now is None else now)
+    store, http, now = store or runtime.runtime_store(), http or requests.Session(), int(time.time() if now is None else now)
     op = store.get("OP#" + operation_id)
     if not op or op["phase"] not in ACTIVE:
         return
@@ -116,9 +111,7 @@ def process(operation_id, store=None, http=None, now=None):
             changes.update(prepare_recovery(store, op, now))
         elif phase == "validating":
             from onboarding_google import GoogleClient
-            from onboarding_operations import OnboardingService
-            service = OnboardingService(store, GoogleClient(http), os.environ["GOOGLE_CALLBACK_URL"])
-            changes.update(service.validate_candidate_operation(op), next_attempt=now, attempts=0)
+            changes.update(validate_candidate(store, GoogleClient(http), op), next_attempt=now, attempts=0)
         elif phase == "checking_candidate":
             from onboarding_google import GoogleClient
             candidate = store.secret_get(op["candidate_ref"])
@@ -162,19 +155,6 @@ def process(operation_id, store=None, http=None, now=None):
     print(json.dumps({"event": "onboarding_operation", "operation_id": operation_id, "kind": op["kind"],
         "phase": changes.get("phase", op["phase"]), "status": changes["status"], "error_code": changes.get("error_code", ""),
         "duration_ms": round((time.monotonic() - started) * 1000)}))
-
-
-def prepare_recovery(store, op, now):
-    source = store.optional_secret(op["recovery_source_ref"])
-    if not source:
-        raise WorkflowError(409, "consent_required", "Saved authorization expired; restart consent.")
-    callback = op["recovery_source_kind"] == "callback"
-    suffix = ("callbacks/" if callback else "candidates/") + op["id"]
-    if not callback:
-        source["credential_revision"] = op["id"]
-    ref = store.secret_put(suffix, source)
-    return {"phase": "validating" if callback else "checking_candidate", "callback_ref" if callback else "candidate_ref": ref,
-        "next_attempt": now, "credential_revision": op["id"]}
 
 
 def check_installed(store, op, http, now):
@@ -246,7 +226,7 @@ def handler(event, context):
                 item = {key: deserialize.deserialize(value) for key, value in document.get("NewImage", {}).items()}
                 old = {key: deserialize.deserialize(value) for key, value in document.get("OldImage", {}).items()}
                 if record.get("eventName") == "REMOVE":
-                    store = store or runtime_store()
+                    store = store or runtime.runtime_store()
                     cleanup(store, old)
                 elif item.get("pk", "").startswith("OP#") and item.get("phase") in ACTIVE:
                     if item.get("phase") != old.get("phase") or item.get("next_attempt") != old.get("next_attempt"):
@@ -255,7 +235,7 @@ def handler(event, context):
                 operation_id = record["body"]
                 if not operation_id.startswith("op_") or len(operation_id) != 25:
                     raise ValueError("invalid operation id")
-                store = store or runtime_store()
+                store = store or runtime.runtime_store()
                 if record.get("eventSourceARN") == os.getenv("ONBOARDING_DLQ_ARN"):
                     op = store.get("OP#" + operation_id)
                     if op and op["phase"] in ACTIVE:

@@ -1,8 +1,10 @@
 """Durable account commands, including restrictive intent that supersedes old work."""
 import time
 
-from onboarding_services import public_operation, selected_services
-from onboarding_store import WorkflowError, digest
+from onboarding_services import public_operation
+from onboarding_enrollment import enrollment_client, enrollment_services
+from errors import WorkflowError
+from onboarding_store import digest
 
 
 def enroll(service, owner, email, key, session_id, body):
@@ -20,12 +22,10 @@ def enroll(service, owner, email, key, session_id, body):
         raise WorkflowError(409, "disconnect_in_progress", "Wait for removal before explicitly reconnecting.")
     from onboarding_operations import application_project_id
     project = application_project_id()
-    services = selected_services(body.get("services", account.get("installed_services") or account["requested_services"]))
-    if not set(account.get("installed_services", [])).issubset(services):
-        raise WorkflowError(409, "scope_removal_requires_policy", "Reconnect preserves installed services; narrow caller policy or disconnect.")
-    client = service.store.get("CLIENT#" + project)
-    if not client or not client.get("secret_ref") or not client.get("revision") or any(not client.get("api_confirmed", {}).get(name) for name in services):
-        raise WorkflowError(409, "application_setup_required", "gogcli-proxy is not ready to connect this account. Contact the operator, then retry.")
+    services = enrollment_services(account, body,
+        "Reconnect preserves installed services; narrow caller policy or disconnect.")
+    client = enrollment_client(service.store, project, services,
+        "gogcli-proxy is not ready to connect this account. Contact the operator, then retry.")
     enabled = account.get("desired_owner_access", True)
     if "ownerAccessEnabled" in body:
         if not isinstance(body["ownerAccessEnabled"], bool):
@@ -85,7 +85,7 @@ def recover(service, owner, email, key):
     details = {name: recovery[name] for name in ("client_ref", "client_revision", "project_id", "services", "google_subject", "granted_scopes", "policy_write_hash") if name in recovery}
     op = service.accept(owner, account, "recovery", "preparing_recovery", details={**details,
         "recovery_source_ref": source_ref, "recovery_source_kind": "candidate" if recovery.get("candidate_ref") else "callback"}, idem=(pk, fingerprint))
-    from onboarding_worker import prepare_recovery
+    from onboarding_consent import prepare_recovery
     changes = prepare_recovery(service.store, op, int(time.time()))
     op = service.store.transition(op["pk"], "preparing_recovery", changes)
     return public_operation(op)

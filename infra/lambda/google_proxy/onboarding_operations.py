@@ -6,7 +6,8 @@ import time
 from onboarding_google import GoogleClient, validate_web_client
 from onboarding_services import (DEFAULT_SERVICES, SCOPES_BY_SERVICE, SERVICE_OPTIONS, account_projection,
                                  content_hash, public_operation, selected_services)
-from onboarding_store import Store, WorkflowError, digest, new_id
+from errors import WorkflowError
+from onboarding_store import digest, new_id
 
 
 def email_address(value):
@@ -189,16 +190,7 @@ class OnboardingService:
         from onboarding_consent import callback
         return callback(self, state, code, session_id, error)
 
-    def validate_candidate_operation(self, op):
-        from onboarding_consent import validate_candidate
-        return validate_candidate(self, op)
-
-
 def build_service():
-    import boto3
     import requests
-    from botocore.config import Config
-    config = Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1})
-    table = boto3.resource("dynamodb", config=config).Table(os.environ["ONBOARDING_TABLE"])
-    store = Store(table, boto3.client("ssm", config=config), os.environ.get("GOG_SSM_PREFIX", "/gogcli-proxy"))
-    return OnboardingService(store, GoogleClient(requests.Session()), os.environ["GOOGLE_CALLBACK_URL"])
+    from onboarding_runtime import runtime_store
+    return OnboardingService(runtime_store(), GoogleClient(requests.Session()), os.environ["GOOGLE_CALLBACK_URL"])
