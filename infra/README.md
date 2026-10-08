@@ -452,11 +452,19 @@ public. Retaining the bucket preserves lifecycle cleanup across stack removal.
 
 Token minting and forwarding share a request budget capped at 27 seconds, or two seconds less than the Lambda invocation's remaining time if shorter. Connect/read timeouts use each phase's remaining budget, token refresh retries are bounded by its refresh deadline, and streamed chunks are checked against the request deadline. Expired budgets return HTTP 504 before starting another phase.
 
-Run the offline Lambda checks and synthesized infrastructure contracts:
+Run the complete backend verification gate from the repository root with `uv`,
+`just`, and Node installed (CI uses Node 26):
 
 ```bash
-just proxy-test
-infra/.venv/bin/python -m unittest discover -s infra -p test_onboarding_infrastructure.py
+just backend-ci
 ```
+
+The gate runs existing Python 3.11 runtime and operator tests, synthesized AWS
+infrastructure contracts, and a real Linux x86_64 Lambda asset build. Dependencies
+use uv-managed environments and the repository requirements files. AWS tests use
+dummy credentials and disabled instance metadata; they do not access a deployed
+environment. The asset check downloads Linux wheels through uv and verifies
+binary compatibility and bundled UI assets. Individual suites remain available
+as `just proxy-test`, `just operator-test`, and `just infra-test`.
 
 Maps/Places and public YouTube API-key modes also retain upstream project credentials and do not consume managed-account Google OAuth tokens. These ancillary API-key requests go directly to their provider; account-authenticated Google API requests use the proxy.
