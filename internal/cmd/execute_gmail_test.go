@@ -3,83 +3,74 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"golang.org/x/oauth2"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
+
+	gogapi "github.com/openclaw/gogcli/internal/googleapi"
 )
 
-func TestExecute_GmailSearch_JSON(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
+func TestExecute_GmailExpiredToken(t *testing.T) {
+	setTestConfigHome(t)
+	tokenCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		switch {
-		case strings.Contains(path, "/users/me/threads") && !strings.Contains(path, "/users/me/threads/"):
-			// threads.list
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"threads":       []map[string]any{{"id": "t1"}},
-				"nextPageToken": "npt",
-			})
-			return
-		case strings.Contains(path, "/users/me/threads/t1"):
-			// threads.get (metadata)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "t1",
-				"messages": []map[string]any{
-					{
-						"id":       "m1",
-						"labelIds": []string{"INBOX"},
-						"payload": map[string]any{
-							"headers": []map[string]any{
-								{"name": "From", "value": "Me <me@example.com>"},
-								{"name": "Subject", "value": "Hello"},
-								{"name": "Date", "value": "Mon, 02 Jan 2006 15:04:05 -0700"},
-							},
-						},
-					},
-				},
-			})
-			return
-		case strings.Contains(path, "/users/me/labels"):
-			// labels.list (used for id->name mapping)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"labels": []map[string]any{
-					{"id": "INBOX", "name": "INBOX", "type": "system"},
-				},
-			})
-			return
-		default:
+		if r.Method != http.MethodPost || r.URL.Path != "/token" {
+			t.Errorf("unexpected API request: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
+		tokenCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`))
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
+	ctx := context.Background()
+	cfg := &oauth2.Config{Endpoint: oauth2.Endpoint{TokenURL: srv.URL + "/token", AuthStyle: oauth2.AuthStyleInParams}}
+	client := &http.Client{Transport: gogapi.NewRetryTransport(&oauth2.Transport{
+		Source: cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: "revoked-test-token"}),
+	})}
+	svc, err := gmail.NewService(ctx, option.WithHTTPClient(client), option.WithEndpoint(srv.URL+"/"))
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	result := executeWithGmailTestService(t, []string{
+		"--readonly", "--no-input", "--json", "--account", "test@example.com", "gmail", "labels", "list",
+	}, svc)
+	if got := ExitCode(result.err); got != exitCodeAuthRequired {
+		t.Fatalf("exit code = %d, want %d; error: %v", got, exitCodeAuthRequired, result.err)
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(result.err, &retrieveErr) || retrieveErr.ErrorCode != "invalid_grant" {
+		t.Fatalf("missing OAuth cause: %v", result.err)
+	}
+	if !strings.Contains(result.err.Error(), "run 'gog auth add' to re-authorize") {
+		t.Fatalf("missing recovery advice: %v", result.err)
+	}
+	if result.stdout != "" || tokenCalls != 1 {
+		t.Fatalf("stdout = %q; token requests = %d, want empty output and one attempt", result.stdout, tokenCalls)
+	}
+}
 
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--account", "a@b.com", "gmail", "search", "newer_than:7d", "--max", "1", "--timezone", "UTC"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
+func TestExecute_GmailSearch_JSON(t *testing.T) {
+	srv := httptest.NewServer(gmailSearchTestHandler())
+	defer srv.Close()
+
+	result := executeWithGmailTestService(
+		t,
+		[]string{"--json", "--account", "a@b.com", "gmail", "search", "newer_than:7d", "--max", "1", "--timezone", "UTC"},
+		newGmailServiceFromServer(t, srv),
+	)
+	if result.err != nil {
+		t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+	}
 
 	var parsed struct {
 		Threads []struct {
@@ -92,8 +83,8 @@ func TestExecute_GmailSearch_JSON(t *testing.T) {
 		} `json:"threads"`
 		NextPageToken string `json:"nextPageToken"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		t.Fatalf("json parse: %v\nout=%q", err, out)
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
 	}
 	if parsed.NextPageToken != "npt" || len(parsed.Threads) != 1 {
 		t.Fatalf("unexpected: %#v", parsed)
@@ -113,21 +104,18 @@ func TestExecute_GmailSearch_JSON(t *testing.T) {
 }
 
 func TestExecute_GmailURL_JSON(t *testing.T) {
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--account", "a@b.com", "gmail", "url", "t1"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
+	result := executeWithTestRuntime(t, []string{"--json", "--account", "a@b.com", "gmail", "url", "t1"}, nil)
+	if result.err != nil {
+		t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+	}
 	var parsed struct {
 		URLs []struct {
 			ID  string `json:"id"`
 			URL string `json:"url"`
 		} `json:"urls"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		t.Fatalf("json parse: %v\nout=%q", err, out)
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
 	}
 	if len(parsed.URLs) != 1 || parsed.URLs[0].ID != "t1" || !strings.Contains(parsed.URLs[0].URL, "#all/t1") {
 		t.Fatalf("unexpected urls: %#v", parsed.URLs)

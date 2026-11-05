@@ -4,37 +4,117 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"runtime/debug"
 	"testing"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 func TestVersionStringVariants(t *testing.T) {
-	origVersion, origCommit, origDate := version, commit, date
-	t.Cleanup(func() { version, commit, date = origVersion, origCommit, origDate })
+	origVersion, origCommit, origDate, origReadBuildInfo := version, commit, date, readBuildInfo
+	t.Cleanup(func() { version, commit, date, readBuildInfo = origVersion, origCommit, origDate, origReadBuildInfo })
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
 
 	version, commit, date = "v1", "", ""
-	if got := VersionString(); got != "v1" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0]" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", ""
-	if got := VersionString(); got != "v1 (abc)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (abc)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "", "2025-01-01"
-	if got := VersionString(); got != "v1 (2025-01-01)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 	version, commit, date = "v1", "abc", "2025-01-01"
-	if got := VersionString(); got != "v1 (abc 2025-01-01)" {
+	if got := VersionString(); got != "gogcli-proxy v1 [upstream v0.42.0] (abc 2025-01-01)" {
 		t.Fatalf("unexpected: %q", got)
 	}
 }
 
+func TestVersionStringUsesModuleVersionFallback(t *testing.T) {
+	origVersion, origCommit, origDate, origReadBuildInfo := version, commit, date, readBuildInfo
+	t.Cleanup(func() { version, commit, date, readBuildInfo = origVersion, origCommit, origDate, origReadBuildInfo })
+
+	version, commit, date = "dev", "", ""
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+	}
+
+	if got := VersionString(); got != "gogcli-proxy v1.2.3 [upstream v0.42.0]" {
+		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestVersionStringPrefersInjectedVersion(t *testing.T) {
+	origVersion, origCommit, origDate, origReadBuildInfo := version, commit, date, readBuildInfo
+	t.Cleanup(func() { version, commit, date, readBuildInfo = origVersion, origCommit, origDate, origReadBuildInfo })
+
+	version, commit, date = "v9.9.9", "", ""
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true
+	}
+
+	if got := VersionString(); got != "gogcli-proxy v9.9.9 [upstream v0.42.0]" {
+		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestResolvedVersionUsesEmbeddedVersionWhenBuildInfoIsDevel(t *testing.T) {
+	origVersion, origReadBuildInfo, origEmbedded := version, readBuildInfo, embeddedVersion
+	t.Cleanup(func() {
+		version, readBuildInfo, embeddedVersion = origVersion, origReadBuildInfo, origEmbedded
+	})
+
+	version = sentinelDev
+	embeddedVersion = "v0.17.0-dev\n"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+
+	if got := resolvedVersion(); got != "v0.17.0-dev" {
+		t.Fatalf("expected v0.17.0-dev, got %q", got)
+	}
+}
+
+func TestResolvedVersionPrefersInjectedDevVersionOverEmbedded(t *testing.T) {
+	origVersion, origReadBuildInfo, origEmbedded := version, readBuildInfo, embeddedVersion
+	t.Cleanup(func() {
+		version, readBuildInfo, embeddedVersion = origVersion, origReadBuildInfo, origEmbedded
+	})
+
+	version = "v0.18.0-dev"
+	embeddedVersion = "v0.17.0-dev\n"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+
+	if got := resolvedVersion(); got != "v0.18.0-dev" {
+		t.Fatalf("expected injected dev version, got %q", got)
+	}
+}
+
+func TestResolvedVersionFallsBackToSentinelWhenEverythingEmpty(t *testing.T) {
+	origVersion, origReadBuildInfo, origEmbedded := version, readBuildInfo, embeddedVersion
+	t.Cleanup(func() {
+		version, readBuildInfo, embeddedVersion = origVersion, origReadBuildInfo, origEmbedded
+	})
+
+	version = sentinelDev
+	embeddedVersion = ""
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
+
+	if got := resolvedVersion(); got != sentinelDev {
+		t.Fatalf("expected dev, got %q", got)
+	}
+}
+
 func TestVersionCmd_JSON(t *testing.T) {
-	origVersion, origCommit, origDate := version, commit, date
-	t.Cleanup(func() { version, commit, date = origVersion, origCommit, origDate })
+	origVersion, origCommit, origDate, origReadBuildInfo := version, commit, date, readBuildInfo
+	t.Cleanup(func() { version, commit, date, readBuildInfo = origVersion, origCommit, origDate, origReadBuildInfo })
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
 	version, commit, date = "v2", "c1", "d1"
 
 	u, err := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})

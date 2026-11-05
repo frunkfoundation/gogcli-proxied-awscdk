@@ -1,23 +1,24 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/steipete/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/outfmt"
 )
 
 func TestCompletionCmdRun(t *testing.T) {
-	out := captureStdout(t, func() {
-		cmd := &CompletionCmd{Shell: "bash"}
-		if err := cmd.Run(context.Background()); err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-	})
-	if !strings.Contains(out, "__complete") {
-		t.Fatalf("expected __complete in output: %q", out)
+	var output bytes.Buffer
+	cmd := &CompletionCmd{Shell: "bash"}
+	if err := cmd.Run(newCmdRuntimeOutputContext(t, &output, io.Discard)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(output.String(), "__complete") {
+		t.Fatalf("expected __complete in output: %q", output.String())
 	}
 }
 
@@ -34,7 +35,7 @@ func TestVersionStringVariantsMore(t *testing.T) {
 	version = "1.2.3"
 	commit = ""
 	date = ""
-	if got := VersionString(); got != "1.2.3" {
+	if got := VersionString(); got != "gogcli-proxy 1.2.3 [upstream v0.42.0]" {
 		t.Fatalf("unexpected version: %q", got)
 	}
 
@@ -82,7 +83,8 @@ func TestLoadTrackingConfigForAccount(t *testing.T) {
 	t.Setenv("GOG_KEYRING_PASSWORD", "testpass")
 
 	flags := &RootFlags{Account: "a@b.com"}
-	account, cfg, err := loadTrackingConfigForAccount(flags)
+	ctx := withAuthStore(newCmdRuntimeOutputContext(t, io.Discard, io.Discard), newMemSecretsStore())
+	account, cfg, _, _, err := loadTrackingConfigForAccount(ctx, flags)
 	if err != nil {
 		t.Fatalf("loadTrackingConfigForAccount: %v", err)
 	}

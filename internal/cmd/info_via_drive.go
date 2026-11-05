@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"google.golang.org/api/drive/v3"
+
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type infoViaDriveOptions struct {
@@ -20,10 +21,17 @@ type infoViaDriveOptions struct {
 const infoViaDriveDefaultKindLabel = "expected type"
 
 func infoViaDrive(ctx context.Context, flags *RootFlags, opts infoViaDriveOptions, id string) error {
-	u := ui.FromContext(ctx)
-	account, err := requireAccount(flags)
+	f, err := loadInfoViaDrive(ctx, flags, opts, id)
 	if err != nil {
 		return err
+	}
+	return writeInfoViaDrive(ctx, f)
+}
+
+func loadInfoViaDrive(ctx context.Context, flags *RootFlags, opts infoViaDriveOptions, id string) (*drive.File, error) {
+	account, err := requireAccount(flags)
+	if err != nil {
+		return nil, err
 	}
 
 	argName := strings.TrimSpace(opts.ArgName)
@@ -32,12 +40,12 @@ func infoViaDrive(ctx context.Context, flags *RootFlags, opts infoViaDriveOption
 	}
 	id = normalizeGoogleID(strings.TrimSpace(id))
 	if id == "" {
-		return usage(fmt.Sprintf("empty %s", argName))
+		return nil, usage(fmt.Sprintf("empty %s", argName))
 	}
 
-	svc, err := newDriveService(ctx, account)
+	svc, err := driveService(ctx, account)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	f, err := svc.Files.Get(id).
@@ -46,37 +54,41 @@ func infoViaDrive(ctx context.Context, flags *RootFlags, opts infoViaDriveOption
 		Context(ctx).
 		Do()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if f == nil {
-		return errors.New("file not found")
+		return nil, errors.New("file not found")
 	}
 	if opts.ExpectedMime != "" && f.MimeType != opts.ExpectedMime {
 		label := strings.TrimSpace(opts.KindLabel)
 		if label == "" {
 			label = infoViaDriveDefaultKindLabel
 		}
-		return fmt.Errorf("file is not a %s (mimeType=%q)", label, f.MimeType)
+		return nil, fmt.Errorf("file is not a %s (mimeType=%q)", label, f.MimeType)
 	}
+	return f, nil
+}
 
+func writeInfoViaDrive(ctx context.Context, f *drive.File) error {
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{strFile: f})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{strFile: f})
 	}
 
-	u.Out().Printf("id\t%s", f.Id)
-	u.Out().Printf("name\t%s", f.Name)
-	u.Out().Printf("mime\t%s", f.MimeType)
+	u := ui.FromContext(ctx)
+	u.Out().Linef("id\t%s", f.Id)
+	u.Out().Linef("name\t%s", f.Name)
+	u.Out().Linef("mime\t%s", f.MimeType)
 	if f.WebViewLink != "" {
-		u.Out().Printf("link\t%s", f.WebViewLink)
+		u.Out().Linef("link\t%s", f.WebViewLink)
 	}
 	if f.CreatedTime != "" {
-		u.Out().Printf("created\t%s", f.CreatedTime)
+		u.Out().Linef("created\t%s", f.CreatedTime)
 	}
 	if f.ModifiedTime != "" {
-		u.Out().Printf("modified\t%s", f.ModifiedTime)
+		u.Out().Linef("modified\t%s", f.ModifiedTime)
 	}
 	if len(f.Parents) > 0 {
-		u.Out().Printf("parents\t%s", strings.Join(f.Parents, ","))
+		u.Out().Linef("parents\t%s", strings.Join(f.Parents, ","))
 	}
 	return nil
 }

@@ -3,17 +3,17 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type SlidesReadSlideCmd struct {
 	PresentationID string `arg:"" name:"presentationId" help:"Presentation ID"`
 	SlideID        string `arg:"" name:"slideId" help:"Slide object ID (use 'slides list-slides' to find IDs)"`
+	Detail         bool   `name:"detail" help:"Include normalized element geometry, text runs/styles, paragraphs, and table cells"`
 }
 
 func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
@@ -33,7 +33,7 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return usage("empty slideId")
 	}
 
-	slidesSvc, err := newSlidesService(ctx, account)
+	slidesSvc, err := slidesService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,8 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	// Extract speaker notes
 	var notesText string
-	if np := slide.SlideProperties.NotesPage; np != nil {
+	if slide.SlideProperties != nil && slide.SlideProperties.NotesPage != nil {
+		np := slide.SlideProperties.NotesPage
 		for _, el := range np.PageElements {
 			if el.Shape != nil && el.Shape.Text != nil {
 				if el.Shape.Placeholder != nil && el.Shape.Placeholder.Type == placeholderTypeBody {
@@ -74,39 +75,8 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 	notesText = strings.TrimRight(notesText, "\n")
 
-	// Extract text elements from the slide itself
-	var textElements []map[string]any
-	for _, el := range slide.PageElements {
-		if el.Shape != nil && el.Shape.Text != nil {
-			var text string
-			for _, te := range el.Shape.Text.TextElements {
-				if te.TextRun != nil {
-					text += te.TextRun.Content
-				}
-			}
-			text = strings.TrimRight(text, "\n")
-			if text != "" {
-				textElements = append(textElements, map[string]any{
-					"objectId": el.ObjectId,
-					"text":     text,
-				})
-			}
-		}
-	}
-
-	// Extract image references
-	var images []map[string]any
-	for _, el := range slide.PageElements {
-		if el.Image != nil {
-			img := map[string]any{
-				"objectId": el.ObjectId,
-			}
-			if el.Image.ContentUrl != "" {
-				img["contentUrl"] = el.Image.ContentUrl
-			}
-			images = append(images, img)
-		}
-	}
+	elements := slidesElementDetails(slide.PageElements)
+	textElements, images, tables := slidesReadSlideSummaries(elements)
 
 	if outfmt.IsJSON(ctx) {
 		result := map[string]any{
@@ -116,11 +86,15 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 			"notes":          notesText,
 			"textElements":   textElements,
 			"images":         images,
+			"tables":         tables,
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, result)
+		if c.Detail {
+			result["elements"] = elements
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), result)
 	}
 
-	u.Out().Printf("Slide %d  (%s)", slideIndex+1, slideID)
+	u.Out().Linef("Slide %d  (%s)", slideIndex+1, slideID)
 	u.Out().Println("")
 
 	if notesText != "" {
@@ -134,7 +108,7 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	if len(textElements) > 0 {
 		u.Out().Println("Text Elements:")
-		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "OBJECT ID\tTEXT")
 		for _, te := range textElements {
 			fmt.Fprintf(tw, "%s\t%s\n", te["objectId"], te["text"])
@@ -145,17 +119,108 @@ func (c *SlidesReadSlideCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	if len(images) > 0 {
 		u.Out().Println("Images:")
-		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "OBJECT ID\tURL")
+		tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "OBJECT ID\tSOURCE URL\tCONTENT URL")
 		for _, img := range images {
-			url := "(none)"
-			if u, ok := img["contentUrl"].(string); ok {
-				url = u
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", img["objectId"], valueOrNone(img["sourceUrl"]), valueOrNone(img["contentUrl"]))
+		}
+		_ = tw.Flush()
+		u.Out().Println("")
+	}
+
+	if len(tables) > 0 {
+		u.Out().Println("Table Cells:")
+		tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "OBJECT ID\tROW\tCOLUMN\tTEXT")
+		for _, table := range tables {
+			cells, _ := table["cells"].([]map[string]any)
+			for _, cell := range cells {
+				fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n", table["objectId"], cell["rowIndex"], cell["columnIndex"], cell["text"])
 			}
-			fmt.Fprintf(tw, "%s\t%s\n", img["objectId"], url)
+		}
+		_ = tw.Flush()
+		u.Out().Println("")
+	}
+
+	if c.Detail && len(elements) > 0 {
+		u.Out().Println("Elements:")
+		tw := tabwriter.NewWriter(stdoutWriter(ctx), 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "OBJECT ID\tTYPE\tX\tY\tWIDTH\tHEIGHT")
+		for _, element := range elements {
+			if element.Geometry == nil {
+				fmt.Fprintf(tw, "%s\t%s\t-\t-\t-\t-\n", element.ObjectID, element.Type)
+				continue
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\n", element.ObjectID, element.Type, element.Geometry.X, element.Geometry.Y, element.Geometry.Width, element.Geometry.Height)
 		}
 		_ = tw.Flush()
 	}
 
 	return nil
+}
+
+func slidesReadSlideSummaries(elements []slidesElementDetail) ([]map[string]any, []map[string]any, []map[string]any) {
+	textElements := []map[string]any{}
+	images := []map[string]any{}
+	tables := []map[string]any{}
+
+	for _, element := range elements {
+		if element.Shape != nil && element.Shape.Text != nil && element.Shape.Text.Content != "" {
+			textElements = append(textElements, map[string]any{
+				"objectId": element.ObjectID,
+				"text":     element.Shape.Text.Content,
+			})
+		}
+		if element.Image != nil {
+			image := map[string]any{"objectId": element.ObjectID}
+			if element.Image.ContentURL != "" {
+				image["contentUrl"] = element.Image.ContentURL
+			}
+			if element.Image.SourceURL != "" {
+				image["sourceUrl"] = element.Image.SourceURL
+			}
+			images = append(images, image)
+		}
+		if element.Table == nil {
+			continue
+		}
+		cells := []map[string]any{}
+		for _, cell := range element.Table.Cells {
+			text := ""
+			if cell.Text != nil {
+				text = cell.Text.Content
+			}
+			cellSummary := map[string]any{
+				"rowIndex":    cell.RowIndex,
+				"columnIndex": cell.ColumnIndex,
+				"rowSpan":     cell.RowSpan,
+				"columnSpan":  cell.ColumnSpan,
+				"text":        text,
+			}
+			cells = append(cells, cellSummary)
+			if text != "" {
+				textElements = append(textElements, map[string]any{
+					"objectId":    element.ObjectID,
+					"rowIndex":    cell.RowIndex,
+					"columnIndex": cell.ColumnIndex,
+					"text":        text,
+				})
+			}
+		}
+		tables = append(tables, map[string]any{
+			"objectId": element.ObjectID,
+			"rows":     element.Table.Rows,
+			"columns":  element.Table.Columns,
+			"cells":    cells,
+		})
+	}
+
+	return textElements, images, tables
+}
+
+func valueOrNone(value any) string {
+	if text, ok := value.(string); ok && text != "" {
+		return text
+	}
+	return "(none)"
 }

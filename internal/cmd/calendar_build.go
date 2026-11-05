@@ -10,7 +10,10 @@ import (
 	"google.golang.org/api/calendar/v3"
 )
 
-const tzUTC = "UTC"
+const (
+	tzUTC               = "UTC"
+	reminderMethodPopup = "popup"
+)
 
 func buildEventDateTime(value string, allDay bool) *calendar.EventDateTime {
 	value = strings.TrimSpace(value)
@@ -25,6 +28,46 @@ func buildEventDateTime(value string, allDay bool) *calendar.EventDateTime {
 	return edt
 }
 
+func buildEventDateTimeWithTimezone(value string, allDay bool, timezone, flagName string) (*calendar.EventDateTime, error) {
+	edt := buildEventDateTime(value, allDay)
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		return edt, nil
+	}
+	if allDay {
+		return nil, usagef("%s cannot be used with all-day dates", flagName)
+	}
+	if _, err := loadTimezoneLocation(timezone); err != nil {
+		return nil, usagef("invalid %s %q: %v", flagName, timezone, err)
+	}
+	edt.TimeZone = timezone
+	return edt, nil
+}
+
+// Flag names for the event start/end timezone options. Shared so the unified
+// --timezone resolution can attribute validation errors to the flag the user
+// actually set.
+const (
+	flagStartTimezone = "--start-timezone"
+	flagEndTimezone   = "--end-timezone"
+	flagTimezone      = "--timezone"
+)
+
+// resolveUnifiedTimezone applies a single --timezone/--tz value to both the
+// start and end timezone. It is mutually exclusive with the granular
+// --start-timezone/--end-timezone flags: supplying --timezone alongside either
+// is a usage error. The returned flag names let downstream validation errors
+// (invalid zone, all-day) point at whichever flag the user actually set.
+func resolveUnifiedTimezone(unified, start, end string) (startTZ, startFlag, endTZ, endFlag string, err error) {
+	if strings.TrimSpace(unified) == "" {
+		return start, flagStartTimezone, end, flagEndTimezone, nil
+	}
+	if strings.TrimSpace(start) != "" || strings.TrimSpace(end) != "" {
+		return "", "", "", "", usage("--timezone cannot be combined with --start-timezone or --end-timezone")
+	}
+	return unified, flagTimezone, unified, flagTimezone, nil
+}
+
 func etcGMTForOffsetSeconds(offset int) (string, bool) {
 	if offset == 0 || offset%3600 != 0 {
 		return "", false
@@ -37,31 +80,8 @@ func etcGMTForOffsetSeconds(offset int) (string, bool) {
 	return fmt.Sprintf("Etc/GMT+%d", -hours), true
 }
 
-func usIANAForOffsetAt(t time.Time, offset int) string {
-	switch offset {
-	case -4 * 3600, -5 * 3600, -6 * 3600, -7 * 3600, -8 * 3600:
-		for _, candidate := range []string{
-			"America/New_York",
-			"America/Chicago",
-			"America/Denver",
-			"America/Phoenix",
-			"America/Los_Angeles",
-		} {
-			loc, err := time.LoadLocation(candidate)
-			if err != nil {
-				continue
-			}
-			_, candidateOffset := t.In(loc).Zone()
-			if candidateOffset == offset {
-				return candidate
-			}
-		}
-	}
-	return ""
-}
-
 // extractTimezone attempts to determine a timezone from an RFC3339 datetime string.
-// Returns an IANA timezone name if determinable, empty string otherwise.
+// Returns a timezone identifier safe to send to Google Calendar.
 func extractTimezone(value string) string {
 	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {
@@ -73,32 +93,52 @@ func extractTimezone(value string) string {
 		return tzUTC
 	}
 
-	// RFC3339 values have a fixed offset, but Google Calendar requires an IANA timezone
-	// name for recurring events. We guess by checking which common zones match the
-	// offset at this instant.
-	if tz := usIANAForOffsetAt(t, offset); tz != "" {
-		return tz
-	}
-
-	// Fallback for fixed whole-hour offsets when no regional timezone match is found.
+	// Offset-only RFC3339 values do not carry enough information to distinguish
+	// between regional IANA zones that may share the same offset at a given instant
+	// (for example America/Phoenix vs America/Los_Angeles during DST). Use a fixed
+	// offset timezone instead of guessing an ambiguous named region.
 	if tz, ok := etcGMTForOffsetSeconds(offset); ok {
 		return tz
 	}
 	return ""
 }
 
-func buildConferenceData(withMeet bool) *calendar.ConferenceData {
-	if !withMeet {
+type conferenceChoice struct {
+	provider string
+}
+
+const (
+	conferenceProviderMeet = "meet"
+	conferenceProviderZoom = "zoom"
+)
+
+func buildConferenceData(c conferenceChoice) *calendar.ConferenceData {
+	switch c.provider {
+	case conferenceProviderMeet:
+		return &calendar.ConferenceData{
+			CreateRequest: &calendar.CreateConferenceRequest{
+				RequestId: fmt.Sprintf("gogcli-%d", time.Now().UnixNano()),
+				ConferenceSolutionKey: &calendar.ConferenceSolutionKey{
+					Type: "hangoutsMeet",
+				},
+			},
+		}
+	case conferenceProviderZoom:
+		// Zoom is attached via the event description (see zoom_description.go),
+		// not conferenceData. Google's Calendar API rejects conferenceData
+		// writes that assert conferenceSolution.key.type="addOn" from
+		// non-Workspace-Marketplace OAuth clients with 400 "Invalid conference
+		// data", and silently drops the field entirely when key.type is
+		// omitted. Description-mode preserves the join URL + meeting ID +
+		// passcode in a form that round-trips through Google's storage.
+		return nil
+	default:
 		return nil
 	}
-	return &calendar.ConferenceData{
-		CreateRequest: &calendar.CreateConferenceRequest{
-			RequestId: fmt.Sprintf("gogcli-%d", time.Now().UnixNano()),
-			ConferenceSolutionKey: &calendar.ConferenceSolutionKey{
-				Type: "hangoutsMeet",
-			},
-		},
-	}
+}
+
+func buildMeetConferenceData() *calendar.ConferenceData {
+	return buildConferenceData(conferenceChoice{provider: conferenceProviderMeet})
 }
 
 func buildRecurrence(rules []string) []string {
@@ -166,7 +206,7 @@ func parseReminder(s string) (string, int64, error) {
 	}
 
 	method := strings.TrimSpace(strings.ToLower(parts[0]))
-	if method != "email" && method != "popup" {
+	if method != "email" && method != reminderMethodPopup {
 		return "", 0, fmt.Errorf("invalid reminder method: %q (expected 'email' or 'popup')", method)
 	}
 
@@ -179,7 +219,17 @@ func parseReminder(s string) (string, int64, error) {
 }
 
 //nolint:nilnil // nil return is intentional: nil means "use calendar defaults"
-func buildReminders(reminders []string) (*calendar.EventReminders, error) {
+func buildReminders(reminders []string, noReminders bool) (*calendar.EventReminders, error) {
+	if noReminders {
+		if len(reminders) != 0 {
+			return nil, usage("cannot use both --reminder and --no-reminders")
+		}
+		return &calendar.EventReminders{
+			Overrides:       []*calendar.EventReminder{},
+			ForceSendFields: []string{"UseDefault", "Overrides"},
+		}, nil
+	}
+
 	if len(reminders) == 0 {
 		return nil, nil
 	}
@@ -196,19 +246,24 @@ func buildReminders(reminders []string) (*calendar.EventReminders, error) {
 	}
 
 	if len(filtered) > 5 {
-		return nil, fmt.Errorf("maximum 5 reminders allowed (got %d)", len(filtered))
+		return nil, usagef("maximum 5 reminders allowed (got %d)", len(filtered))
 	}
 
 	overrides := make([]*calendar.EventReminder, 0, len(filtered))
 	for _, r := range filtered {
 		method, minutes, err := parseReminder(r)
 		if err != nil {
-			return nil, err
+			return nil, usagef("%v", err)
 		}
-		overrides = append(overrides, &calendar.EventReminder{
+		reminder := &calendar.EventReminder{
 			Method:  method,
 			Minutes: minutes,
-		})
+		}
+		if minutes == 0 {
+			// Minutes is an omitempty zero value; force-send 0 so Calendar API doesn't reject it.
+			reminder.ForceSendFields = []string{"Minutes"}
+		}
+		overrides = append(overrides, reminder)
 	}
 
 	// ForceSendFields ensures UseDefault=false is sent (not omitted as zero value)

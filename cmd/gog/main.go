@@ -3,7 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/steipete/gogcli/internal/cmd"
+	"github.com/openclaw/gogcli/internal/cmd"
+	_ "github.com/openclaw/gogcli/internal/tzembed" // Embed IANA timezone database for Windows support
 )
 
 func main() {

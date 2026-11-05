@@ -2,14 +2,13 @@ package cmd
 
 import (
 	"context"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/alecthomas/kong"
 
-	"github.com/steipete/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/outfmt"
 )
 
 type SchemaCmd struct {
@@ -18,9 +17,43 @@ type SchemaCmd struct {
 }
 
 type schemaDoc struct {
-	SchemaVersion int         `json:"schema_version"`
-	Build         string      `json:"build"`
-	Command       *schemaNode `json:"command"`
+	SchemaVersion int              `json:"schema_version"`
+	Build         string           `json:"build"`
+	Automation    schemaAutomation `json:"automation"`
+	Command       *schemaNode      `json:"command"`
+}
+
+type schemaAutomation struct {
+	OutputFormats []string          `json:"output_formats"`
+	ExitCodes     map[string]int    `json:"exit_codes"`
+	Safety        schemaSafetyState `json:"safety"`
+}
+
+type schemaSafetyState struct {
+	DryRun        bool                          `json:"dry_run"`
+	NoInput       bool                          `json:"no_input"`
+	WrapUntrusted bool                          `json:"wrap_untrusted"`
+	GmailNoSend   bool                          `json:"gmail_no_send"`
+	ReadOnly      bool                          `json:"readonly"`
+	BakedProfile  schemaBakedProfile            `json:"baked_profile"`
+	CommandRules  schemaCommandRules            `json:"command_rules"`
+	BatchServices map[string]schemaBatchService `json:"batch_services"`
+}
+
+type schemaBatchService struct {
+	AdditionalPermission string `json:"additional_permission,omitempty"`
+	SubmissionAllowed    bool   `json:"submission_allowed"`
+}
+
+type schemaBakedProfile struct {
+	Enabled bool   `json:"enabled"`
+	Name    string `json:"name,omitempty"`
+}
+
+type schemaCommandRules struct {
+	EnabledPrefixes []string `json:"enabled_prefixes"`
+	EnabledExact    []string `json:"enabled_exact"`
+	Disabled        []string `json:"disabled"`
 }
 
 type schemaNode struct {
@@ -67,9 +100,14 @@ type schemaArg struct {
 	Cumulative bool     `json:"cumulative,omitempty"`
 }
 
-func (c *SchemaCmd) Run(ctx context.Context, kctx *kong.Context) error {
-	// Always emit schema untransformed, even if the caller enabled global JSON transforms.
+func (c *SchemaCmd) Run(ctx context.Context, kctx *kong.Context, flags *RootFlags) error {
+	if outfmt.IsPlain(ctx) {
+		return usage("schema does not support --plain; omit it or use --json")
+	}
+
+	// Schema is trusted local metadata and must not inherit result transforms.
 	ctx = outfmt.WithJSONTransform(ctx, outfmt.JSONTransform{})
+	ctx = outfmt.WithUntrustedWrapper(ctx, outfmt.UntrustedWrapOptions{})
 
 	root := kctx.Model.Node
 	node := root
@@ -84,14 +122,103 @@ func (c *SchemaCmd) Run(ctx context.Context, kctx *kong.Context) error {
 	}
 
 	hide := !c.IncludeHidden
+	profile, err := loadBakedSafetyProfile()
+	if err != nil {
+		return usagef("invalid baked safety profile: %v", err)
+	}
+	if profile.commandNodeBlockedForHelp(node) {
+		return profile.commandPathError(commandNodePath(node))
+	}
 
+	automation, err := buildSchemaAutomation(ctx, flags, profile)
+	if err != nil {
+		return err
+	}
 	doc := schemaDoc{
 		SchemaVersion: 1,
 		Build:         VersionString(),
-		Command:       buildSchemaNode(node, hide),
+		Automation:    automation,
+		Command:       buildSchemaNode(node, hide, profile),
 	}
 
-	return outfmt.WriteJSON(ctx, os.Stdout, doc)
+	return outfmt.WriteJSON(ctx, stdoutWriter(ctx), doc)
+}
+
+func buildSchemaAutomation(ctx context.Context, flags *RootFlags, profile bakedSafetyProfile) (schemaAutomation, error) {
+	safety := schemaSafetyState{
+		BakedProfile: schemaBakedProfile{
+			Enabled: profile.enabled,
+			Name:    profile.name,
+		},
+		CommandRules: schemaCommandRules{
+			EnabledPrefixes: []string{},
+			EnabledExact:    []string{},
+			Disabled:        []string{},
+		},
+	}
+	if flags != nil {
+		safety.DryRun = flags.DryRun
+		safety.NoInput = flags.NoInput
+		safety.WrapUntrusted = flags.WrapUntrusted
+		safety.GmailNoSend = flags.GmailNoSend
+		safety.ReadOnly = flags.ReadOnly
+		safety.CommandRules.EnabledPrefixes = sortedCommandRules(flags.EnableCommands)
+		safety.CommandRules.EnabledExact = sortedCommandRules(flags.EnableCommandsExact)
+		safety.CommandRules.Disabled = sortedCommandRules(flags.DisableCommands)
+	}
+	canSubmitBatch := batchSubmissionAllowed(flags, profile)
+	safety.BatchServices = map[string]schemaBatchService{
+		"docs": {SubmissionAllowed: canSubmitBatch},
+		"slides": {
+			AdditionalPermission: "slides.batch-submit",
+			SubmissionAllowed:    canSubmitBatch && enforceExplicitCommandPermission(flags, []string{"slides", "batch-submit"}) == nil,
+		},
+		"forms": {
+			AdditionalPermission: "forms.batch-submit",
+			SubmissionAllowed:    canSubmitBatch && enforceExplicitCommandPermission(flags, []string{"forms", "batch-submit"}) == nil,
+		},
+		"sheets": {
+			AdditionalPermission: "sheets.batch-request",
+			SubmissionAllowed:    canSubmitBatch && enforceExplicitCommandPermission(flags, []string{"sheets", "batch-request"}) == nil,
+		},
+	}
+
+	store, err := commandConfigStore(ctx)
+	if err != nil {
+		return schemaAutomation{}, err
+	}
+	cfg, err := store.Read()
+	if err != nil {
+		return schemaAutomation{}, err
+	}
+	safety.GmailNoSend = safety.GmailNoSend || cfg.GmailNoSend
+	account, accountKnown, err := configuredAccount(flags)
+	if err != nil {
+		return schemaAutomation{}, err
+	}
+	if accountKnown {
+		accountNoSend, noSendErr := store.IsNoSendAccount(account)
+		if noSendErr != nil {
+			return schemaAutomation{}, noSendErr
+		}
+		safety.GmailNoSend = safety.GmailNoSend || accountNoSend
+	}
+
+	return schemaAutomation{
+		OutputFormats: []string{"json", "plain"},
+		ExitCodes:     stableExitCodes(),
+		Safety:        safety,
+	}, nil
+}
+
+func sortedCommandRules(value string) []string {
+	rules := parseEnabledCommands(value)
+	out := make([]string, 0, len(rules))
+	for rule := range rules {
+		out = append(out, rule)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func splitCommandPath(parts []string) []string {
@@ -145,7 +272,7 @@ func findChildCommand(parent *kong.Node, token string) *kong.Node {
 	return nil
 }
 
-func buildSchemaNode(node *kong.Node, hide bool) *schemaNode {
+func buildSchemaNode(node *kong.Node, hide bool, profile bakedSafetyProfile) *schemaNode {
 	if node == nil {
 		return nil
 	}
@@ -177,12 +304,17 @@ func buildSchemaNode(node *kong.Node, hide bool) *schemaNode {
 		if hide && child.Hidden {
 			continue
 		}
+		if !profile.commandNodeVisible(child) {
+			continue
+		}
 		children = append(children, child)
 	}
 	sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
 
 	for _, child := range children {
-		out.Subcommands = append(out.Subcommands, buildSchemaNode(child, hide))
+		if childNode := buildSchemaNode(child, hide, profile); childNode != nil {
+			out.Subcommands = append(out.Subcommands, childNode)
+		}
 	}
 
 	return out

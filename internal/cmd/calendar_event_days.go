@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -17,6 +18,20 @@ type eventWithDays struct {
 	EndLocal       string `json:"endLocal,omitempty"`
 }
 
+func (e *eventWithDays) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return []byte("null"), nil
+	}
+	return marshalCalendarEventWithFields(e.Event, map[string]string{
+		"startDayOfWeek": e.StartDayOfWeek,
+		"endDayOfWeek":   e.EndDayOfWeek,
+		"timezone":       e.Timezone,
+		"eventTimezone":  e.EventTimezone,
+		"startLocal":     e.StartLocal,
+		"endLocal":       e.EndLocal,
+	})
+}
+
 func wrapEventsWithDays(events []*calendar.Event) []*eventWithDays {
 	if len(events) == 0 {
 		return []*eventWithDays{}
@@ -29,15 +44,28 @@ func wrapEventsWithDays(events []*calendar.Event) []*eventWithDays {
 }
 
 func wrapEventWithDaysWithTimezone(event *calendar.Event, calendarTimezone string, loc *time.Location) *eventWithDays {
+	return wrapEventWithDaysWithTimezoneOverride(event, calendarTimezone, loc, false)
+}
+
+func wrapEventWithDaysWithTimezoneOverride(event *calendar.Event, calendarTimezone string, loc *time.Location, forceDisplayTimezone bool) *eventWithDays {
 	if event == nil {
 		return nil
 	}
-	startDay, endDay := eventDaysOfWeek(event)
 	evTimezone := eventTimezone(event)
-	calendarTimezone, loc = resolveEventTimezone(event, calendarTimezone, loc)
+	startLoc, endLoc := loc, loc
+	if forceDisplayTimezone {
+		calendarTimezone = strings.TrimSpace(calendarTimezone)
+	} else {
+		fallbackTimezone, fallbackLoc := calendarTimezone, loc
+		calendarTimezone = resolveEventTimezone(event, calendarTimezone, loc)
+		startLoc = resolveEventDateTimeTimezone(event.Start, fallbackTimezone, fallbackLoc)
+		endLoc = resolveEventDateTimeTimezone(event.End, fallbackTimezone, fallbackLoc)
+	}
+	startDay := dayOfWeekFromEventDateTime(event.Start, startLoc)
+	endDay := dayOfWeekFromEventDateTime(event.End, endLoc)
 
-	startLocal := formatEventLocal(event.Start, loc)
-	endLocal := formatEventLocal(event.End, loc)
+	startLocal := formatEventLocal(event.Start, startLoc)
+	endLocal := formatEventLocal(event.End, endLoc)
 
 	wrapped := &eventWithDays{
 		Event:          event,
@@ -54,20 +82,27 @@ func wrapEventWithDaysWithTimezone(event *calendar.Event, calendarTimezone strin
 }
 
 func eventDaysOfWeek(event *calendar.Event) (string, string) {
+	return eventDaysOfWeekInLocation(event, nil)
+}
+
+func eventDaysOfWeekInLocation(event *calendar.Event, loc *time.Location) (string, string) {
 	if event == nil {
 		return "", ""
 	}
-	startDay := dayOfWeekFromEventDateTime(event.Start)
-	endDay := dayOfWeekFromEventDateTime(event.End)
+	startDay := dayOfWeekFromEventDateTime(event.Start, loc)
+	endDay := dayOfWeekFromEventDateTime(event.End, loc)
 	return startDay, endDay
 }
 
-func dayOfWeekFromEventDateTime(dt *calendar.EventDateTime) string {
+func dayOfWeekFromEventDateTime(dt *calendar.EventDateTime, loc *time.Location) string {
 	if dt == nil {
 		return ""
 	}
 	if dt.DateTime != "" {
 		if t, ok := parseEventTime(dt.DateTime, dt.TimeZone); ok {
+			if loc != nil {
+				t = t.In(loc)
+			}
 			return t.Weekday().String()
 		}
 	}
@@ -120,41 +155,78 @@ func parseEventDate(value string, tz string) (time.Time, bool) {
 }
 
 func loadEventLocation(tz string) (*time.Location, bool) {
-	tz = strings.TrimSpace(tz)
-	if tz == "" {
-		return nil, false
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return nil, false
-	}
-	return loc, true
+	return tryLoadTimezoneLocation(tz)
 }
 
-// resolveEventTimezone resolves the timezone and location for an event.
-// It tries the calendar timezone first, then falls back to the event's timezone.
-// Returns the resolved timezone name and location. If loc is already provided,
-// it will be used as-is (only calendarTimezone may be updated for display).
-func resolveEventTimezone(event *calendar.Event, calendarTimezone string, loc *time.Location) (string, *time.Location) {
+// resolveEventTimezone resolves the timezone and location used for local
+// event display. Prefer the event's own timezone over the containing
+// calendar timezone: Google Calendar may return a DateTime rendered with the
+// calendar's UTC offset while also carrying the event timezone field. Showing
+// local fields in the calendar timezone makes conference/travel events look an
+// hour early/late (for example an Asia/Seoul event on an Asia/Hong_Kong
+// calendar). Fall back to the calendar timezone only when the event has none.
+func resolveEventTimezone(event *calendar.Event, calendarTimezone string, loc *time.Location) string {
 	calendarTimezone = strings.TrimSpace(calendarTimezone)
 	evTimezone := eventTimezone(event)
 
-	if loc == nil && calendarTimezone != "" {
-		if loaded, err := time.LoadLocation(calendarTimezone); err == nil {
-			loc = loaded
-		} else {
-			calendarTimezone = ""
+	if evTimezone != "" {
+		if _, ok := tryLoadTimezoneLocation(evTimezone); ok {
+			return evTimezone
 		}
 	}
-	if calendarTimezone == "" {
-		calendarTimezone = evTimezone
-		if loc == nil && calendarTimezone != "" {
-			if loaded, err := time.LoadLocation(calendarTimezone); err == nil {
-				loc = loaded
-			} else {
-				calendarTimezone = ""
+
+	if calendarTimezone != "" {
+		if loc != nil {
+			return calendarTimezone
+		}
+		if _, ok := tryLoadTimezoneLocation(calendarTimezone); ok {
+			return calendarTimezone
+		}
+	}
+
+	return ""
+}
+
+func resolveEventDateTimeTimezone(dt *calendar.EventDateTime, fallbackTimezone string, fallbackLoc *time.Location) *time.Location {
+	if dt != nil {
+		tz := strings.TrimSpace(dt.TimeZone)
+		if tz != "" {
+			if loaded, ok := tryLoadTimezoneLocation(tz); ok {
+				return loaded
 			}
 		}
 	}
-	return calendarTimezone, loc
+
+	fallbackTimezone = strings.TrimSpace(fallbackTimezone)
+	if fallbackTimezone == "" {
+		return nil
+	}
+	if fallbackLoc != nil {
+		return fallbackLoc
+	}
+	if loaded, ok := tryLoadTimezoneLocation(fallbackTimezone); ok {
+		return loaded
+	}
+	return nil
+}
+
+func marshalCalendarEventWithFields(event *calendar.Event, fields map[string]string) ([]byte, error) {
+	raw := map[string]any{}
+	if event != nil {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return nil, err
+		}
+		if string(data) != "null" {
+			if err := json.Unmarshal(data, &raw); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for key, value := range fields {
+		if value != "" {
+			raw[key] = value
+		}
+	}
+	return json.Marshal(raw)
 }

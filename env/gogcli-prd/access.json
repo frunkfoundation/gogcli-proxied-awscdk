@@ -1,0 +1,13 @@
+{
+  "GogcliGoogleProxyApi": {
+    "OnboardingTable": "GogcliGoogleProxyApi-OnboardingStateD56C56F5-JWRAJZIX0MLB",
+    "OwnerCallbackUrl": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/auth/callback",
+    "GoogleCallbackUrl": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/oauth/google/callback",
+    "ApiKeyId": "lreck6pz20",
+    "ProxyInvokeArns": "[\"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/gmail/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/upload/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/resumable/upload/drive/v3/*\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/GET/proxy/v1/accounts\", \"arn:aws:execute-api:us-east-2:968138089939:u5q3kdnam4/prd/*/calendar/v3/*\"]",
+    "ProxyGoogleProxyApiEndpointBC1A4A58": "https://u5q3kdnam4.execute-api.us-east-2.amazonaws.com/prd/",
+    "ProxyBaseUrl": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/",
+    "SetupUrl": "https://gp-039168171bf05570eadba6a8.k-rae.com/prd/onboarding/",
+    "OnboardingRoleArn": "arn:aws:iam::968138089939:role/jdev-gogcli-proxy-prd-onboarding"
+  }
+}

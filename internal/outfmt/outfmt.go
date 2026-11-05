@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -28,9 +29,16 @@ func FromFlags(jsonOut bool, plainOut bool) (Mode, error) {
 }
 
 func FromEnv() Mode {
+	jsonOut := envBool("GOG_JSON")
+
+	plainOut := envBool("GOG_PLAIN")
+	if jsonOut {
+		plainOut = false
+	}
+
 	return Mode{
-		JSON:  envBool("GOG_JSON"),
-		Plain: envBool("GOG_PLAIN"),
+		JSON:  jsonOut,
+		Plain: plainOut,
 	}
 }
 
@@ -64,6 +72,17 @@ type JSONTransform struct {
 
 type jsonTransformKey struct{}
 
+type primaryResult struct {
+	value any
+}
+
+// PrimaryResult marks a complete JSON value as already being the command's
+// primary result. WriteJSON still applies field selection, but --results-only
+// preserves the complete value instead of inferring a nested collection.
+func PrimaryResult(value any) any {
+	return primaryResult{value: value}
+}
+
 func WithJSONTransform(ctx context.Context, t JSONTransform) context.Context {
 	return context.WithValue(ctx, jsonTransformKey{}, t)
 }
@@ -80,12 +99,31 @@ func JSONTransformFromContext(ctx context.Context) (JSONTransform, bool) {
 }
 
 func WriteJSON(ctx context.Context, w io.Writer, v any) error {
+	alreadyPrimary := false
+
+	if result, ok := v.(primaryResult); ok {
+		v = result.value
+		alreadyPrimary = true
+	}
+
 	if t, ok := JSONTransformFromContext(ctx); ok && (t.ResultsOnly || len(t.Select) > 0) {
+		if alreadyPrimary {
+			t.ResultsOnly = false
+		}
+
 		transformed, err := applyJSONTransform(v, t)
 		if err != nil {
 			return fmt.Errorf("transform json: %w", err)
 		}
 		v = transformed
+	}
+
+	if opts, ok := UntrustedWrapperFromContext(ctx); ok {
+		wrapped, err := wrapUntrustedJSONValue(v, opts)
+		if err != nil {
+			return fmt.Errorf("wrap untrusted json: %w", err)
+		}
+		v = wrapped
 	}
 
 	enc := json.NewEncoder(w)
@@ -107,7 +145,10 @@ func applyJSONTransform(v any, t JSONTransform) (any, error) {
 	}
 
 	var anyV any
-	if err := json.Unmarshal(b, &anyV); err != nil {
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec.UseNumber()
+
+	if err := dec.Decode(&anyV); err != nil {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 
@@ -156,18 +197,13 @@ func unwrapPrimary(v any) any {
 		candidates = append(candidates, k)
 	}
 
+	sort.Strings(candidates)
+
 	if len(candidates) == 1 {
 		return m[candidates[0]]
 	}
 
-	// If we have any array/slice-like candidates, prefer those.
-	for _, k := range candidates {
-		if _, ok := m[k].([]any); ok {
-			return m[k]
-		}
-	}
-
-	// Fall back to known result keys.
+	// Prefer known result arrays before any generic array candidate.
 	known := []string{
 		"files",
 		"threads",
@@ -196,6 +232,21 @@ func unwrapPrimary(v any) any {
 		"spaces",
 		"request",
 	}
+	for _, k := range known {
+		if val, ok := m[k]; ok {
+			if _, isArray := val.([]any); isArray {
+				return val
+			}
+		}
+	}
+
+	// If we have any array/slice-like candidates, prefer those.
+	for _, k := range candidates {
+		if _, ok := m[k].([]any); ok {
+			return m[k]
+		}
+	}
+
 	for _, k := range known {
 		if val, ok := m[k]; ok {
 			return val

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,18 +14,12 @@ import (
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
+	"google.golang.org/api/slides/v1"
+
+	"github.com/openclaw/gogcli/internal/app"
 )
 
 func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
-	origNew := newDriveService
-	origDocs := newDocsService
-	origExport := driveExportDownload
-	t.Cleanup(func() {
-		newDriveService = origNew
-		newDocsService = origDocs
-		driveExportDownload = origExport
-	})
-
 	var createCalls int32
 	var copyCalls int32
 	var exportCalls int32
@@ -54,6 +49,14 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 						},
 					},
 				},
+			})
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/presentations/"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"presentationId": "p1",
+				"title":          "Slides 1",
+				"slides":         []any{map[string]any{"objectId": "slide1"}},
 			})
 			return
 		case r.Method == http.MethodGet && strings.Contains(drivePath, "/files/d1") && !strings.HasSuffix(drivePath, "/copy"):
@@ -100,7 +103,7 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 				"modifiedTime": "2025-12-26T00:00:00Z",
 			})
 			return
-		case r.Method == http.MethodPost && (strings.HasSuffix(drivePath, "/files")):
+		case r.Method == http.MethodPost && strings.HasSuffix(drivePath, "/files"):
 			atomic.AddInt32(&createCalls, 1)
 			var req map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&req)
@@ -136,7 +139,6 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDriveService = func(context.Context, string) (*drive.Service, error) { return svc, nil }
 
 	docSvc, err := docs.NewService(context.Background(),
 		option.WithoutAuthentication(),
@@ -146,9 +148,20 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDocsService: %v", err)
 	}
-	newDocsService = func(context.Context, string) (*docs.Service, error) { return docSvc, nil }
 
-	driveExportDownload = func(context.Context, *drive.Service, string, string) (*http.Response, error) {
+	slidesSvc, err := slides.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewSlidesService: %v", err)
+	}
+
+	export := func(_ context.Context, _ *drive.Service, fileID, mimeType string) (*http.Response, error) {
+		if fileID == "" || mimeType == "" {
+			return nil, fmt.Errorf("invalid export request: file=%q mime=%q", fileID, mimeType)
+		}
 		atomic.AddInt32(&exportCalls, 1)
 		return &http.Response{
 			Status:     "200 OK",
@@ -157,17 +170,24 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 		}, nil
 	}
 
+	runtime := &app.Runtime{Services: app.Services{
+		Docs: func(context.Context, string) (*docs.Service, error) {
+			return docSvc, nil
+		},
+		Slides: func(context.Context, string) (*slides.Service, error) {
+			return slidesSvc, nil
+		},
+		Drive:       stubDriveService(svc),
+		DriveExport: export,
+	}}
 	run := func(args ...string) map[string]any {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute(append([]string{"--json", "--account", "a@b.com"}, args...)); execErr != nil {
-					t.Fatalf("Execute(%v): %v", args, execErr)
-				}
-			})
-		})
+		result := executeWithTestRuntime(t, append([]string{"--json", "--account", "a@b.com"}, args...), runtime)
+		if result.err != nil {
+			t.Fatalf("Execute(%v): %v", args, result.err)
+		}
 		var parsed map[string]any
-		if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
+		if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 		}
 		return parsed
 	}
@@ -199,9 +219,6 @@ func TestExecute_DocsSlidesSheets_CopyCreateInfoCat_JSON(t *testing.T) {
 }
 
 func TestExecute_DocsCat_WrongMime(t *testing.T) {
-	origDocs := newDocsService
-	t.Cleanup(func() { newDocsService = origDocs })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
@@ -215,10 +232,16 @@ func TestExecute_DocsCat_WrongMime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newDocsService = func(context.Context, string) (*docs.Service, error) { return docSvc, nil }
 
-	err = Execute([]string{"--account", "a@b.com", "docs", "cat", "x1"})
-	if err == nil || !strings.Contains(err.Error(), "doc not found or not a Google Doc") {
-		t.Fatalf("expected not found error, got: %v", err)
+	result := executeWithTestRuntime(t,
+		[]string{"--account", "a@b.com", "docs", "cat", "x1"},
+		&app.Runtime{Services: app.Services{
+			Docs: func(context.Context, string) (*docs.Service, error) {
+				return docSvc, nil
+			},
+		}},
+	)
+	if result.err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }

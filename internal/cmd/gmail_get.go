@@ -2,24 +2,25 @@ package cmd
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
-	"os"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/gmailcontent"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type GmailGetCmd struct {
-	MessageID string `arg:"" name:"messageId" help:"Message ID"`
-	Format    string `name:"format" help:"Message format: full|metadata|raw" default:"full"`
-	Headers   string `name:"headers" help:"Metadata headers (comma-separated; only for --format=metadata)"`
+	MessageID               string `arg:"" name:"messageId" help:"Message ID"`
+	UseIndexedAttachmentIDs bool   `name:"use-indexed-attachment-ids" help:"Use 0-based indexes as attachment ids everywhere (output, the download argument, and saved filenames)" env:"GOG_GMAIL_USE_INDEXED_ATTACHMENT_IDS"`
+	Format                  string `name:"format" help:"Message format: full|metadata|raw" default:"full"`
+	Headers                 string `name:"headers" help:"Metadata headers (comma-separated; only for --format=metadata)"`
+	SanitizeContent         bool   `name:"sanitize-content" aliases:"sanitize,safe" help:"Emit agent-oriented sanitized content: strip HTML, remove HTTP(S) URLs, and omit raw Gmail payloads from JSON"`
 }
 
 const (
 	gmailFormatFull     = "full"
 	gmailFormatMetadata = "metadata"
+	gmailFormatMinimal  = "minimal"
 	gmailFormatRaw      = "raw"
 )
 
@@ -42,10 +43,13 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	switch format {
 	case gmailFormatFull, gmailFormatMetadata, gmailFormatRaw:
 	default:
-		return fmt.Errorf("invalid --format: %q (expected full|metadata|raw)", format)
+		return usagef("invalid --format: %q (expected full|metadata|raw)", format)
+	}
+	if c.SanitizeContent && format == gmailFormatRaw {
+		return usage("--sanitize-content cannot be used with --format raw")
 	}
 
-	svc, err := newGmailService(ctx, account)
+	svc, err := gmailService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -54,9 +58,8 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 	if format == gmailFormatMetadata {
 		headerList := splitCSV(c.Headers)
 		if len(headerList) == 0 {
-			headerList = []string{"From", "To", "Cc", "Bcc", "Subject", "Date"}
-		}
-		if !hasHeaderName(headerList, "List-Unsubscribe") {
+			headerList = defaultGmailGetMetadataHeaders()
+		} else if !hasHeaderName(headerList, "List-Unsubscribe") {
 			headerList = append(headerList, "List-Unsubscribe")
 		}
 		call = call.MetadataHeaders(headerList...)
@@ -69,15 +72,23 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 
 	unsubscribe := bestUnsubscribeLink(msg.Payload)
 	if outfmt.IsJSON(ctx) {
+		if c.SanitizeContent {
+			output := sanitizedGmailMessage(msg, format == gmailFormatFull, c.UseIndexedAttachmentIDs)
+			return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"message": output})
+		}
 		// Include a flattened headers map for easier querying
 		// (e.g., jq '.headers.to' instead of complex nested queries)
 		headers := map[string]string{
-			"from":    headerValue(msg.Payload, "From"),
-			"to":      headerValue(msg.Payload, "To"),
-			"cc":      headerValue(msg.Payload, "Cc"),
-			"bcc":     headerValue(msg.Payload, "Bcc"),
-			"subject": headerValue(msg.Payload, "Subject"),
-			"date":    headerValue(msg.Payload, "Date"),
+			"from":        headerValue(msg.Payload, "From"),
+			"reply_to":    headerValue(msg.Payload, "Reply-To"),
+			"to":          headerValue(msg.Payload, "To"),
+			"cc":          headerValue(msg.Payload, "Cc"),
+			"bcc":         headerValue(msg.Payload, "Bcc"),
+			"subject":     headerValue(msg.Payload, "Subject"),
+			"date":        headerValue(msg.Payload, "Date"),
+			"message_id":  headerValue(msg.Payload, "Message-ID"),
+			"in_reply_to": headerValue(msg.Payload, "In-Reply-To"),
+			"references":  headerValue(msg.Payload, "References"),
 		}
 		payload := map[string]any{
 			"message": msg,
@@ -87,22 +98,28 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 			payload["unsubscribe"] = unsubscribe
 		}
 		if format == gmailFormatFull {
-			if body := bestBodyText(msg.Payload); body != "" {
+			if body := gmailcontent.BestBodyText(msg.Payload); body != "" {
 				payload["body"] = body
 			}
 		}
 		if format == gmailFormatFull || format == gmailFormatMetadata {
 			attachments := collectAttachments(msg.Payload)
 			if len(attachments) > 0 {
-				payload["attachments"] = attachmentOutputs(attachments)
+				payload["attachments"] = attachmentOutputs(attachments, c.UseIndexedAttachmentIDs)
 			}
 		}
-		return outfmt.WriteJSON(ctx, os.Stdout, payload)
+		// The raw message dump carries the opaque attachmentIds too; in indexed
+		// mode strip them so the dump omits the long ids (the index is in the
+		// curated attachments output).
+		if c.UseIndexedAttachmentIDs {
+			stripAttachmentIDs(msg.Payload)
+		}
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), outfmt.PrimaryResult(payload))
 	}
 
-	u.Out().Printf("id\t%s", msg.Id)
-	u.Out().Printf("thread_id\t%s", msg.ThreadId)
-	u.Out().Printf("label_ids\t%s", strings.Join(msg.LabelIds, ","))
+	u.Out().Linef("id\t%s%s", msg.Id, gmailHumanMessageStatusMarker(ctx, msg.LabelIds))
+	u.Out().Linef("thread_id\t%s", msg.ThreadId)
+	u.Out().Linef("label_ids\t%s", strings.Join(msg.LabelIds, ","))
 
 	switch format {
 	case gmailFormatRaw:
@@ -110,7 +127,7 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 			u.Err().Println("Empty raw message")
 			return nil
 		}
-		decoded, err := base64.RawURLEncoding.DecodeString(msg.Raw)
+		decoded, err := decodeGmailRaw(msg.Raw)
 		if err != nil {
 			return err
 		}
@@ -118,23 +135,34 @@ func (c *GmailGetCmd) Run(ctx context.Context, flags *RootFlags) error {
 		u.Out().Println(string(decoded))
 		return nil
 	case gmailFormatMetadata, gmailFormatFull:
-		u.Out().Printf("from\t%s", headerValue(msg.Payload, "From"))
-		u.Out().Printf("to\t%s", headerValue(msg.Payload, "To"))
-		u.Out().Printf("cc\t%s", headerValue(msg.Payload, "Cc"))
-		u.Out().Printf("bcc\t%s", headerValue(msg.Payload, "Bcc"))
-		u.Out().Printf("subject\t%s", headerValue(msg.Payload, "Subject"))
-		u.Out().Printf("date\t%s", headerValue(msg.Payload, "Date"))
-		if unsubscribe != "" {
-			u.Out().Printf("unsubscribe\t%s", unsubscribe)
+		header := func(name string) string {
+			value := headerValue(msg.Payload, name)
+			if c.SanitizeContent {
+				return sanitizeGmailText(value)
+			}
+			return value
 		}
-		attachments := attachmentOutputs(collectAttachments(msg.Payload))
+		u.Out().Linef("from\t%s", header("From"))
+		u.Out().Linef("to\t%s", header("To"))
+		u.Out().Linef("cc\t%s", header("Cc"))
+		u.Out().Linef("bcc\t%s", header("Bcc"))
+		u.Out().Linef("subject\t%s", header("Subject"))
+		u.Out().Linef("date\t%s", header("Date"))
+		if unsubscribe != "" && !c.SanitizeContent {
+			u.Out().Linef("unsubscribe\t%s", unsubscribe)
+		}
+		attachments := attachmentOutputs(collectAttachments(msg.Payload), c.UseIndexedAttachmentIDs)
 		if len(attachments) > 0 {
 			u.Out().Println("")
 			printAttachmentLines(u.Out(), attachments)
 		}
 		if format == gmailFormatFull {
-			body := bestBodyText(msg.Payload)
+			body := gmailcontent.BestBodyText(msg.Payload)
 			if body != "" {
+				if c.SanitizeContent {
+					displayBody, isHTML := gmailcontent.BestBodyForDisplay(msg.Payload)
+					body = sanitizeGmailBody(displayBody, isHTML)
+				}
 				u.Out().Println("")
 				u.Out().Println(body)
 			}

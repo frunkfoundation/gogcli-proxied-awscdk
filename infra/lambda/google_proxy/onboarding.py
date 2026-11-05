@@ -1,0 +1,103 @@
+"""Dedicated owner UI/API Lambda. Existing signed Gmail proxy stays separate."""
+import json
+import re
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from errors import AuthError, WorkflowError
+from onboarding_http import base_url, json_body, problem, redirect, response
+import onboarding_runtime as runtime
+
+
+def handler(event, context):
+    if event.get('Records'):
+        from onboarding_worker import handler as worker
+        return worker(event, context)
+    try:
+        return dispatch(event)
+    except (AuthError, WorkflowError) as error:
+        return problem(error, '/connection/v1/' not in event.get('path', event.get('rawPath', '')))
+    except Exception as error:
+        print(json.dumps({'event': 'onboarding_request_failed', 'error_type': type(error).__name__}))
+        return problem(AuthError(500, 'internal_error', 'The request could not be completed. Reload to check its status.'))
+
+
+def dispatch(event):
+    method = event.get('httpMethod', event.get('requestContext', {}).get('http', {}).get('method', 'GET'))
+    path = event.get('path', event.get('rawPath', ''))
+    prefix = urlsplit(base_url()).path.rstrip('/')
+    # REST API events may omit stage; HTTP API events can include it.
+    if path == prefix or path.startswith(prefix + '/'):
+        path = '/onboarding' + path[len(prefix):]
+    headers = {key.lower(): value for key, value in (event.get('headers') or {}).items()}
+    query = event.get('queryStringParameters') or {}
+    assets = {'/onboarding/': ('index.html', 'text/html'), '/onboarding/app.js': ('app.js', 'text/javascript'),
+              '/onboarding/style.css': ('style.css', 'text/css'),
+              '/onboarding/connect': ('connect.html', 'text/html'),
+              '/onboarding/connect/result': ('connect.html', 'text/html'),
+              '/onboarding/connect.js': ('connect.js', 'text/javascript'),
+              '/onboarding/about': ('about.html', 'text/html'), '/onboarding/privacy': ('privacy.html', 'text/html')}
+    if method == 'GET' and path == '/onboarding':
+        return redirect(base_url())
+    if method == 'GET' and path in assets:
+        filename, content_type = assets[path]
+        asset = (Path(__file__).parent / 'assets' / 'onboarding' / filename).read_text()
+        if filename == 'connect.html':
+            asset = asset.replace('__ONBOARDING_BASE__', base_url())
+        return response(200, asset, content_type)
+    if method == 'GET' and path == '/onboarding/auth/login':
+        location, set_cookie = runtime.get_auth().login()
+        return redirect(location, set_cookie)
+    if method == 'GET' and path == '/onboarding/auth/callback':
+        return redirect(base_url(), runtime.get_auth().callback(query, headers))
+    from onboarding_connection_http import google_callback, owner_dispatch, target_dispatch
+    if method == 'GET' and path == '/onboarding/oauth/google/callback':
+        return google_callback(query, headers)
+    if path.startswith('/onboarding/connection/v1/'):
+        return target_dispatch(event, method, path, headers)
+    if not path.startswith('/onboarding/v1/'):
+        raise AuthError(404, 'not_found', 'Route not found.')
+    auth = runtime.get_auth()
+    session = auth.session(headers)
+    if method not in ('GET', 'HEAD'):
+        auth.check_mutation(headers, session)
+    owner = session['owner']
+    result = owner_dispatch(event, method, path, headers, owner)
+    if result is not None:
+        return result
+    service = runtime.get_service()
+    if path == '/onboarding/v1/setup':
+        if method == 'GET':
+            data = service.setup(owner, session['session_id'])
+            data['csrfToken'] = session['csrf']
+            return response(200, data)
+    match = re.fullmatch(r'/onboarding/v1/accounts/([^/]+)(/(enrollments|verifications|recoveries|access|connection))?', path)
+    if match:
+        email, _, action = match.groups()
+        email = unquote(email)
+        if method == 'PUT' and not action:
+            existed = service.store.get('ACCOUNT#' + email.strip().lower())
+            return response(200 if existed else 201, service.save_account(owner, email, json_body(event)),
+                extra={'Location': base_url() + 'v1/accounts/' + email} if not existed else None)
+        result = None
+        if method == 'POST' and action in ('enrollments', 'verifications', 'recoveries'):
+            key = headers.get('idempotency-key', '')
+            body = json_body(event)
+            if action == 'enrollments':
+                result = service.enroll(owner, email, key, session['session_id'], body)
+            elif action == 'verifications':
+                result = service.verification(owner, email, key)
+            else:
+                result = service.recover(owner, email, key)
+        elif method == 'PUT' and action == 'access':
+            result = service.access(owner, email, json_body(event).get('enabled'))
+        elif method == 'DELETE' and action == 'connection':
+            result = service.disconnect(owner, email)
+            if not result.get('id'):
+                return response(204, '', 'text/plain')
+        if result is not None:
+            return response(202, result, extra={'Location': base_url() + 'v1/operations/' + result['id']})
+    match = re.fullmatch(r'/onboarding/v1/operations/([A-Za-z0-9_-]+)', path)
+    if match and method == 'GET':
+        return response(200, service.operation(owner, match.group(1)))
+    raise AuthError(404, 'not_found', 'Route not found.')

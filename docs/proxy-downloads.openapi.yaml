@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info:
+  title: Managed Drive download handoff
+  version: 1.0.0
+  description: >-
+    Opt-in transfer extension to the existing Google Drive proxy routes. The CLI
+    consumes this envelope internally. Requests without opt-in, ranged requests,
+    metadata, and upstream errors keep the ordinary Google response contract.
+servers:
+  - url: https://gp-039168171bf05570eadba6a8.k-rae.com/prd
+security:
+  - sigv4: []
+    usagePlanKey: []
+paths:
+  /drive/v3/files/{fileId}:
+    get:
+      summary: Stage an authorized full Drive media response
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/Account'
+        - $ref: '#/components/parameters/GoogleHost'
+        - $ref: '#/components/parameters/ResponseMode'
+        - name: alt
+          in: query
+          required: true
+          schema: {type: string, const: media}
+      responses:
+        '200': {$ref: '#/components/responses/Handoff'}
+        default: {$ref: '#/components/responses/Error'}
+  /drive/v3/files/{fileId}/export:
+    get:
+      summary: Stage an authorized full Google Workspace export
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/Account'
+        - $ref: '#/components/parameters/GoogleHost'
+        - $ref: '#/components/parameters/ResponseMode'
+        - name: mimeType
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {$ref: '#/components/responses/Handoff'}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    sigv4:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: AWS SigV4 execute-api authentication; all routing headers are signed.
+    usagePlanKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: Usage-plan key, required in addition to the authenticated AWS identity.
+  parameters:
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema: {type: string}
+    Account:
+      name: X-GOG-Account
+      in: header
+      required: true
+      schema: {type: string}
+    GoogleHost:
+      name: X-GOG-Google-Host
+      in: header
+      required: true
+      schema: {type: string, const: www.googleapis.com}
+    ResponseMode:
+      name: X-GOG-Response-Mode
+      in: header
+      required: true
+      schema: {type: string, const: signed-url}
+  responses:
+    Handoff:
+      description: >-
+        Google returned 200; the complete body was staged in private S3 storage.
+        Staging is limited to 256 MiB and the shared 27-second request budget.
+        Fetch the URL with a fresh GET without Google or proxy credentials.
+        Link expiry is five minutes, potentially shorter if the signing session
+        expires first; proxy access changes do not revoke an issued link.
+        Objects expire through a one-day asynchronous lifecycle. Retrying the
+        read stages a new object; there is no persisted operation to resume.
+      headers:
+        Cache-Control:
+          schema: {type: string, const: no-store}
+      content:
+        application/vnd.gog.download+json:
+          schema:
+            type: object
+            required: [url, status, headers, size]
+            properties:
+              url: {type: string, format: uri}
+              status: {type: integer, const: 200}
+              headers:
+                type: object
+                additionalProperties: {type: string}
+              size: {type: integer, minimum: 0, maximum: 268435456}
+    Error:
+      description: >-
+        Existing authentication, authorization, and upstream Google errors are
+        preserved. Staging failures or size excess return 502, missing bucket
+        configuration returns 503, and exhausted deadlines return 504. Proxy
+        errors retain the existing JSON error contract and never contain a link.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: {type: string}

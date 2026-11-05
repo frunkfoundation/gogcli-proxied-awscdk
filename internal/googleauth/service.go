@@ -10,21 +10,33 @@ import (
 type Service string
 
 const (
-	ServiceGmail     Service = "gmail"
-	ServiceCalendar  Service = "calendar"
-	ServiceChat      Service = "chat"
-	ServiceClassroom Service = "classroom"
-	ServiceDrive     Service = "drive"
-	ServiceDocs      Service = "docs"
-	ServiceSlides    Service = "slides"
-	ServiceContacts  Service = "contacts"
-	ServiceTasks     Service = "tasks"
-	ServicePeople    Service = "people"
-	ServiceSheets    Service = "sheets"
-	ServiceForms     Service = "forms"
-	ServiceAppScript Service = "appscript"
-	ServiceGroups    Service = "groups"
-	ServiceKeep      Service = "keep"
+	ServiceGmail         Service = "gmail"
+	ServiceCalendar      Service = "calendar"
+	ServiceChat          Service = "chat"
+	ServiceClassroom     Service = "classroom"
+	ServiceDrive         Service = "drive"
+	ServiceDriveActivity Service = "driveactivity"
+	ServiceDriveLabels   Service = "drivelabels"
+	ServiceDocs          Service = "docs"
+	ServiceSlides        Service = "slides"
+	ServiceContacts      Service = "contacts"
+	ServiceTasks         Service = "tasks"
+	ServicePeople        Service = "people"
+	ServiceSheets        Service = "sheets"
+	ServiceForms         Service = "forms"
+	ServiceSites         Service = "sites"
+	ServiceMeet          Service = "meet"
+	ServiceAppScript     Service = "appscript"
+	ServiceAnalytics     Service = "analytics"
+	ServiceSearchConsole Service = "searchconsole"
+	ServiceAdSense       Service = "adsense"
+	ServiceAds           Service = "ads"
+	ServiceGroups        Service = "groups"
+	ServiceKeep          Service = "keep"
+	ServiceAdmin         Service = "admin"
+	ServiceYouTube       Service = "youtube"
+	ServicePhotos        Service = "photos"
+	ServicePhotosPicker  Service = "photospicker"
 )
 
 const (
@@ -36,6 +48,7 @@ const (
 var (
 	errUnknownService    = errors.New("unknown service")
 	errInvalidDriveScope = errors.New("invalid drive scope")
+	errInvalidGmailScope = errors.New("invalid gmail scope")
 )
 
 type DriveScopeMode string
@@ -46,9 +59,20 @@ const (
 	DriveScopeFile     DriveScopeMode = "file"
 )
 
+type GmailScopeMode string
+
+const (
+	GmailScopeFull     GmailScopeMode = "full"
+	GmailScopeReadonly GmailScopeMode = "readonly"
+	GmailScopeSend     GmailScopeMode = "send"
+	GmailScopeReadSend GmailScopeMode = "read-send"
+)
+
 type ScopeOptions struct {
-	Readonly   bool
-	DriveScope DriveScopeMode
+	Readonly    bool
+	DriveScope  DriveScopeMode
+	GmailScope  GmailScopeMode
+	ExtraScopes []string
 }
 
 type serviceInfo struct {
@@ -64,6 +88,8 @@ var serviceOrder = []Service{
 	ServiceChat,
 	ServiceClassroom,
 	ServiceDrive,
+	ServiceDriveActivity,
+	ServiceDriveLabels,
 	ServiceDocs,
 	ServiceSlides,
 	ServiceContacts,
@@ -71,9 +97,19 @@ var serviceOrder = []Service{
 	ServiceSheets,
 	ServicePeople,
 	ServiceForms,
+	ServiceSites,
+	ServiceMeet,
 	ServiceAppScript,
+	ServiceAnalytics,
+	ServiceSearchConsole,
+	ServiceAdSense,
+	ServiceAds,
 	ServiceGroups,
 	ServiceKeep,
+	ServiceAdmin,
+	ServiceYouTube,
+	ServicePhotos,
+	ServicePhotosPicker,
 }
 
 var serviceInfoByService = map[Service]serviceInfo{
@@ -97,6 +133,8 @@ var serviceInfoByService = map[Service]serviceInfo{
 			"https://www.googleapis.com/auth/chat.messages",
 			"https://www.googleapis.com/auth/chat.memberships",
 			"https://www.googleapis.com/auth/chat.users.readstate.readonly",
+			"https://www.googleapis.com/auth/chat.messages.reactions.create",
+			"https://www.googleapis.com/auth/chat.messages.reactions.readonly",
 		},
 		user: true,
 		apis: []string{"Chat API"},
@@ -121,6 +159,18 @@ var serviceInfoByService = map[Service]serviceInfo{
 		scopes: []string{"https://www.googleapis.com/auth/drive"},
 		user:   true,
 		apis:   []string{"Drive API"},
+	},
+	ServiceDriveActivity: {
+		scopes: []string{"https://www.googleapis.com/auth/drive.activity.readonly"},
+		user:   true,
+		apis:   []string{"Drive Activity API"},
+		note:   "Read-only audit/activity scope; authorize with --services driveactivity",
+	},
+	ServiceDriveLabels: {
+		scopes: []string{"https://www.googleapis.com/auth/drive.labels.readonly"},
+		user:   true,
+		apis:   []string{"Drive Labels API"},
+		note:   "Read-only Drive label schema; authorize with --services drivelabels",
 	},
 	ServiceDocs: {
 		// Docs commands are implemented via Drive APIs (export/copy/create),
@@ -182,6 +232,21 @@ var serviceInfoByService = map[Service]serviceInfo{
 		user: true,
 		apis: []string{"Forms API"},
 	},
+	ServiceSites: {
+		scopes: []string{"https://www.googleapis.com/auth/drive"},
+		user:   true,
+		apis:   []string{"Drive API"},
+		note:   "New Google Sites are exposed as Drive files",
+	},
+	ServiceMeet: {
+		scopes: []string{
+			"https://www.googleapis.com/auth/meetings.space.created",
+			"https://www.googleapis.com/auth/meetings.space.readonly",
+			"https://www.googleapis.com/auth/meetings.space.settings",
+		},
+		user: true,
+		apis: []string{"Meet REST API"},
+	},
 	ServiceAppScript: {
 		scopes: []string{
 			"https://www.googleapis.com/auth/script.projects",
@@ -191,6 +256,30 @@ var serviceInfoByService = map[Service]serviceInfo{
 		user: true,
 		apis: []string{"Apps Script API"},
 	},
+	ServiceAnalytics: {
+		scopes: []string{"https://www.googleapis.com/auth/analytics.readonly"},
+		user:   true,
+		apis:   []string{"Analytics Admin API", "Analytics Data API"},
+		note:   "GA4 account summaries + reporting",
+	},
+	ServiceSearchConsole: {
+		scopes: []string{"https://www.googleapis.com/auth/webmasters"},
+		user:   true,
+		apis:   []string{"Search Console API"},
+		note:   "Search Analytics + sitemap management + URL Inspection",
+	},
+	ServiceAdSense: {
+		scopes: []string{"https://www.googleapis.com/auth/adsense.readonly"},
+		user:   false,
+		apis:   []string{"AdSense Management API"},
+		note:   "Consumer OAuth; explicit opt-in with --services adsense; read-only",
+	},
+	ServiceAds: {
+		scopes: []string{"https://www.googleapis.com/auth/adwords"},
+		user:   true,
+		apis:   []string{"Google Ads API"},
+		note:   "OAuth scope only",
+	},
 	ServiceGroups: {
 		scopes: []string{"https://www.googleapis.com/auth/cloud-identity.groups.readonly"},
 		user:   false,
@@ -198,10 +287,38 @@ var serviceInfoByService = map[Service]serviceInfo{
 		note:   "Workspace only",
 	},
 	ServiceKeep: {
-		scopes: []string{"https://www.googleapis.com/auth/keep.readonly"},
+		scopes: []string{"https://www.googleapis.com/auth/keep"},
 		user:   false,
 		apis:   []string{"Keep API"},
 		note:   "Workspace only; service account (domain-wide delegation)",
+	},
+	ServiceAdmin: {
+		scopes: []string{
+			"https://www.googleapis.com/auth/admin.directory.user",
+			"https://www.googleapis.com/auth/admin.directory.group",
+			"https://www.googleapis.com/auth/admin.directory.group.member",
+		},
+		user: false,
+		apis: []string{"Admin SDK Directory API"},
+		note: "Workspace only; service account with domain-wide delegation required",
+	},
+	ServiceYouTube: {
+		scopes: []string{"https://www.googleapis.com/auth/youtube.readonly"},
+		user:   true,
+		apis:   []string{"YouTube Data API v3"},
+		note:   "Most read operations also work with API key only (config youtube_api_key or GOG_YOUTUBE_API_KEY)",
+	},
+	ServicePhotos: {
+		scopes: []string{"https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"},
+		user:   true,
+		apis:   []string{"Photos Library API"},
+		note:   "Read-only app-created media only after Google Photos Library API scope changes",
+	},
+	ServicePhotosPicker: {
+		scopes: []string{"https://www.googleapis.com/auth/photospicker.mediaitems.readonly"},
+		user:   false,
+		apis:   []string{"Photos Picker API"},
+		note:   "Consumer OAuth; explicit opt-in with --services photospicker; selected media only",
 	},
 }
 
@@ -365,7 +482,12 @@ func ScopesForManageWithOptions(services []Service, opts ScopeOptions) ([]string
 		return nil, err
 	}
 
-	return mergeScopes(scopes, []string{scopeOpenID, scopeEmail, scopeUserinfoEmail}), nil
+	merged := mergeScopes(scopes, []string{scopeOpenID, scopeEmail, scopeUserinfoEmail})
+	if len(opts.ExtraScopes) > 0 {
+		merged = mergeScopes(merged, opts.ExtraScopes)
+	}
+
+	return merged, nil
 }
 
 func scopesForServicesWithOptions(services []Service, opts ScopeOptions) ([]string, error) {
@@ -392,6 +514,26 @@ func scopesForServicesWithOptions(services []Service, opts ScopeOptions) ([]stri
 	return out, nil
 }
 
+func gmailScopesWithOptions(opts ScopeOptions) ([]string, error) {
+	if opts.Readonly && (opts.GmailScope == GmailScopeSend || opts.GmailScope == GmailScopeReadSend) {
+		return nil, fmt.Errorf("%w %q: sending is incompatible with read-only access", errInvalidGmailScope, opts.GmailScope)
+	}
+
+	switch {
+	case opts.Readonly || opts.GmailScope == GmailScopeReadonly:
+		return []string{"https://www.googleapis.com/auth/gmail.readonly"}, nil
+	case opts.GmailScope == GmailScopeSend:
+		return []string{"https://www.googleapis.com/auth/gmail.send"}, nil
+	case opts.GmailScope == GmailScopeReadSend:
+		return []string{
+			"https://www.googleapis.com/auth/gmail.readonly",
+			"https://www.googleapis.com/auth/gmail.send",
+		}, nil
+	default:
+		return Scopes(ServiceGmail)
+	}
+}
+
 func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, error) {
 	driveScope := strings.TrimSpace(string(opts.DriveScope))
 	switch driveScope {
@@ -400,6 +542,12 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 		return nil, fmt.Errorf("%w %q (expected full|readonly|file)", errInvalidDriveScope, opts.DriveScope)
 	}
 
+	gmailScope := strings.TrimSpace(string(opts.GmailScope))
+	switch gmailScope {
+	case "", string(GmailScopeFull), string(GmailScopeReadonly), string(GmailScopeSend), string(GmailScopeReadSend):
+	default:
+		return nil, fmt.Errorf("%w %q (expected full|readonly|send|read-send)", errInvalidGmailScope, opts.GmailScope)
+	}
 	driveScopeValue := func() string {
 		if opts.Readonly {
 			return "https://www.googleapis.com/auth/drive.readonly"
@@ -417,11 +565,7 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 
 	switch service {
 	case ServiceGmail:
-		if opts.Readonly {
-			return []string{"https://www.googleapis.com/auth/gmail.readonly"}, nil
-		}
-
-		return Scopes(service)
+		return gmailScopesWithOptions(opts)
 	case ServiceCalendar:
 		if opts.Readonly {
 			return []string{"https://www.googleapis.com/auth/calendar.readonly"}, nil
@@ -458,6 +602,10 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 		return Scopes(service)
 	case ServiceDrive:
 		return []string{driveScopeValue()}, nil
+	case ServiceDriveActivity:
+		return Scopes(service)
+	case ServiceDriveLabels:
+		return Scopes(service)
 	case ServiceDocs:
 		docScope := "https://www.googleapis.com/auth/documents"
 		if opts.Readonly {
@@ -509,6 +657,14 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 			formBodyScope,
 			"https://www.googleapis.com/auth/forms.responses.readonly",
 		}, nil
+	case ServiceSites:
+		return []string{driveScopeValue()}, nil
+	case ServiceMeet:
+		if opts.Readonly {
+			return []string{"https://www.googleapis.com/auth/meetings.space.readonly"}, nil
+		}
+
+		return Scopes(service)
 	case ServiceAppScript:
 		if opts.Readonly {
 			return []string{
@@ -518,9 +674,27 @@ func scopesForServiceWithOptions(service Service, opts ScopeOptions) ([]string, 
 		}
 
 		return Scopes(service)
+	case ServiceAnalytics:
+		return Scopes(service)
+	case ServiceSearchConsole:
+		if opts.Readonly {
+			return []string{"https://www.googleapis.com/auth/webmasters.readonly"}, nil
+		}
+
+		return Scopes(service)
+	case ServiceAdSense:
+		return Scopes(service)
+	case ServiceAds:
+		return Scopes(service)
 	case ServiceGroups:
 		return Scopes(service)
 	case ServiceKeep:
+		return Scopes(service)
+	case ServiceYouTube:
+		return Scopes(service)
+	case ServicePhotos:
+		return Scopes(service)
+	case ServicePhotosPicker:
 		return Scopes(service)
 	default:
 		return nil, errUnknownService

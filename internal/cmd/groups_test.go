@@ -74,3 +74,20 @@ func TestTruncate(t *testing.T) {
 		t.Fatalf("unexpected truncate: %q", got)
 	}
 }
+
+func TestSearchTransitiveGroupsQuery(t *testing.T) {
+	for _, tc := range []struct{ input, escaped string }{
+		{input: "person@example.com", escaped: "person@example.com"},
+		{input: " \tPerson@Example.com\n", escaped: "Person@Example.com"},
+		{input: "o'connor@example.com", escaped: `o\'connor@example.com`},
+		{input: `o\'connor@example.com`, escaped: `o\\\'connor@example.com`},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got := searchTransitiveGroupsQuery(tc.input)
+			want := "member_key_id == '" + tc.escaped + "' && 'cloudidentity.googleapis.com/groups.discussion_forum' in labels"
+			if got != want {
+				t.Fatalf("query = %q, want %q", got, want)
+			}
+		})
+	}
+}

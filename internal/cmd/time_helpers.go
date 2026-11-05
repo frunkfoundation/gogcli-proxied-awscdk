@@ -2,24 +2,27 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/googleapi"
 
-	"github.com/steipete/gogcli/internal/timeparse"
+	"github.com/openclaw/gogcli/internal/timeparse"
 )
 
 // TimeRangeFlags provides common time range options for calendar commands.
 // Embed this struct in commands that need time range support.
 type TimeRangeFlags struct {
-	From      string `name:"from" help:"Start time (RFC3339, date, or relative: today, tomorrow, monday)"`
-	To        string `name:"to" help:"End time (RFC3339, date, or relative)"`
+	From      string `name:"from" help:"Start time (RFC3339, date, or relative: now, today, tomorrow, monday)"`
+	To        string `name:"to" help:"End time (RFC3339, date, or relative: now, today, tomorrow, monday)"`
 	Today     bool   `name:"today" help:"Today only"`
 	Tomorrow  bool   `name:"tomorrow" help:"Tomorrow only"`
 	Week      bool   `name:"week" help:"This week (uses --week-start, default Mon)"`
-	Days      int    `name:"days" help:"Next N days" default:"0"`
+	Days      int    `name:"days" help:"Window length in days, measured from --from when given, otherwise from today" default:"0"`
 	WeekStart string `name:"week-start" help:"Week start day for --week (sun, mon, ...)" default:""`
 }
 
@@ -30,45 +33,113 @@ type TimeRange struct {
 	Location *time.Location
 }
 
+const (
+	calendarExprToday     = "today"
+	calendarExprTomorrow  = "tomorrow"
+	calendarExprYesterday = "yesterday"
+)
+
 // getCalendarLocation fetches a calendar's timezone and returns it as a location.
+// Uses Calendars.Get (not CalendarList.Get) so it works for service accounts
+// whose "primary" calendar may not appear in their CalendarList.
 func getCalendarLocation(ctx context.Context, svc *calendar.Service, calendarID string) (string, *time.Location, error) {
 	calendarID = strings.TrimSpace(calendarID)
 	if calendarID == "" {
 		return "", nil, fmt.Errorf("calendarId required")
 	}
 
-	cal, err := svc.CalendarList.Get(calendarID).Context(ctx).Do()
+	cal, err := svc.Calendars.Get(calendarID).Context(ctx).Do()
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get calendar %q: %w", calendarID, err)
 	}
 	if cal.TimeZone == "" {
 		return "", nil, fmt.Errorf("calendar %q has no timezone set", calendarID)
 	}
-	loc, err := time.LoadLocation(cal.TimeZone)
+	loc, err := loadTimezoneLocation(cal.TimeZone)
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid calendar timezone %q: %w", cal.TimeZone, err)
 	}
 	return cal.TimeZone, loc, nil
 }
 
-// getUserTimezone fetches the timezone from the user's primary calendar.
+// getUserTimezone fetches the user's timezone.
+// It first tries calendarList/primary, then Calendars.Get("primary") for
+// service-account compatibility, then falls back to calendar-list entries
+// because some Workspace accounts return 404 for the primary alias.
 func getUserTimezone(ctx context.Context, svc *calendar.Service) (*time.Location, error) {
-	cal, err := svc.CalendarList.Get("primary").Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary calendar: %w", err)
+	calEntry, listAliasErr := svc.CalendarList.Get(primaryCalendarID).Context(ctx).Do()
+	if listAliasErr == nil {
+		return loadTimezoneOrUTC(calEntry.TimeZone)
+	}
+	if !isGoogleNotFound(listAliasErr) {
+		return nil, fmt.Errorf("failed to get primary calendar: %w", listAliasErr)
 	}
 
-	if cal.TimeZone == "" {
-		// Fall back to UTC if no timezone set
+	cal, directErr := svc.Calendars.Get(primaryCalendarID).Context(ctx).Do()
+	if directErr == nil {
+		return loadTimezoneOrUTC(cal.TimeZone)
+	}
+	if !isGoogleNotFound(directErr) {
+		return nil, fmt.Errorf("failed to get primary calendar via calendar list and direct lookup: %w", errors.Join(listAliasErr, directErr))
+	}
+
+	calendars, listErr := listCalendarList(ctx, svc)
+	if listErr != nil {
+		return nil, fmt.Errorf("failed to get primary calendar via alias, direct lookup, and fallback calendar list lookup: %w", errors.Join(listAliasErr, directErr, listErr))
+	}
+
+	return timezoneFromCalendarList(calendars)
+}
+
+func timezoneFromCalendarList(calendars []*calendar.CalendarListEntry) (*time.Location, error) {
+	var fallback *time.Location
+	var firstInvalid error
+	for _, cal := range calendars {
+		if cal == nil {
+			continue
+		}
+		tz := strings.TrimSpace(cal.TimeZone)
+		if tz == "" {
+			continue
+		}
+		loc, err := loadTimezoneLocation(tz)
+		if err != nil {
+			if firstInvalid == nil {
+				firstInvalid = fmt.Errorf("invalid calendar timezone %q on calendar %q: %w", tz, cal.Id, err)
+			}
+			continue
+		}
+		if cal.Primary {
+			return loc, nil
+		}
+		if fallback == nil {
+			fallback = loc
+		}
+	}
+	if fallback != nil {
+		return fallback, nil
+	}
+	if firstInvalid != nil {
+		return nil, firstInvalid
+	}
+
+	return time.UTC, nil
+}
+
+func loadTimezoneOrUTC(timezone string) (*time.Location, error) {
+	if strings.TrimSpace(timezone) == "" {
 		return time.UTC, nil
 	}
-
-	loc, err := time.LoadLocation(cal.TimeZone)
+	loc, err := loadTimezoneLocation(timezone)
 	if err != nil {
-		return nil, fmt.Errorf("invalid calendar timezone %q: %w", cal.TimeZone, err)
+		return nil, fmt.Errorf("invalid calendar timezone %q: %w", timezone, err)
 	}
-
 	return loc, nil
+}
+
+func isGoogleNotFound(err error) bool {
+	var gerr *googleapi.Error
+	return errors.As(err, &gerr) && gerr.Code == http.StatusNotFound
 }
 
 // ResolveTimeRange resolves the time range flags into absolute times.
@@ -89,9 +160,63 @@ type TimeRangeDefaults struct {
 	ToFromOffset time.Duration
 }
 
+// validateTimeRangeFlags rejects window-flag combinations that have no single
+// honest reading, so that a discarded flag is a non-zero exit and a message on
+// stderr rather than a plausible, well-formed answer to a question the caller
+// did not ask.
+func validateTimeRangeFlags(flags TimeRangeFlags) error {
+	fixed := []struct {
+		name string
+		set  bool
+	}{
+		{"--today", flags.Today},
+		{"--tomorrow", flags.Tomorrow},
+		{"--week", flags.Week},
+	}
+
+	var active []string
+	for _, f := range fixed {
+		if f.set {
+			active = append(active, f.name)
+		}
+	}
+	if len(active) > 1 {
+		return usagef("%s and %s select different fixed windows; pass only one", active[0], active[1])
+	}
+
+	if len(active) == 1 {
+		preset := active[0]
+		for _, other := range []struct {
+			name string
+			set  bool
+		}{
+			{"--from", strings.TrimSpace(flags.From) != ""},
+			{"--to", strings.TrimSpace(flags.To) != ""},
+			{"--days", flags.Days != 0},
+		} {
+			if other.set {
+				return usagef("%s selects a fixed window and cannot be combined with %s; use --from/--to (or --from with --days) to describe an arbitrary window", preset, other.name)
+			}
+		}
+	}
+
+	if flags.Days < 0 {
+		return usagef("--days must be a positive number of days, got %d", flags.Days)
+	}
+	if flags.Days > 0 && strings.TrimSpace(flags.To) != "" {
+		return usagef("--days and --to both set the end of the window; pass --from with --days, or --from with --to, but not --days with --to")
+	}
+
+	return nil
+}
+
 // ResolveTimeRangeWithDefaults resolves the time range flags into absolute times,
 // using provided defaults when --from/--to are not set.
 func ResolveTimeRangeWithDefaults(ctx context.Context, svc *calendar.Service, flags TimeRangeFlags, defaults TimeRangeDefaults) (*TimeRange, error) {
+	if err := validateTimeRangeFlags(flags); err != nil {
+		return nil, err
+	}
+
 	loc, err := getUserTimezone(ctx, svc)
 	if err != nil {
 		return nil, err
@@ -102,10 +227,11 @@ func ResolveTimeRangeWithDefaults(ctx context.Context, svc *calendar.Service, fl
 
 	weekStart, err := resolveWeekStart(flags.WeekStart)
 	if err != nil {
-		return nil, err
+		return nil, newUsageError(err)
 	}
 
-	// Handle convenience flags first
+	// The fixed-window presets describe a whole window on their own, so they
+	// are mutually exclusive with --from/--to/--days (enforced above).
 	switch {
 	case flags.Today:
 		from = startOfDay(now)
@@ -117,25 +243,31 @@ func ResolveTimeRangeWithDefaults(ctx context.Context, svc *calendar.Service, fl
 	case flags.Week:
 		from = startOfWeek(now, weekStart)
 		to = endOfWeek(now, weekStart)
-	case flags.Days > 0:
-		from = startOfDay(now)
-		to = endOfDay(now.AddDate(0, 0, flags.Days-1))
 	default:
-		// Parse --from and --to, or use defaults
-		if flags.From != "" {
+		// Parse --from and --to, or use defaults. --days is a window LENGTH,
+		// so it is measured from --from when one is given and from today
+		// otherwise. It must never silently replace an explicit --from: that
+		// returned a today-anchored window for a future request, at exit 0,
+		// with no way for the caller to notice.
+		switch {
+		case flags.From != "":
 			from, err = parseTimeExpr(flags.From, now, loc)
 			if err != nil {
-				return nil, fmt.Errorf("invalid --from: %w", err)
+				return nil, usagef("invalid --from: %v", err)
 			}
-		} else {
+		case flags.Days > 0:
+			from = startOfDay(now)
+		default:
 			from = now.Add(defaults.FromOffset)
 		}
 
 		switch {
+		case flags.Days > 0:
+			to = endOfDay(from.AddDate(0, 0, flags.Days-1))
 		case flags.To != "":
 			to, err = parseTimeExprEndOfDay(flags.To, now, loc)
 			if err != nil {
-				return nil, fmt.Errorf("invalid --to: %w", err)
+				return nil, usagef("invalid --to: %v", err)
 			}
 		case flags.From != "" && defaults.ToFromOffset != 0:
 			to = from.Add(defaults.ToFromOffset)
@@ -151,58 +283,35 @@ func ResolveTimeRangeWithDefaults(ctx context.Context, svc *calendar.Service, fl
 	}, nil
 }
 
-// parseTimeExprEndOfDay is like parseTimeExpr but interprets date-only values
-// and relative day expressions as end of day (23:59:59.999999999) instead of
-// start of day. This is useful for --to flags where "2026-01-05" should mean
-// "through the end of Jan 5" rather than "midnight at the start of Jan 5".
 func parseTimeExprEndOfDay(expr string, now time.Time, loc *time.Location) (time.Time, error) {
 	t, err := parseTimeExpr(expr, now, loc)
 	if err != nil {
 		return t, err
 	}
-	// Only adjust to end-of-day for date-only or relative day expressions.
-	// If the input is a full timestamp (contains "T" or "t" indicating time
-	// components), respect the exact time the user specified — even midnight.
-	if isDateOnlyOrRelative(expr) {
+	if isDayExpr(expr, now, loc) {
 		return endOfDay(t), nil
 	}
 	return t, nil
 }
 
-// isDateOnlyOrRelative returns true if the expression is a date-only string
-// (YYYY-MM-DD) or a relative day keyword (today, tomorrow, yesterday, weekday
-// names). These should be adjusted to end-of-day when used as an upper bound.
-// Point-in-time values like "now" and full timestamps return false.
-func isDateOnlyOrRelative(expr string) bool {
-	trimmed := strings.TrimSpace(expr)
-	lower := strings.ToLower(trimmed)
-
-	// Relative day keywords
-	switch lower {
-	case "today", "tomorrow", "yesterday":
+func isDayExpr(expr string, now time.Time, loc *time.Location) bool {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return false
+	}
+	exprLower := strings.ToLower(expr)
+	switch exprLower {
+	case calendarExprToday, calendarExprTomorrow, calendarExprYesterday:
+		return true
+	case "now":
+		return false
+	}
+	if _, ok := parseWeekday(exprLower, now); ok {
 		return true
 	}
-
-	// Weekday names: "monday", "next tuesday", etc.
-	candidate := lower
-	candidate = strings.TrimPrefix(candidate, "next ")
-	weekdays := []string{
-		"sunday", "sun", "monday", "mon", "tuesday", "tue",
-		"wednesday", "wed", "thursday", "thu", "friday", "fri", "saturday", "sat",
+	if _, err := time.ParseInLocation("2006-01-02", expr, loc); err == nil {
+		return true
 	}
-	for _, wd := range weekdays {
-		if candidate == wd {
-			return true
-		}
-	}
-
-	// Date-only: YYYY-MM-DD (exactly 10 chars, no time component)
-	if len(trimmed) == 10 {
-		if _, err := time.Parse("2006-01-02", trimmed); err == nil {
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -217,45 +326,7 @@ func parseTimeExpr(expr string, now time.Time, loc *time.Location) (time.Time, e
 
 // parseWeekday parses weekday expressions like "monday", "next tuesday"
 func parseWeekday(expr string, now time.Time) (time.Time, bool) {
-	expr = strings.TrimSpace(expr)
-	next := false
-	if strings.HasPrefix(expr, "next ") {
-		next = true
-		expr = strings.TrimPrefix(expr, "next ")
-	}
-
-	weekdays := map[string]time.Weekday{
-		"sunday":    time.Sunday,
-		"sun":       time.Sunday,
-		"monday":    time.Monday,
-		"mon":       time.Monday,
-		"tuesday":   time.Tuesday,
-		"tue":       time.Tuesday,
-		"wednesday": time.Wednesday,
-		"wed":       time.Wednesday,
-		"thursday":  time.Thursday,
-		"thu":       time.Thursday,
-		"friday":    time.Friday,
-		"fri":       time.Friday,
-		"saturday":  time.Saturday,
-		"sat":       time.Saturday,
-	}
-
-	targetDay, ok := weekdays[expr]
-	if !ok {
-		return time.Time{}, false
-	}
-
-	currentDay := now.Weekday()
-	daysUntil := int(targetDay) - int(currentDay)
-	if daysUntil < 0 || (daysUntil == 0 && next) {
-		daysUntil += 7 // Next week
-	}
-
-	if daysUntil == 0 {
-		return startOfDay(now), true
-	}
-	return startOfDay(now.AddDate(0, 0, daysUntil)), true
+	return timeparse.ParseWeekdayExpr(expr, now)
 }
 
 // startOfDay returns the start of the day (00:00:00) in the given time's location.
@@ -263,9 +334,12 @@ func startOfDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
-// endOfDay returns the end of the day (23:59:59.999) in the given time's location.
+// endOfDay returns the start of the next day so that when formatted as
+// RFC3339 (second precision) and used as an exclusive timeMax, the entire
+// target day is included. Previously, 23:59:59.999999999 was truncated to
+// 23:59:59 by time.RFC3339, which excluded events starting at that second.
 func endOfDay(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+	return startOfDay(t.AddDate(0, 0, 1))
 }
 
 // startOfWeek returns the start of the week for the given time.
@@ -312,22 +386,5 @@ func resolveWeekStart(value string) (time.Weekday, error) {
 }
 
 func parseWeekStart(value string) (time.Weekday, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "sun", "sunday":
-		return time.Sunday, true
-	case "mon", "monday":
-		return time.Monday, true
-	case "tue", "tues", "tuesday":
-		return time.Tuesday, true
-	case "wed", "wednesday":
-		return time.Wednesday, true
-	case "thu", "thur", "thurs", "thursday":
-		return time.Thursday, true
-	case "fri", "friday":
-		return time.Friday, true
-	case "sat", "saturday":
-		return time.Saturday, true
-	default:
-		return time.Monday, false
-	}
+	return timeparse.ParseWeekdayName(value)
 }

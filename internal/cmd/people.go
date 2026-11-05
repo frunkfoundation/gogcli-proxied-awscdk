@@ -2,10 +2,9 @@ package cmd
 
 import (
 	"context"
-	"os"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type PeopleCmd struct {
@@ -13,6 +12,7 @@ type PeopleCmd struct {
 	Get       PeopleGetCmd       `cmd:"" name:"get" aliases:"info,show" help:"Get a user profile by ID"`
 	Search    PeopleSearchCmd    `cmd:"" name:"search" aliases:"find,query" help:"Search the Workspace directory"`
 	Relations PeopleRelationsCmd `cmd:"" name:"relations" help:"Get user relations"`
+	Raw       PeopleRawCmd       `cmd:"" name:"raw" help:"Dump raw People API response as JSON (People.Get; lossless; for scripting and LLM consumption)"`
 }
 
 type PeopleMeCmd struct{}
@@ -24,7 +24,7 @@ func (c *PeopleMeCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newPeopleContactsService(ctx, account)
+	svc, err := peopleContactsService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -37,7 +37,7 @@ func (c *PeopleMeCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"person": person})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"person": person})
 	}
 
 	name := ""
@@ -54,13 +54,13 @@ func (c *PeopleMeCmd) Run(ctx context.Context, flags *RootFlags) error {
 	}
 
 	if name != "" {
-		u.Out().Printf("name\t%s", name)
+		u.Out().Linef("name\t%s", name)
 	}
 	if email != "" {
-		u.Out().Printf("email\t%s", email)
+		u.Out().Linef("email\t%s", email)
 	}
 	if photo != "" {
-		u.Out().Printf("photo\t%s", photo)
+		u.Out().Linef("photo\t%s", photo)
 	}
 	return nil
 }

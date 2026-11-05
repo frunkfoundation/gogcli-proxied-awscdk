@@ -3,34 +3,53 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/api/gmail/v1"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/gmailcontent"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
+)
+
+const (
+	gmailMessageBodyFormatText = "text"
+	gmailMessageBodyFormatHTML = "html"
+	gmailDefaultTextBodyLimit  = 20_000
+	gmailTextTruncationMarker  = "... [truncated; use --full or --json]"
 )
 
 type GmailMessagesCmd struct {
 	Search GmailMessagesSearchCmd `cmd:"" name:"search" aliases:"find,query,ls,list" group:"Read" help:"Search messages using Gmail query syntax"`
+	Modify GmailMessagesModifyCmd `cmd:"" name:"modify" aliases:"update,edit,set" group:"Organize" help:"Modify labels on a single message"`
 }
 
 type GmailMessagesSearchCmd struct {
-	Query       []string `arg:"" name:"query" help:"Search query"`
-	Max         int64    `name:"max" aliases:"limit" help:"Max results" default:"10"`
-	Page        string   `name:"page" aliases:"cursor" help:"Page token"`
-	All         bool     `name:"all" aliases:"all-pages,allpages" help:"Fetch all pages"`
-	FailEmpty   bool     `name:"fail-empty" aliases:"non-empty,require-results" help:"Exit with code 3 if no results"`
-	Timezone    string   `name:"timezone" short:"z" help:"Output timezone (IANA name, e.g. America/New_York, UTC). Default: local"`
-	Local       bool     `name:"local" help:"Use local timezone (default behavior, useful to override --timezone)"`
-	IncludeBody bool     `name:"include-body" help:"Include decoded message body (JSON is full; text output is truncated)"`
+	Query                   []string `arg:"" name:"query" help:"Search query"`
+	UseIndexedAttachmentIDs bool     `name:"use-indexed-attachment-ids" help:"Use 0-based indexes as attachment ids everywhere (output, the download argument, and saved filenames)" env:"GOG_GMAIL_USE_INDEXED_ATTACHMENT_IDS"`
+	Max                     int64    `name:"max" aliases:"limit" help:"Max results" default:"10"`
+	Page                    string   `name:"page" aliases:"cursor" help:"Page token"`
+	All                     bool     `name:"all" aliases:"all-pages,allpages" help:"Fetch all pages"`
+	FailEmpty               bool     `name:"fail-empty" aliases:"non-empty,require-results" help:"Exit with code 3 if no results"`
+	Count                   bool     `name:"count" help:"Report the whole-query count as totalMatches (exact) or totalMatchesAtLeast (lower bound); free with --all unless --page is set; unavailable with --results-only"`
+	Timezone                string   `name:"timezone" short:"z" help:"Output timezone (IANA name, e.g. America/New_York, UTC). Default: GOG_TIMEZONE, config, then local"`
+	Local                   bool     `name:"local" help:"Use local timezone (default behavior, useful to override --timezone)"`
+	IncludeBody             bool     `name:"include-body" help:"Include decoded message body (JSON is full; text output truncates only unusually large bodies)"`
+	BodyFormat              string   `name:"body-format" help:"Body format preference when --include-body is set: text or html" default:"text" enum:"text,html"`
+	Full                    bool     `name:"full" help:"Show full message bodies without truncation (implies --include-body)"`
+	IncludeAttachments      bool     `name:"include-attachments" env:"GOG_GMAIL_INCLUDE_ATTACHMENTS" help:"Include each message's attachment metadata"`
 }
 
 func (c *GmailMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) error {
+	if c.Full {
+		c.IncludeBody = true
+	}
 	u := ui.FromContext(ctx)
+	if err := validateGmailMaxResults(c.Max); err != nil {
+		return err
+	}
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err
@@ -40,20 +59,16 @@ func (c *GmailMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return usage("missing query")
 	}
 
-	svc, err := newGmailService(ctx, account)
+	svc, err := gmailService(ctx, account)
 	if err != nil {
 		return err
 	}
 
 	fetch := func(pageToken string) ([]*gmail.Message, string, error) {
-		call := svc.Users.Messages.List("me").
-			Q(query).
-			MaxResults(c.Max).
+		opts := newGmailSearchRequestOptions(query, c.Max, pageToken)
+		call := applyGmailMessageListOptions(svc.Users.Messages.List("me"), opts).
 			Fields("messages(id,threadId),nextPageToken").
 			Context(ctx)
-		if strings.TrimSpace(pageToken) != "" {
-			call = call.PageToken(pageToken)
-		}
 		resp, callErr := call.Do()
 		if callErr != nil {
 			return nil, "", callErr
@@ -61,34 +76,38 @@ func (c *GmailMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return resp.Messages, resp.NextPageToken, nil
 	}
 
-	var messages []*gmail.Message
-	nextPageToken := ""
-	if c.All {
-		all, collectErr := collectAllPages(c.Page, fetch)
-		if collectErr != nil {
-			return collectErr
+	messages, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
+	}
+
+	var matchCount gmailMatchCount
+	countReported := false
+	if c.Count {
+		matchCount, countReported, err = resolveGmailMatchCount(u, flags.ResultsOnly, c.All, c.Page, len(messages), func() (gmailMatchCount, error) {
+			return countGmailMessageMatches(ctx, svc, query)
+		})
+		if err != nil {
+			return err
 		}
-		messages = all
-	} else {
-		messagesPage, pageToken, fetchErr := fetch(c.Page)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		messages = messagesPage
-		nextPageToken = pageToken
 	}
 
 	if len(messages) == 0 {
 		if outfmt.IsJSON(ctx) {
-			if writeErr := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+			payload := map[string]any{
 				"messages":      []messageItem{},
 				"nextPageToken": nextPageToken,
-			}); writeErr != nil {
-				return writeErr
 			}
-			return failEmptyExit(c.FailEmpty)
+			if countReported {
+				matchCount.apply(payload)
+			}
+			return writePagedJSONResult(ctx, payload, 0, c.FailEmpty)
 		}
-		u.Err().Println("No results")
+		if countReported {
+			printGmailMatchCount(u, 0, matchCount)
+		} else {
+			u.Err().Println("No results")
+		}
 		return failEmptyExit(c.FailEmpty)
 	}
 
@@ -97,27 +116,25 @@ func (c *GmailMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return err
 	}
 
-	loc, err := resolveOutputLocation(c.Timezone, c.Local)
+	loc, err := resolveOutputLocation(ctx, c.Timezone, c.Local, stderrWriter(ctx))
 	if err != nil {
 		return err
 	}
 
-	items, err := fetchMessageDetails(ctx, svc, messages, idToName, loc, c.IncludeBody)
+	items, err := fetchMessageDetails(ctx, svc, messages, idToName, loc, c.IncludeBody, c.BodyFormat, c.IncludeAttachments, c.UseIndexedAttachmentIDs)
 	if err != nil {
 		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		if writeErr := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		payload := map[string]any{
 			"messages":      items,
 			"nextPageToken": nextPageToken,
-		}); writeErr != nil {
-			return writeErr
 		}
-		if len(items) == 0 {
-			return failEmptyExit(c.FailEmpty)
+		if countReported {
+			matchCount.apply(payload)
 		}
-		return nil
+		return writePagedJSONResult(ctx, payload, len(items), c.FailEmpty)
 	}
 
 	if len(items) == 0 {
@@ -125,40 +142,105 @@ func (c *GmailMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) erro
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		items,
+		gmailMessageColumns(c.IncludeBody, c.IncludeAttachments, c.Full),
+	); err != nil {
+		return err
+	}
+	// stderr, so the table on stdout stays parseable.
+	if countReported {
+		printGmailMatchCount(u, len(items), matchCount)
+	}
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
+	return nil
+}
 
-	if c.IncludeBody {
-		fmt.Fprintln(w, "ID\tTHREAD\tDATE\tFROM\tSUBJECT\tLABELS\tBODY")
-	} else {
-		fmt.Fprintln(w, "ID\tTHREAD\tDATE\tFROM\tSUBJECT\tLABELS")
+type GmailMessagesModifyCmd struct {
+	MessageID string   `arg:"" name:"messageId" help:"Message ID"`
+	Add       []string `name:"add" sep:"none" help:"Labels to add (comma-separated or repeated; name or ID)"`
+	Remove    []string `name:"remove" sep:"none" help:"Labels to remove (comma-separated or repeated; name or ID)"`
+}
+
+func (c *GmailMessagesModifyCmd) Run(ctx context.Context, flags *RootFlags) error {
+	u := ui.FromContext(ctx)
+	messageID := normalizeGmailMessageID(strings.TrimSpace(c.MessageID))
+	if messageID == "" {
+		return usage("empty messageId")
 	}
-	for _, it := range items {
-		body := ""
-		if c.IncludeBody {
-			body = sanitizeMessageBody(it.Body)
-		}
-		if c.IncludeBody {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.ThreadID, it.Date, it.From, it.Subject, strings.Join(it.Labels, ","), body)
-		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.ThreadID, it.Date, it.From, it.Subject, strings.Join(it.Labels, ","))
-		}
+
+	addLabels := splitCSVAllRaw(c.Add)
+	removeLabels := splitCSVAllRaw(c.Remove)
+	if len(addLabels) == 0 && len(removeLabels) == 0 {
+		return usage("must specify --add and/or --remove")
 	}
-	printNextPageHint(u, nextPageToken)
+
+	if err := dryRunExit(ctx, flags, "gmail.messages.modify", map[string]any{
+		"message_id": messageID,
+		"add":        addLabels,
+		"remove":     removeLabels,
+	}); err != nil {
+		return err
+	}
+
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+
+	svc, err := gmailService(ctx, account)
+	if err != nil {
+		return err
+	}
+
+	addIDs, removeIDs, err := resolveModifyLabelIDs(svc, addLabels, removeLabels)
+	if err != nil {
+		return err
+	}
+
+	_, err = svc.Users.Messages.Modify("me", messageID, &gmail.ModifyMessageRequest{
+		AddLabelIds:    addIDs,
+		RemoveLabelIds: removeIDs,
+	}).Context(ctx).Do()
+	if err != nil {
+		return err
+	}
+
+	if outfmt.IsJSON(ctx) {
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
+			"modified":      messageID,
+			"addedLabels":   addIDs,
+			"removedLabels": removeIDs,
+		})
+	}
+
+	u.Out().Linef("Modified message %s", messageID)
 	return nil
 }
 
 type messageItem struct {
-	ID       string   `json:"id"`
-	ThreadID string   `json:"threadId,omitempty"`
-	Date     string   `json:"date,omitempty"`
-	From     string   `json:"from,omitempty"`
-	Subject  string   `json:"subject,omitempty"`
-	Labels   []string `json:"labels,omitempty"`
-	Body     string   `json:"body,omitempty"`
+	ID       string `json:"id"`
+	ThreadID string `json:"threadId,omitempty"`
+	Date     string `json:"date,omitempty"`
+	// InternalDateISO is Gmail's own internalDate rendered RFC3339 with an
+	// explicit offset. It is a SEPARATELY SOURCED value from Date, which parses
+	// the sender-written Date header: for normal SMTP mail internalDate is when
+	// Google accepted the message, so the two can disagree when that header is
+	// skewed, malformed, or in another zone. They are not guaranteed to differ —
+	// API-migrated mail may have internalDate derived from the Date header.
+	// Date stays the compact human column; this is what a parser should read.
+	InternalDateISO string             `json:"internalDateIso,omitempty"`
+	From            string             `json:"from,omitempty"`
+	Subject         string             `json:"subject,omitempty"`
+	Labels          []string           `json:"labels,omitempty"`
+	Body            string             `json:"body,omitempty"`
+	Attachments     []attachmentOutput `json:"attachments,omitempty"`
 }
 
-func fetchMessageDetails(ctx context.Context, svc *gmail.Service, messages []*gmail.Message, idToName map[string]string, loc *time.Location, includeBody bool) ([]messageItem, error) {
+func fetchMessageDetails(ctx context.Context, svc *gmail.Service, messages []*gmail.Message, idToName map[string]string, loc *time.Location, includeBody bool, bodyFormat string, includeAttachments bool, useIndexedAttachmentIDs bool) ([]messageItem, error) {
+	preferHTML := bodyFormat == gmailMessageBodyFormatHTML
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -193,12 +275,12 @@ func fetchMessageDetails(ctx context.Context, svc *gmail.Service, messages []*gm
 			}
 
 			call := svc.Users.Messages.Get("me", messageID)
-			if includeBody {
+			if includeBody || includeAttachments {
 				call = call.Format("full")
 			} else {
 				call = call.Format("metadata").
-					MetadataHeaders("From", "Subject", "Date").
-					Fields("id,threadId,labelIds,payload(headers)")
+					MetadataHeaders(gmailMessageSummaryMetadataHeaders...).
+					Fields(gmailMessageSummaryFields)
 			}
 			msg, err := call.Context(ctx).Do()
 			if err != nil {
@@ -214,8 +296,16 @@ func fetchMessageDetails(ctx context.Context, svc *gmail.Service, messages []*gm
 			item.From = sanitizeTab(headerValue(msg.Payload, "From"))
 			item.Subject = sanitizeTab(headerValue(msg.Payload, "Subject"))
 			item.Date = formatGmailDateInLocation(headerValue(msg.Payload, "Date"), loc)
+			item.InternalDateISO = formatGmailDateISO(msg.InternalDate, loc)
 			if includeBody {
-				item.Body = bestBodyText(msg.Payload)
+				if preferHTML {
+					item.Body = gmailcontent.BestBodyHTML(msg.Payload)
+				} else {
+					item.Body = gmailcontent.BestBodyText(msg.Payload)
+				}
+			}
+			if includeBody || includeAttachments {
+				item.Attachments = attachmentOutputs(collectAttachments(msg.Payload), useIndexedAttachmentIDs)
 			}
 
 			if len(msg.LabelIds) > 0 {
@@ -264,18 +354,21 @@ func fetchMessageDetails(ctx context.Context, svc *gmail.Service, messages []*gm
 	return items, nil
 }
 
-func sanitizeMessageBody(body string) string {
+func sanitizeMessageBody(body string, full bool) string {
 	if body == "" {
 		return ""
 	}
-	if looksLikeHTML(body) {
-		body = stripHTMLTags(body)
+	if gmailcontent.LooksLikeHTML(body) {
+		body = gmailcontent.StripHTMLTags(body)
 	}
 	body = strings.ReplaceAll(body, "\t", " ")
 	body = strings.ReplaceAll(body, "\n", " ")
 	body = strings.ReplaceAll(body, "\r", " ")
 	body = strings.TrimSpace(body)
-	return truncateRunes(body, 200)
+	if full {
+		return body
+	}
+	return truncateRunes(body, gmailDefaultTextBodyLimit)
 }
 
 func truncateRunes(s string, maxLen int) string {
@@ -286,8 +379,5 @@ func truncateRunes(s string, maxLen int) string {
 	if len(runes) <= maxLen {
 		return s
 	}
-	if maxLen <= 3 {
-		return string(runes[:maxLen])
-	}
-	return string(runes[:maxLen-3]) + "..."
+	return string(runes[:maxLen]) + gmailTextTruncationMarker
 }

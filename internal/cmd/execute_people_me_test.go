@@ -13,9 +13,6 @@ import (
 )
 
 func TestExecute_PeopleMe_JSON(t *testing.T) {
-	origNew := newPeopleContactsService
-	t.Cleanup(func() { newPeopleContactsService = origNew })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(strings.Contains(r.URL.Path, "/people/me") && r.Method == http.MethodGet) {
 			http.NotFound(w, r)
@@ -40,23 +37,18 @@ func TestExecute_PeopleMe_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newPeopleContactsService = func(context.Context, string) (*people.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--json", "--account", "a@b.com", "people", "me"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
+	result := executeWithPeopleContactsTestService(t, []string{"--json", "--account", "a@b.com", "people", "me"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
 
 	var parsed struct {
 		Person struct {
 			ResourceName string `json:"resourceName"`
 		} `json:"person"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		t.Fatalf("json parse: %v\nout=%q", err, out)
+	if err := json.Unmarshal([]byte(result.stdout), &parsed); err != nil {
+		t.Fatalf("json parse: %v\nout=%q", err, result.stdout)
 	}
 	if parsed.Person.ResourceName != "people/me" {
 		t.Fatalf("unexpected person: %#v", parsed.Person)
@@ -64,9 +56,6 @@ func TestExecute_PeopleMe_JSON(t *testing.T) {
 }
 
 func TestExecute_PeopleMe_Text(t *testing.T) {
-	origNew := newPeopleContactsService
-	t.Cleanup(func() { newPeopleContactsService = origNew })
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !(strings.Contains(r.URL.Path, "/people/me") && r.Method == http.MethodGet) {
 			http.NotFound(w, r)
@@ -94,16 +83,11 @@ func TestExecute_PeopleMe_Text(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	newPeopleContactsService = func(context.Context, string) (*people.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if err := Execute([]string{"--account", "a@b.com", "people", "me"}); err != nil {
-				t.Fatalf("Execute: %v", err)
-			}
-		})
-	})
-	if !strings.Contains(out, "name\tPeter") || !strings.Contains(out, "email\ta@b.com") || !strings.Contains(out, "photo\thttps://example.com/p.jpg") {
-		t.Fatalf("unexpected out=%q", out)
+	result := executeWithPeopleContactsTestService(t, []string{"--account", "a@b.com", "people", "me"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
+	}
+	if !strings.Contains(result.stdout, "name\tPeter") || !strings.Contains(result.stdout, "email\ta@b.com") || !strings.Contains(result.stdout, "photo\thttps://example.com/p.jpg") {
+		t.Fatalf("unexpected out=%q", result.stdout)
 	}
 }

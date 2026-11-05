@@ -5,29 +5,27 @@ package integration
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
 
-	"github.com/steipete/gogcli/internal/authclient"
-	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/googleapi"
-	"github.com/steipete/gogcli/internal/googleauth"
-	"github.com/steipete/gogcli/internal/secrets"
+	"github.com/openclaw/gogcli/internal/authclient"
+	"github.com/openclaw/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/googleapi"
+	"github.com/openclaw/gogcli/internal/googleauth"
+	"github.com/openclaw/gogcli/internal/oauthclient"
+	"github.com/openclaw/gogcli/internal/secrets"
+	"github.com/openclaw/gogcli/internal/termutil"
 )
 
-func integrationAccount(t *testing.T) string {
+func integrationAccount(t *testing.T, store secrets.Store) string {
 	t.Helper()
 
 	if v := strings.TrimSpace(os.Getenv("GOG_IT_ACCOUNT")); v != "" {
 		return v
-	}
-
-	store, err := secrets.OpenDefault()
-	if err != nil {
-		t.Skipf("open secrets store (set GOG_IT_ACCOUNT to avoid keyring prompts): %v", err)
 	}
 
 	if v, err := store.GetDefaultAccount(config.DefaultClientName); err == nil && strings.TrimSpace(v) != "" {
@@ -46,11 +44,65 @@ func integrationAccount(t *testing.T) string {
 	return ""
 }
 
-func TestDriveSmoke(t *testing.T) {
-	account := integrationAccount(t)
+func withIntegrationAuth(t *testing.T, ctx context.Context) (context.Context, secrets.Repository) {
+	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	layout, err := config.NewSystemResolver("").Resolve(config.PathKindConfig, config.PathKindData)
+	if err != nil {
+		t.Fatalf("resolve integration layout: %v", err)
+	}
+	configStore := config.NewConfigStore(layout)
+	secretRepository, err := secrets.Open(secrets.OpenOptionsFromLookup(
+		layout,
+		configStore,
+		os.LookupEnv,
+		runtime.GOOS,
+		termutil.IsTerminal(os.Stdin),
+	))
+	if err != nil {
+		t.Skipf("open integration secrets repository: %v", err)
+	}
+	credentialFiles := config.NewClientCredentialsStore(layout)
+	credentialStore, err := oauthclient.NewCredentialsStore(credentialFiles, secretRepository)
+	if err != nil {
+		t.Fatalf("create integration credential store: %v", err)
+	}
+
+	ctx = authclient.WithClientResolver(ctx, func(email string, override string) (string, error) {
+		cfg, readErr := configStore.Read()
+		if readErr != nil {
+			return "", readErr
+		}
+		return config.ResolveClientForAccountWithCredentials(cfg, email, override, func(client string) (bool, error) {
+			_, exists, pathErr := credentialFiles.ExistingPath(client)
+			return exists, pathErr
+		})
+	})
+	ctx = authclient.WithCredentialsReader(ctx, credentialStore.Read)
+	ctx = authclient.WithSecretsStoreOpener(ctx, func() (secrets.Store, error) {
+		return secretRepository, nil
+	})
+	ctx = googleapi.WithAuthDependencies(ctx, googleapi.AuthDependencies{
+		ReadConfig: configStore.Read,
+		Mode:       googleapi.AuthModeStored,
+	})
+
+	return ctx, secretRepository
+}
+
+func integrationContext(t *testing.T, timeout time.Duration) (context.Context, context.CancelFunc, secrets.Repository) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, store := withIntegrationAuth(t, ctx)
+
+	return ctx, cancel, store
+}
+
+func TestDriveSmoke(t *testing.T) {
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewDrive(ctx, account)
 	if err != nil {
@@ -69,10 +121,9 @@ func TestDriveSmoke(t *testing.T) {
 }
 
 func TestCalendarSmoke(t *testing.T) {
-	account := integrationAccount(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewCalendar(ctx, account)
 	if err != nil {
@@ -85,10 +136,9 @@ func TestCalendarSmoke(t *testing.T) {
 }
 
 func TestGmailSmoke(t *testing.T) {
-	account := integrationAccount(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewGmail(ctx, account)
 	if err != nil {
@@ -101,16 +151,11 @@ func TestGmailSmoke(t *testing.T) {
 }
 
 func TestAuthRefreshTokenSmoke(t *testing.T) {
-	account := integrationAccount(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
-	store, err := secrets.OpenDefault()
-	if err != nil {
-		t.Fatalf("OpenDefault: %v", err)
-	}
-	client, err := authclient.ResolveClientWithOverride(account, "")
+	client, err := authclient.ResolveClientWithOverride(ctx, account, "")
 	if err != nil {
 		t.Fatalf("ResolveClient: %v", err)
 	}
@@ -129,10 +174,9 @@ func TestAuthRefreshTokenSmoke(t *testing.T) {
 }
 
 func TestContactsSmoke(t *testing.T) {
-	account := integrationAccount(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewPeopleContacts(ctx, account)
 	if err != nil {
@@ -145,10 +189,9 @@ func TestContactsSmoke(t *testing.T) {
 }
 
 func TestClassroomSmoke(t *testing.T) {
-	account := integrationAccount(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel, store := integrationContext(t, 20*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewClassroom(ctx, account)
 	if err != nil {
@@ -161,14 +204,14 @@ func TestClassroomSmoke(t *testing.T) {
 }
 
 func TestCalendarSendUpdates(t *testing.T) {
-	account := integrationAccount(t)
 	attendee := strings.TrimSpace(os.Getenv("GOG_IT_ATTENDEE"))
 	if attendee == "" {
 		t.Skip("set GOG_IT_ATTENDEE to test --send-updates with attendees")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel, store := integrationContext(t, 60*time.Second)
 	defer cancel()
+	account := integrationAccount(t, store)
 
 	svc, err := googleapi.NewCalendar(ctx, account)
 	if err != nil {

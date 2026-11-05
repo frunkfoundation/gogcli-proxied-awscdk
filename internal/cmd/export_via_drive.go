@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/config"
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/config"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type exportViaDriveOptions struct {
@@ -23,7 +22,7 @@ type exportViaDriveOptions struct {
 
 const defaultExportFormat = "pdf"
 
-func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOptions, id string, outPathFlag string, format string) error {
+func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOptions, id string, outPathFlag string, format string, overwrite bool) error {
 	u := ui.FromContext(ctx)
 
 	argName := strings.TrimSpace(opts.ArgName)
@@ -36,7 +35,8 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 	}
 
 	// Avoid touching auth/keyring and avoid writing files in dry-run mode.
-	outPathFlag = strings.TrimSpace(outPathFlag)
+	rawOutPathFlag := strings.TrimSpace(outPathFlag)
+	outPathFlag = rawOutPathFlag
 	if outPathFlag != "" {
 		expanded, err := config.ExpandPath(outPathFlag)
 		if err != nil {
@@ -59,27 +59,25 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 	}
 	var defaultDownloadsDir string
 	if outPathFlag == "" {
-		if dir, err := config.DriveDownloadsDir(); err == nil {
-			defaultDownloadsDir = dir
+		layout, layoutErr := commandLayout(ctx, config.PathKindConfig)
+		if layoutErr != nil {
+			return layoutErr
 		}
+		defaultDownloadsDir = layout.DriveDownloadsDir()
 	}
 	if err := dryRunExit(ctx, flags, op, map[string]any{
 		"id":                    id,
 		"out":                   outPathFlag,
 		"default_downloads_dir": defaultDownloadsDir,
 		"format":                format,
+		"overwrite":             overwrite,
 		"expected_mime":         strings.TrimSpace(opts.ExpectedMime),
 		"kind":                  strings.TrimSpace(opts.KindLabel),
 	}); err != nil {
 		return err
 	}
 
-	account, err := requireAccount(flags)
-	if err != nil {
-		return err
-	}
-
-	svc, err := newDriveService(ctx, account)
+	_, svc, err := requireDriveService(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -103,20 +101,26 @@ func exportViaDrive(ctx context.Context, flags *RootFlags, opts exportViaDriveOp
 		return fmt.Errorf("file is not a %s (mimeType=%q)", label, meta.MimeType)
 	}
 
-	destPath, err := resolveDriveDownloadDestPath(meta, outPathFlag)
+	destPath, err := resolveDriveDownloadDestPath(meta, rawOutPathFlag, defaultDownloadsDir)
 	if err != nil {
 		return err
 	}
+	if outfmt.IsJSON(ctx) && isStdoutPath(destPath) {
+		return usage("can't combine --json with --out -")
+	}
 
-	downloadedPath, size, err := downloadDriveFile(ctx, svc, meta, destPath, format)
+	downloadedPath, size, err := downloadDriveFile(ctx, svc, meta, destPath, format, overwrite)
 	if err != nil {
 		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"path": downloadedPath, "size": size})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"path": downloadedPath, "size": size})
 	}
-	u.Out().Printf("path\t%s", downloadedPath)
-	u.Out().Printf("size\t%s", formatDriveSize(size))
+	if isStdoutPath(downloadedPath) {
+		return nil
+	}
+	u.Out().Linef("path\t%s", downloadedPath)
+	u.Out().Linef("size\t%s", formatDriveSize(size))
 	return nil
 }

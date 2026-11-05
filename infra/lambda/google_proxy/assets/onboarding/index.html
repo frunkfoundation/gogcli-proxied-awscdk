@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect your Google accounts</title>
+  <link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
+</head>
+<body><main>
+  <header><h1>Connect your Google accounts</h1>
+    <p>Connect your accounts to gogcli-proxy, owned by kraecollective.com, so your authorized tools can use the services you choose.</p>
+    <p class="small">Each account connects from the browser profile signed in to it. For an account in another profile, create a connection link and open it there. For an account signed in here, choose <strong>Connect in this browser</strong>.</p>
+  </header>
+  <p id="pageStatus" class="notice" role="status" aria-live="polite">Loading…</p>
+  <p id="recoveryStatus" class="notice" role="status" hidden></p>
+  <a id="loginLink" class="button" hidden>Sign in</a>
+  <div id="guide" hidden>
+    <div class="toolbar"><p id="connectedCount" role="status"></p><span id="updated" class="small"></span><button id="refresh" class="secondary" type="button">Refresh</button></div>
+    <section aria-labelledby="accountsTitle"><h2 id="accountsTitle">Your accounts</h2>
+      <div id="accounts"></div>
+      <form id="addAccountsForm"><label for="newEmails">Add accounts</label>
+        <textarea id="newEmails" rows="3" placeholder="Emails, separated by commas or new lines" autocomplete="off"></textarea>
+        <button type="submit">Add</button><p id="addStatus" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </div>
+  <footer><p><a href="about">About gogcli-proxy</a> · <a href="privacy">Privacy policy</a></p></footer>
+</main></body></html>

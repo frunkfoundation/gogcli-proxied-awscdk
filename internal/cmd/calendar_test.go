@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/api/calendar/v3"
 )
@@ -151,15 +154,18 @@ func TestParseAttendee(t *testing.T) {
 		input    string
 		email    string
 		optional bool
+		resource bool
 		comment  string
 		isNil    bool
 	}{
-		{"alice@example.com", "alice@example.com", false, "", false},
-		{"bob@example.com;optional", "bob@example.com", true, "", false},
-		{"carol@example.com;comment=FYI only", "carol@example.com", false, "FYI only", false},
-		{"dave@example.com;OPTIONAL;comment=Hi", "dave@example.com", true, "Hi", false},
-		{";optional", "", false, "", true},
-		{"", "", false, "", true},
+		{"alice@example.com", "alice@example.com", false, false, "", false},
+		{"bob@example.com;optional", "bob@example.com", true, false, "", false},
+		{"carol@example.com;comment=FYI only", "carol@example.com", false, false, "FYI only", false},
+		{"dave@example.com;OPTIONAL;comment=Hi", "dave@example.com", true, false, "Hi", false},
+		{"room@example.com;RESOURCE", "room@example.com", false, true, "", false},
+		{"room@example.com;resource;optional;comment=Project room", "room@example.com", true, true, "Project room", false},
+		{";optional", "", false, false, "", true},
+		{"", "", false, false, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -172,8 +178,9 @@ func TestParseAttendee(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatalf("expected attendee, got nil")
+				return
 			}
-			if got.Email != tt.email || got.Optional != tt.optional || got.Comment != tt.comment {
+			if got.Email != tt.email || got.Optional != tt.optional || got.Resource != tt.resource || got.Comment != tt.comment {
 				t.Fatalf("unexpected attendee: %#v", got)
 			}
 		})
@@ -319,22 +326,22 @@ func TestParseReminder(t *testing.T) {
 }
 
 func TestBuildReminders(t *testing.T) {
-	got, err := buildReminders(nil)
+	got, err := buildReminders(nil, false)
 	if err != nil || got != nil {
 		t.Fatalf("expected (nil, nil), got (%#v, %v)", got, err)
 	}
 
-	got, err = buildReminders([]string{})
+	got, err = buildReminders([]string{}, false)
 	if err != nil || got != nil {
 		t.Fatalf("expected (nil, nil), got (%#v, %v)", got, err)
 	}
 
-	got, err = buildReminders([]string{"", "  "})
+	got, err = buildReminders([]string{"", "  "}, false)
 	if err != nil || got != nil {
 		t.Fatalf("expected (nil, nil), got (%#v, %v)", got, err)
 	}
 
-	got, err = buildReminders([]string{"popup:30m", "email:1d"})
+	got, err = buildReminders([]string{"popup:30m", "email:1d"}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,14 +358,56 @@ func TestBuildReminders(t *testing.T) {
 		t.Fatalf("unexpected override[1]: %#v", got.Overrides[1])
 	}
 
-	_, err = buildReminders([]string{"popup:1m", "popup:2m", "popup:3m", "popup:4m", "popup:5m", "popup:6m"})
+	got, err = buildReminders([]string{"popup:0m"}, false)
+	if err != nil {
+		t.Fatalf("unexpected error for 0-minute reminder: %v", err)
+	}
+	if got == nil || len(got.Overrides) != 1 {
+		t.Fatalf("unexpected 0-minute reminders payload: %#v", got)
+	}
+	if got.Overrides[0].Method != "popup" || got.Overrides[0].Minutes != 0 {
+		t.Fatalf("unexpected 0-minute override: %#v", got.Overrides[0])
+	}
+	if !hasStringValue(got.Overrides[0].ForceSendFields, "Minutes") {
+		t.Fatalf("expected Minutes to be force-sent for 0-minute reminder, got %#v", got.Overrides[0].ForceSendFields)
+	}
+
+	_, err = buildReminders([]string{"popup:1m", "popup:2m", "popup:3m", "popup:4m", "popup:5m", "popup:6m"}, false)
 	if err == nil {
 		t.Fatalf("expected error for >5 reminders")
 	}
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("expected usage exit code 2, got %d (err=%v)", got, err)
+	}
 
-	_, err = buildReminders([]string{"popup:30m", "invalid"})
+	_, err = buildReminders([]string{"popup:30m", "invalid"}, false)
 	if err == nil {
 		t.Fatalf("expected error for invalid reminder")
+	}
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("expected usage exit code 2, got %d (err=%v)", got, err)
+	}
+}
+
+func TestBuildRemindersDisabled(t *testing.T) {
+	got, err := buildReminders(nil, true)
+	if err != nil {
+		t.Fatalf("build disabled reminders: %v", err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal disabled reminders: %v", err)
+	}
+	if string(encoded) != `{"overrides":[],"useDefault":false}` {
+		t.Fatalf("disabled reminders payload = %s", encoded)
+	}
+
+	_, err = buildReminders([]string{"popup:30m"}, true)
+	if err == nil || !strings.Contains(err.Error(), "--reminder and --no-reminders") {
+		t.Fatalf("expected mutually exclusive reminder flags, got %v", err)
+	}
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("expected usage exit code 2, got %d", got)
 	}
 }
 
@@ -369,4 +418,110 @@ func hasStringValue(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestWrapEventWithDaysPrefersEventTimezone(t *testing.T) {
+	t.Parallel()
+
+	event := &calendar.Event{
+		Start: &calendar.EventDateTime{
+			DateTime: "2026-07-07T07:30:00+08:00",
+			TimeZone: "Asia/Seoul",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2026-07-07T08:30:00+08:00",
+			TimeZone: "Asia/Seoul",
+		},
+	}
+
+	wrapped := wrapEventWithDaysWithTimezone(event, "Asia/Hong_Kong", nil)
+	if wrapped == nil {
+		t.Fatal("expected wrapped event")
+	}
+	if wrapped.Timezone != "Asia/Seoul" {
+		t.Fatalf("Timezone = %q, want Asia/Seoul", wrapped.Timezone)
+	}
+	if wrapped.EventTimezone != "" {
+		t.Fatalf("EventTimezone = %q, want empty when it matches display timezone", wrapped.EventTimezone)
+	}
+	if wrapped.StartLocal != "2026-07-07T08:30:00+09:00" {
+		t.Fatalf("StartLocal = %q, want Seoul local time", wrapped.StartLocal)
+	}
+	if wrapped.EndLocal != "2026-07-07T09:30:00+09:00" {
+		t.Fatalf("EndLocal = %q, want Seoul local time", wrapped.EndLocal)
+	}
+}
+
+func TestWrapEventWithDaysFallsBackFromInvalidEventTimezone(t *testing.T) {
+	t.Parallel()
+
+	event := &calendar.Event{
+		Start: &calendar.EventDateTime{
+			DateTime: "2026-07-07T07:30:00+08:00",
+			TimeZone: "Not/AZone",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2026-07-07T08:30:00+08:00",
+			TimeZone: "Not/AZone",
+		},
+	}
+
+	calendarLoc, err := time.LoadLocation("Asia/Hong_Kong")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	wrapped := wrapEventWithDaysWithTimezone(event, "Asia/Hong_Kong", calendarLoc)
+	if wrapped.Timezone != "Asia/Hong_Kong" || wrapped.EventTimezone != "Not/AZone" {
+		t.Fatalf("unexpected timezone fields: timezone=%q eventTimezone=%q", wrapped.Timezone, wrapped.EventTimezone)
+	}
+	if wrapped.StartLocal != "2026-07-07T07:30:00+08:00" || wrapped.EndLocal != "2026-07-07T08:30:00+08:00" {
+		t.Fatalf("unexpected calendar-local fields: start=%q end=%q", wrapped.StartLocal, wrapped.EndLocal)
+	}
+}
+
+func TestWrapEventWithDaysResolvesEndpointTimezonesIndependently(t *testing.T) {
+	t.Parallel()
+
+	event := &calendar.Event{
+		Start: &calendar.EventDateTime{
+			DateTime: "2026-07-07T10:00:00+02:00",
+			TimeZone: "Europe/Rome",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2026-07-07T12:00:00-04:00",
+			TimeZone: "America/New_York",
+		},
+	}
+
+	wrapped := wrapEventWithDaysWithTimezone(event, "UTC", time.UTC)
+	if wrapped.StartLocal != "2026-07-07T10:00:00+02:00" || wrapped.EndLocal != "2026-07-07T12:00:00-04:00" {
+		t.Fatalf("unexpected endpoint-local fields: start=%q end=%q", wrapped.StartLocal, wrapped.EndLocal)
+	}
+	if wrapped.StartDayOfWeek != "Tuesday" || wrapped.EndDayOfWeek != "Tuesday" {
+		t.Fatalf("unexpected endpoint-local weekdays: start=%q end=%q", wrapped.StartDayOfWeek, wrapped.EndDayOfWeek)
+	}
+}
+
+func TestWrapEventWithDaysExplicitTimezoneOverrideWins(t *testing.T) {
+	t.Parallel()
+
+	event := &calendar.Event{
+		Start: &calendar.EventDateTime{DateTime: "2026-07-08T02:00:00Z", TimeZone: "Asia/Seoul"},
+		End:   &calendar.EventDateTime{DateTime: "2026-07-08T03:00:00Z", TimeZone: "Asia/Seoul"},
+	}
+	override, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+
+	wrapped := wrapEventWithDaysWithTimezoneOverride(event, "America/New_York", override, true)
+	if wrapped.Timezone != "America/New_York" || wrapped.EventTimezone != "Asia/Seoul" {
+		t.Fatalf("unexpected timezone fields: timezone=%q eventTimezone=%q", wrapped.Timezone, wrapped.EventTimezone)
+	}
+	if wrapped.StartLocal != "2026-07-07T22:00:00-04:00" || wrapped.EndLocal != "2026-07-07T23:00:00-04:00" {
+		t.Fatalf("unexpected override-local fields: start=%q end=%q", wrapped.StartLocal, wrapped.EndLocal)
+	}
+	if wrapped.StartDayOfWeek != "Tuesday" || wrapped.EndDayOfWeek != "Tuesday" {
+		t.Fatalf("unexpected override-local weekdays: start=%q end=%q", wrapped.StartDayOfWeek, wrapped.EndDayOfWeek)
+	}
 }

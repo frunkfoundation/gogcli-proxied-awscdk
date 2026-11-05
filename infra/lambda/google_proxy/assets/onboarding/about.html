@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="gogcli-proxy connects Google accounts to authorized tools with controlled access to Gmail, Drive, and Calendar.">
+  <title>gogcli-proxy</title><link rel="stylesheet" href="style.css">
+</head>
+<body><main>
+  <header><h1>gogcli-proxy</h1>
+    <p>Connect your Google accounts to the tools you authorize.</p>
+    <p>Operated by K-Rae Collective (kraecollective.com).</p>
+  </header>
+  <section aria-labelledby="purpose"><h2 id="purpose">One connection service for your accounts</h2>
+    <p>gogcli-proxy is a private access broker built around gogcli. It keeps Google authorization on the server and checks account and caller permissions before forwarding requests to Google. It is intended for the operator and personally known users, rather than public self-service registration.</p>
+    <p>Each Google account connects separately. You choose the services and approve access at Google. Tools must also be authorized by the proxy; connecting an account does not make its data public.</p>
+  </section>
+  <section aria-labelledby="services"><h2 id="services">Choose what to connect</h2>
+    <ul>
+      <li><strong>Gmail:</strong> read, compose, send, label, and move messages to Trash.</li>
+      <li><strong>Google Drive:</strong> read, create, change, share, and delete files.</li>
+      <li><strong>Google Calendar:</strong> read, create, change, share, and delete calendars and events.</li>
+    </ul>
+    <p>These permissions allow authorized tools to perform actions you request. Proxy policies may further restrict which actions each tool can take.</p>
+    <p>You can pause tool access, disconnect an account, or revoke the application in your Google Account settings.</p>
+  </section>
+  <p><a class="button" href="./">Connect accounts</a> — operator sign-in required.</p>
+  <footer><p><a href="privacy">Privacy policy</a> · <a href="mailto:jay@kraecollective.com">Contact: jay@kraecollective.com</a></p></footer>
+</main></body></html>

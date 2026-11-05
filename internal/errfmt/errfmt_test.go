@@ -9,8 +9,8 @@ import (
 	"github.com/alecthomas/kong"
 	ggoogleapi "google.golang.org/api/googleapi"
 
-	"github.com/steipete/gogcli/internal/config"
-	gogapi "github.com/steipete/gogcli/internal/googleapi"
+	"github.com/openclaw/gogcli/internal/config"
+	gogapi "github.com/openclaw/gogcli/internal/googleapi"
 )
 
 var errNope = errors.New("nope")
@@ -31,6 +31,23 @@ func TestFormat_AuthRequired(t *testing.T) {
 
 	if !containsAll(got, "gog auth add", "a@b.com", "gmail") {
 		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestFormat_AuthRequired_ServiceAccountOnly(t *testing.T) {
+	for _, service := range []string{"admin", "admin directory", "admin orgunits", "groups", "keep"} {
+		t.Run(service, func(t *testing.T) {
+			err := &gogapi.AuthRequiredError{Service: service, Email: "a@b.com", Cause: keyring.ErrKeyNotFound}
+			got := Format(err)
+
+			if !containsAll(got, "No auth for "+service+" a@b.com", "gog auth service-account set a@b.com") {
+				t.Fatalf("unexpected: %q", got)
+			}
+
+			if strings.Contains(got, "--services "+service) {
+				t.Fatalf("must not suggest unsupported admin service flag: %q", got)
+			}
+		})
 	}
 }
 
@@ -59,6 +76,15 @@ func TestFormat_UserFacingError(t *testing.T) {
 	}
 }
 
+func TestFormat_UserFacingErrorWrapsSentinel(t *testing.T) {
+	err := NewUserFacingError("friendly", keyring.ErrKeyNotFound)
+	got := Format(err)
+
+	if got != "friendly" {
+		t.Fatalf("unexpected: %q", got)
+	}
+}
+
 func TestFormat_GoogleAPIError(t *testing.T) {
 	err := &ggoogleapi.Error{
 		Code:    403,
@@ -71,6 +97,172 @@ func TestFormat_GoogleAPIError(t *testing.T) {
 
 	if !containsAll(got, "403", "insufficientPermissions", "nope") {
 		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestFormat_GoogleAPIError_QuotaProjectRequiredHint(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{
+			// Sheets is in the enablement-hint table; the quota-project hint
+			// must win over the misleading "not enabled" advice.
+			name: "hinted API",
+			message: "Your application is authenticating by using local Application Default Credentials. " +
+				"The sheets.googleapis.com API requires a quota project, which is not set by default.",
+		},
+		{
+			name: "unhinted API",
+			message: "Your application is authenticating by using local Application Default Credentials. " +
+				"The calendar-json.googleapis.com API requires a quota project, which is not set by default. " +
+				"To learn how to set your quota project, see https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds .",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := &ggoogleapi.Error{
+				Code:    403,
+				Message: test.message,
+				Errors: []ggoogleapi.ErrorItem{
+					{Reason: "accessNotConfigured"},
+				},
+			}
+
+			got := Format(err)
+			if !containsAll(got, "--quota-project", "GOG_QUOTA_PROJECT", test.message) {
+				t.Fatalf("expected quota project hint, got: %q", got)
+			}
+
+			if strings.Contains(got, "is not enabled for this OAuth project") || strings.Contains(got, "gog auth add") {
+				t.Fatalf("must not suggest API enablement for quota project errors: %q", got)
+			}
+		})
+	}
+}
+
+func TestFormat_GoogleAPIError_AccessNotConfiguredHint(t *testing.T) {
+	err := &ggoogleapi.Error{
+		Code: 403,
+		Message: "Google Drive API has not been used in project 123 before or it is disabled. " +
+			"Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=123",
+		Errors: []ggoogleapi.ErrorItem{
+			{Reason: "accessNotConfigured"},
+		},
+	}
+	got := Format(err)
+
+	if !containsAll(got, "Drive API is not enabled", "drive.googleapis.com", "--services drive") {
+		t.Fatalf("unexpected: %q", got)
+	}
+
+	if !strings.Contains(got, "https://console.cloud.google.com/apis/library/drive.googleapis.com?project=123") {
+		t.Fatalf("expected project-scoped enable URL, got: %q", got)
+	}
+
+	if strings.Contains(got, "console.developers.google.com") {
+		t.Fatalf("must not return the legacy developer console URL, got: %q", got)
+	}
+
+	if strings.Contains(got, "Google API error") {
+		t.Fatalf("expected user-facing enablement hint, got: %q", got)
+	}
+}
+
+func TestFormat_GoogleAPIError_AccessNotConfiguredHintCloudLegacyPath(t *testing.T) {
+	err := &ggoogleapi.Error{
+		Code: 403,
+		Message: "Google Drive API has not been used in project 123 before or it is disabled. " +
+			"Enable it by visiting https://console.cloud.google.com/apis/api/drive.googleapis.com/overview?project=123",
+		Errors: []ggoogleapi.ErrorItem{
+			{Reason: "accessNotConfigured"},
+		},
+	}
+
+	got := Format(err)
+	if !strings.Contains(got, "https://console.cloud.google.com/apis/library/drive.googleapis.com?project=123") {
+		t.Fatalf("expected normalized API Library URL, got: %q", got)
+	}
+
+	if strings.Contains(got, "/apis/api/") {
+		t.Fatalf("must not return the legacy API overview path, got: %q", got)
+	}
+}
+
+func TestFormat_GoogleAPIError_ServiceAccountOnlyDisabledAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		apiName string
+		service string
+	}{
+		{name: "admin", apiName: "admin.googleapis.com", service: "admin"},
+		{name: "keep", apiName: "keep.googleapis.com", service: "keep"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &ggoogleapi.Error{
+				Code: 403,
+				Message: "API has not been used. Enable it by visiting " +
+					"https://console.developers.google.com/apis/api/" + tc.apiName + "/overview?project=123",
+				Errors: []ggoogleapi.ErrorItem{
+					{Reason: "accessNotConfigured"},
+				},
+			}
+
+			got := Format(err)
+			if !containsAll(got, "service-account set", "/apis/library/"+tc.apiName+"?project=123") {
+				t.Fatalf("unexpected: %q", got)
+			}
+
+			if strings.Contains(got, "--services "+tc.service) || strings.Contains(got, "gog auth add") {
+				t.Fatalf("must not suggest unsupported OAuth flow: %q", got)
+			}
+		})
+	}
+}
+
+func TestFormat_GoogleAPIError_DriveActivityHint(t *testing.T) {
+	err := &ggoogleapi.Error{
+		Code: 403,
+		Message: "Google Drive Activity API has not been used in project 123 before or it is disabled. " +
+			"Enable it by visiting https://console.developers.google.com/apis/api/driveactivity.googleapis.com/overview?project=123",
+		Errors: []ggoogleapi.ErrorItem{
+			{Reason: "accessNotConfigured"},
+		},
+	}
+	got := Format(err)
+
+	if !containsAll(got, "Drive Activity API is not enabled", "driveactivity.googleapis.com", "--services driveactivity") {
+		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestFormat_GoogleAPIError_AnalyticsAdminHint(t *testing.T) {
+	err := &ggoogleapi.Error{
+		Code: 403,
+		Message: "Google Analytics Admin API has not been used in project 123 before or it is disabled. " +
+			"Enable it by visiting https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project=123",
+		Errors: []ggoogleapi.ErrorItem{
+			{Reason: "accessNotConfigured"},
+		},
+	}
+	got := Format(err)
+
+	if !containsAll(got, "Analytics Admin API is not enabled", "analyticsadmin.googleapis.com", "--services analytics") {
+		t.Fatalf("unexpected: %q", got)
+	}
+
+	if strings.Contains(got, "Admin SDK API") {
+		t.Fatalf("expected Analytics Admin hint, got: %q", got)
+	}
+}
+
+func TestFormat_GoogleAPIError_AdSenseHint(t *testing.T) {
+	got := Format(&ggoogleapi.Error{
+		Code: 403, Message: "AdSense Management API has not been used in project 123 before",
+		Errors: []ggoogleapi.ErrorItem{{Reason: "accessNotConfigured"}},
+	})
+	if !containsAll(got, "AdSense Management API is not enabled", "https://console.cloud.google.com/apis/library/adsense.googleapis.com", "--services adsense") {
+		t.Fatalf("unexpected hint: %q", got)
 	}
 }
 

@@ -1,11 +1,17 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/option"
 )
 
 func TestOriginalStartRange(t *testing.T) {
@@ -71,5 +77,188 @@ func TestRecurrenceUntil_Extra(t *testing.T) {
 	}
 	if until != time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).Format("20060102") {
 		t.Fatalf("unexpected date until: %s", until)
+	}
+}
+
+func TestResolveRecurringSeriesID_Instance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		if r.Method == http.MethodGet && path == "/calendars/cal/events/ev_instance" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":               "ev_instance",
+				"recurringEventId": "ev_master",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	got, err := resolveRecurringSeriesID(context.Background(), svc, "cal", "ev_instance")
+	if err != nil {
+		t.Fatalf("resolveRecurringSeriesID: %v", err)
+	}
+	if got != "ev_master" {
+		t.Fatalf("unexpected recurring series id: %q", got)
+	}
+}
+
+func TestResolveRecurringParentEvent_Instance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		switch {
+		case r.Method == http.MethodGet && path == "/calendars/cal/events/ev_instance":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":               "ev_instance",
+				"recurringEventId": "ev_master",
+			})
+		case r.Method == http.MethodGet && path == "/calendars/cal/events/ev_master":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":         "ev_master",
+				"recurrence": []string{"RRULE:FREQ=WEEKLY"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	parentID, recurrence, err := resolveRecurringParentEvent(context.Background(), svc, "cal", "ev_instance")
+	if err != nil {
+		t.Fatalf("resolveRecurringParentEvent: %v", err)
+	}
+	if parentID != "ev_master" {
+		t.Fatalf("unexpected parent id: %q", parentID)
+	}
+	if len(recurrence) != 1 || recurrence[0] != "RRULE:FREQ=WEEKLY" {
+		t.Fatalf("unexpected recurrence: %#v", recurrence)
+	}
+}
+
+func TestResolveRecurringInstanceIDRejectsRepeatedPageToken(t *testing.T) {
+	var listCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		if !(r.Method == http.MethodGet && strings.HasPrefix(path, "/calendars/cal/events/ev_master/instances")) {
+			http.NotFound(w, r)
+			return
+		}
+		if listCalls.Add(1) > 2 {
+			http.Error(w, "unexpected extra page request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{
+				{
+					"id": "ev_other",
+					"originalStartTime": map[string]any{
+						"dateTime": "2025-01-03T10:00:00Z",
+					},
+				},
+			},
+			"nextPageToken": "stuck",
+		})
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	got, err := resolveRecurringInstanceID(context.Background(), svc, "cal", "ev_master", "2025-01-02T10:00:00Z")
+	if err == nil || !strings.Contains(err.Error(), "repeated page token") {
+		t.Fatalf("err = %v after %d list calls, got = %q", err, listCalls.Load(), got)
+	}
+	if got := listCalls.Load(); got != 2 {
+		t.Fatalf("list calls = %d, want 2", got)
+	}
+}
+
+func TestResolveRecurringInstanceIDFindsMatchOnLaterPage(t *testing.T) {
+	originalStart := "2025-01-02T10:00:00Z"
+	var listCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/calendar/v3")
+		if !(r.Method == http.MethodGet && strings.HasPrefix(path, "/calendars/cal/events/ev_master/instances")) {
+			http.NotFound(w, r)
+			return
+		}
+		listCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("pageToken") {
+		case "":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id": "ev_other",
+						"originalStartTime": map[string]any{
+							"dateTime": "2025-01-03T10:00:00Z",
+						},
+					},
+				},
+				"nextPageToken": "page-2",
+			})
+		case "page-2":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{
+						"id": "ev_1",
+						"originalStartTime": map[string]any{
+							"dateTime": originalStart,
+						},
+					},
+				},
+			})
+		default:
+			http.Error(w, "unexpected extra page request", http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	svc, err := calendar.NewService(context.Background(),
+		option.WithoutAuthentication(),
+		option.WithHTTPClient(srv.Client()),
+		option.WithEndpoint(srv.URL+"/"),
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	got, err := resolveRecurringInstanceID(context.Background(), svc, "cal", "ev_master", originalStart)
+	if err != nil {
+		t.Fatalf("resolveRecurringInstanceID: %v", err)
+	}
+	if got != "ev_1" {
+		t.Fatalf("unexpected instance id: %q", got)
+	}
+	if listCalls.Load() != 2 {
+		t.Fatalf("list calls = %d, want 2", listCalls.Load())
 	}
 }

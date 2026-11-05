@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect your Google account</title>
+  <link rel="stylesheet" href="__ONBOARDING_BASE__style.css"><script src="__ONBOARDING_BASE__connect.js" defer></script>
+</head>
+<body><main>
+  <header><h1>Connect your Google account</h1><p>Approve the services selected by your account owner for gogcli-proxy.</p></header>
+  <p id="connectionStatus" class="notice" role="status" aria-live="polite">Opening connection…</p>
+  <section id="connectionDetails" hidden aria-labelledby="connectionEmail">
+    <h2 id="connectionEmail"></h2>
+    <p id="connectionServices"></p><p id="connectionExpiry" class="small"></p>
+    <p id="connectionHelp">Make sure this browser profile is signed in to this account, then continue. Choose the same account at Google. No auth.k-rae.com sign-in is needed here.</p>
+    <div class="connect-actions">
+      <button id="continueGoogle" type="button" hidden>Continue to Google</button>
+      <button id="refreshConnection" class="secondary" type="button">Refresh status</button>
+      <span id="connectionUpdated" class="small" role="status"></span>
+    </div>
+  </section>
+  <p id="connectionRecovery" class="notice" hidden></p>
+  <noscript><p>Enable JavaScript to open this connection link.</p></noscript>
+</main></body></html>

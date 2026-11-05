@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -10,15 +9,79 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"google.golang.org/api/gmail/v1"
-	"google.golang.org/api/option"
 )
 
-func TestExecute_GmailThread_Text_Download(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
+func TestExecute_GmailThread_Text_DraftMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/gmail/v1/users/me/threads/t-thread-draft") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "t-thread-draft",
+			"messages": []map[string]any{
+				{
+					"id":       "m-inbound",
+					"labelIds": []string{"INBOX"},
+					"payload":  map[string]any{"headers": []map[string]any{}},
+				},
+				{
+					"id":       "m-draft",
+					"labelIds": []string{"DRAFT"},
+					"payload":  map[string]any{"headers": []map[string]any{}},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
 
+	svc := newGmailServiceFromServer(t, srv)
+
+	t.Run("human output marks only the draft", func(t *testing.T) {
+		result := executeWithGmailTestService(t, []string{
+			"--account", "a@b.com", "gmail", "thread", "get", "t-thread-draft",
+		}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+		}
+		if !strings.Contains(result.stdout, "=== Message 1/2: m-inbound ===") {
+			t.Fatalf("expected unchanged non-draft heading, got=%q", result.stdout)
+		}
+		if !strings.Contains(result.stdout, "=== Message 2/2: m-draft [DRAFT — NOT SENT] ===") {
+			t.Fatalf("expected marked draft heading, got=%q", result.stdout)
+		}
+		if strings.Count(result.stdout, gmailDraftNotSentMarker) != 1 {
+			t.Fatalf("expected exactly one draft marker, got=%q", result.stdout)
+		}
+	})
+
+	t.Run("plain output is unchanged", func(t *testing.T) {
+		result := executeWithGmailTestService(t, []string{
+			"--plain", "--account", "a@b.com", "gmail", "thread", "get", "t-thread-draft",
+		}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+		}
+		if !strings.Contains(result.stdout, "=== Message 2/2: m-draft ===") || strings.Contains(result.stdout, gmailDraftNotSentMarker) {
+			t.Fatalf("expected unchanged plain heading, got=%q", result.stdout)
+		}
+	})
+
+	t.Run("JSON output is unchanged", func(t *testing.T) {
+		result := executeWithGmailTestService(t, []string{
+			"--json", "--account", "a@b.com", "gmail", "thread", "get", "t-thread-draft",
+		}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v\nstderr=%q", result.err, result.stderr)
+		}
+		if strings.Contains(result.stdout, gmailDraftNotSentMarker) || !strings.Contains(result.stdout, `"labelIds": [`) || !strings.Contains(result.stdout, `"DRAFT"`) {
+			t.Fatalf("expected unchanged JSON labels without display marker, got=%q", result.stdout)
+		}
+	})
+}
+
+func TestExecute_GmailThread_Text_Download(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	wd := t.TempDir()
 	origWD, _ := os.Getwd()
@@ -74,25 +137,13 @@ func TestExecute_GmailThread_Text_Download(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	svc := newGmailServiceFromServer(t, srv)
+	result := executeWithGmailTestService(t, []string{"--plain", "--account", "a@b.com", "gmail", "thread", "get", "t-thread-1", "--download"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{"--account", "a@b.com", "gmail", "thread", "get", "t-thread-1", "--download"}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
-	if !strings.Contains(out, "=== Message 1/1: m-thread-1 ===") || !strings.Contains(out, "Attachments:") || !(strings.Contains(out, "Saved:") || strings.Contains(out, "Cached:")) {
-		t.Fatalf("unexpected out=%q", out)
+	if !strings.Contains(result.stdout, "=== Message 1/1: m-thread-1 ===") || !strings.Contains(result.stdout, "Attachments:") || !(strings.Contains(result.stdout, "Saved:") || strings.Contains(result.stdout, "Cached:")) {
+		t.Fatalf("unexpected out=%q", result.stdout)
 	}
 
 	expectedPath := filepath.Join(wd, "m-thread-1_a-thread_a.txt")
@@ -106,12 +157,9 @@ func TestExecute_GmailThread_Text_Download(t *testing.T) {
 }
 
 func TestExecute_GmailThread_Text_FullFlag(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	longBody := strings.Repeat("a", 600)
+	longBody := strings.Repeat("a", gmailDefaultTextBodyLimit+100)
 	bodyEncoded := base64.RawURLEncoding.EncodeToString([]byte(longBody))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,55 +196,38 @@ func TestExecute_GmailThread_Text_FullFlag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailServiceFromServer(t, srv)
 
 	t.Run("default truncates", func(t *testing.T) {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute([]string{"--account", "a@b.com", "gmail", "thread", "get", "t-thread-1"}); execErr != nil {
-					t.Fatalf("Execute: %v", execErr)
-				}
-			})
-		})
-
-		if !strings.Contains(out, "[truncated") {
-			t.Fatalf("expected truncated output, got=%q", out)
+		result := executeWithGmailTestService(t, []string{"--plain", "--account", "a@b.com", "gmail", "thread", "get", "t-thread-1"}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v", result.err)
 		}
-		if strings.Contains(out, longBody) {
-			t.Fatalf("expected body to be truncated, got=%q", out)
+
+		if !strings.Contains(result.stdout, gmailTextTruncationMarker) {
+			t.Fatalf("expected truncated output, got=%q", result.stdout)
+		}
+		if strings.Contains(result.stdout, longBody) {
+			t.Fatalf("expected body to be truncated, got=%q", result.stdout)
 		}
 	})
 
 	t.Run("--full shows complete body", func(t *testing.T) {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute([]string{"--account", "a@b.com", "gmail", "thread", "get", "t-thread-1", "--full"}); execErr != nil {
-					t.Fatalf("Execute: %v", execErr)
-				}
-			})
-		})
-
-		if strings.Contains(out, "[truncated") {
-			t.Fatalf("expected full output, got=%q", out)
+		result := executeWithGmailTestService(t, []string{"--plain", "--account", "a@b.com", "gmail", "thread", "get", "t-thread-1", "--full"}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v", result.err)
 		}
-		if !strings.Contains(out, longBody) {
-			t.Fatalf("expected full body, got=%q", out)
+
+		if strings.Contains(result.stdout, "[truncated") {
+			t.Fatalf("expected full output, got=%q", result.stdout)
+		}
+		if !strings.Contains(result.stdout, longBody) {
+			t.Fatalf("expected full body, got=%q", result.stdout)
 		}
 	})
 }
 
 func TestExecute_GmailDraftsGet_Text_Download(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	attData := []byte("hello")
@@ -237,32 +268,17 @@ func TestExecute_GmailDraftsGet_Text_Download(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
+	svc := newGmailServiceFromServer(t, srv)
+	result := executeWithGmailTestService(t, []string{"--plain", "--account", "a@b.com", "gmail", "drafts", "get", "d1", "--download"}, svc)
+	if result.err != nil {
+		t.Fatalf("Execute: %v", result.err)
 	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
-
-	out := captureStdout(t, func() {
-		_ = captureStderr(t, func() {
-			if execErr := Execute([]string{"--account", "a@b.com", "gmail", "drafts", "get", "d1", "--download"}); execErr != nil {
-				t.Fatalf("Execute: %v", execErr)
-			}
-		})
-	})
-	if !strings.Contains(out, "Draft-ID: d1") || !strings.Contains(out, "Attachments:") || (!strings.Contains(out, "Saved:") && !strings.Contains(out, "Cached:")) {
-		t.Fatalf("unexpected out=%q", out)
+	if !strings.Contains(result.stdout, "Draft-ID: d1") || !strings.Contains(result.stdout, "Attachments:") || (!strings.Contains(result.stdout, "Saved:") && !strings.Contains(result.stdout, "Cached:")) {
+		t.Fatalf("unexpected out=%q", result.stdout)
 	}
 }
 
 func TestExecute_GmailThread_OutDir_CreatesParents_JSON(t *testing.T) {
-	origNew := newGmailService
-	t.Cleanup(func() { newGmailService = origNew })
-
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	wd := t.TempDir()
 	origWD, _ := os.Getwd()
@@ -309,34 +325,23 @@ func TestExecute_GmailThread_OutDir_CreatesParents_JSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := gmail.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newGmailService = func(context.Context, string) (*gmail.Service, error) { return svc, nil }
+	svc := newGmailServiceFromServer(t, srv)
 
 	outDir := filepath.Join("nested", "attachments")
 	run := func() map[string]any {
-		out := captureStdout(t, func() {
-			_ = captureStderr(t, func() {
-				if execErr := Execute([]string{
-					"--json",
-					"--account", "a@b.com",
-					"gmail", "thread", "get", "t-thread-1",
-					"--download",
-					"--out-dir", outDir,
-				}); execErr != nil {
-					t.Fatalf("Execute: %v", execErr)
-				}
-			})
-		})
+		result := executeWithGmailTestService(t, []string{
+			"--json",
+			"--account", "a@b.com",
+			"gmail", "thread", "get", "t-thread-1",
+			"--download",
+			"--out-dir", outDir,
+		}, svc)
+		if result.err != nil {
+			t.Fatalf("Execute: %v", result.err)
+		}
 		var parsed map[string]any
-		if unmarshalErr := json.Unmarshal([]byte(out), &parsed); unmarshalErr != nil {
-			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, out)
+		if unmarshalErr := json.Unmarshal([]byte(result.stdout), &parsed); unmarshalErr != nil {
+			t.Fatalf("json parse: %v\nout=%q", unmarshalErr, result.stdout)
 		}
 		return parsed
 	}

@@ -16,7 +16,7 @@ usage() {
 Usage: scripts/live-test.sh [options]
 
 Options:
-  --fast              Skip slower tests (docs/sheets/slides)
+  --fast              Skip slower tests (docs/sheets/slides/structure)
   --strict            Fail on optional tests (groups/keep/enterprise)
   --allow-nontest     Allow running against non-test accounts
   --account <email>   Account to use (defaults to GOG_IT_ACCOUNT or first auth)
@@ -26,14 +26,18 @@ Options:
   -h, --help          Show this help
 
 Skip keys (base):
-  time, version, completion, auth, auth-alias, config, enable-commands,
+  time, version, completion, schema, help, output-precedence, auth, auth-alias, config, enable-commands,
   gmail, gmail-settings, gmail-delegates, gmail-batch-delete, gmail-history, gmail-url, gmail-labels,
-  gmail-attachments, gmail-track, gmail-watch, drive, docs, sheets, slides,
+  gmail-send-safety, gmail-forward,
+  gmail-attachments, gmail-track, gmail-watch, chat, drive, docs, sheets, slides, structure,
+  photos-picker,
   calendar, calendar-enterprise, calendar-respond, calendar-team, calendar-users,
-  tasks, contacts, people, groups, keep, classroom
+  tasks, contacts, contacts-directory, contacts-other, people, groups, keep, classroom
 
 Env:
   GOG_LIVE_EMAIL_TEST=steipete+gogtest@gmail.com
+  GOG_LIVE_CHAT_SPACE=spaces/...
+  GOG_LIVE_CHAT_SEARCH_QUERY='known matching text'
   GOG_LIVE_GROUP_EMAIL=<group@domain>
   GOG_LIVE_CLASSROOM_COURSE=<courseId>
   GOG_LIVE_CLASSROOM_CREATE=1
@@ -47,6 +51,7 @@ Env:
   GOG_LIVE_CLIENT=work
   GOG_LIVE_GMAIL_WATCH_TOPIC=projects/.../topics/...
   GOG_LIVE_CALENDAR_RECURRENCE=1
+  GOG_LIVE_RETRIES=3
   GOG_KEEP_SERVICE_ACCOUNT=/path/to/service-account.json
   GOG_KEEP_IMPERSONATE=user@workspace-domain
 USAGE
@@ -105,9 +110,9 @@ fi
 SKIP="${SKIP:-${GOG_LIVE_SKIP:-}}"
 if [ "$FAST" = true ]; then
   if [ -n "$SKIP" ]; then
-    SKIP="$SKIP,docs,sheets,slides"
+    SKIP="$SKIP,docs,sheets,slides,structure"
   else
-    SKIP="docs,sheets,slides"
+    SKIP="docs,sheets,slides,structure"
   fi
 fi
 
@@ -143,7 +148,6 @@ echo "Using account: $ACCOUNT"
 EMAIL_TEST="${GOG_LIVE_EMAIL_TEST:-steipete+gogtest@gmail.com}"
 TS=$(date +%Y%m%d%H%M%S)
 LIVE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/gog-live-$TS-XXXX")
-trap 'rm -rf "$LIVE_TMP"' EXIT
 
 source "$ROOT_DIR/scripts/live-tests/common.sh"
 source "$ROOT_DIR/scripts/live-tests/core.sh"
@@ -152,12 +156,18 @@ source "$ROOT_DIR/scripts/live-tests/drive.sh"
 source "$ROOT_DIR/scripts/live-tests/docs.sh"
 source "$ROOT_DIR/scripts/live-tests/sheets.sh"
 source "$ROOT_DIR/scripts/live-tests/slides.sh"
+source "$ROOT_DIR/scripts/live-tests/structure.sh"
+source "$ROOT_DIR/scripts/live-tests/photos.sh"
 source "$ROOT_DIR/scripts/live-tests/calendar.sh"
 source "$ROOT_DIR/scripts/live-tests/tasks.sh"
 source "$ROOT_DIR/scripts/live-tests/contacts.sh"
 source "$ROOT_DIR/scripts/live-tests/people.sh"
+source "$ROOT_DIR/scripts/live-tests/chat-search.sh"
 source "$ROOT_DIR/scripts/live-tests/workspace.sh"
 source "$ROOT_DIR/scripts/live-tests/classroom.sh"
+source "$ROOT_DIR/scripts/live-tests/meet.sh"
+
+trap 'cleanup_live_resources || true; rm -rf "$LIVE_TMP"' EXIT
 
 ensure_test_account
 
@@ -180,11 +190,14 @@ run_drive_tests
 run_docs_tests
 run_sheets_tests
 run_slides_tests
+run_structure_tests
+run_photos_picker_tests
 run_calendar_tests
 run_tasks_tests
 run_contacts_tests
 run_people_tests
 run_workspace_tests
 run_classroom_tests
+run_meet_tests
 
 echo "Live tests complete."

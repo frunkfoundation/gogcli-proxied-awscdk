@@ -1,0 +1,25 @@
+{
+  "environment": "gogcli-prd",
+  "shape": "prd.remote.production-like",
+  "account_id": "968138089939",
+  "region": "us-east-2",
+  "stage": "prd",
+  "ssm_prefix": "/gogcli-proxy",
+  "role_prefix": "jdev-gogcli-proxy-prd",
+  "permissions_boundary_arn": "arn:aws:iam::968138089939:policy/JayDeveloperCreatedRoleBoundary",
+  "ssm_key_arn": "arn:aws:kms:us-east-2:968138089939:key/449587c1-a931-44b3-987d-311836df4e92",
+  "oidc_issuer": "https://auth.k-rae.com/application/o/gogcli-proxy-prd/",
+  "oidc_client_id": "krae-gogcli-proxy-prd-web",
+  "owner_group": "gogcli-proxy-prd-owners",
+  "client_role_arn": "arn:aws:iam::968138089939:role/JayDeveloperFromJdev",
+  "deployment_profile": "krae-jdev-dev-prd",
+  "public_domain_name": "gp-039168171bf05570eadba6a8.k-rae.com",
+  "public_hosted_zone_id": "Z01690093CXXI3NA50XAD",
+  "public_hosted_zone_name": "k-rae.com",
+  "google_application": {
+    "project_id": "gogcli-proxy",
+    "project_number": "1042630585914",
+    "name": "gogcli-proxy",
+    "organization": "kraecollective.com"
+  }
+}

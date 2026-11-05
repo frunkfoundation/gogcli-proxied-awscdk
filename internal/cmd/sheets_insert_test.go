@@ -1,24 +1,43 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
-
-	"github.com/steipete/gogcli/internal/ui"
 )
 
-func TestSheetsInsertCmd(t *testing.T) {
-	origNew := newSheetsService
-	t.Cleanup(func() { newSheetsService = origNew })
+func TestSheetsInsertCmd_FirstPositionSendsZeroes(t *testing.T) {
+	for _, sheetID := range []int64{0, 7} {
+		for _, dimension := range []string{"rows", "cols"} {
+			t.Run(fmt.Sprintf("%s/sheet%d", dimension, sheetID), func(t *testing.T) {
+				capture := &sheetsBatchUpdateCapture{}
+				svc := newSheetsBatchUpdateTestService(t, map[string]any{
+					"sheets": []map[string]any{{"properties": map[string]any{"sheetId": sheetID, "title": "Data"}}},
+				}, capture)
+				ctx := withSheetsTestService(newCmdRuntimeOutputContext(t, io.Discard, io.Discard), svc)
+				if err := runKong(t, &SheetsInsertCmd{}, []string{"s1", "Data", dimension, "1"}, ctx, &RootFlags{Account: "a@b.com"}); err != nil {
+					t.Fatal(err)
+				}
+				requests := capture.Body["requests"].([]any)
+				insert := requests[0].(map[string]any)["insertDimension"].(map[string]any)
+				rng := insert["range"].(map[string]any)
+				for key, want := range map[string]float64{"sheetId": float64(sheetID), "startIndex": 0, "endIndex": 1} {
+					if got, ok := rng[key]; !ok || got != want {
+						t.Errorf("expected %s=%v in serialized range, got %#v", key, want, rng)
+					}
+				}
+			})
+		}
+	}
+}
 
+func TestSheetsInsertCmd(t *testing.T) {
 	var gotInsert *sheets.InsertDimensionRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,22 +72,10 @@ func TestSheetsInsertCmd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc, err := sheets.NewService(context.Background(),
-		option.WithoutAuthentication(),
-		option.WithHTTPClient(srv.Client()),
-		option.WithEndpoint(srv.URL+"/"),
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	newSheetsService = func(context.Context, string) (*sheets.Service, error) { return svc, nil }
+	svc := newSheetsServiceFromServer(t, srv)
 
 	flags := &RootFlags{Account: "a@b.com"}
-	u, uiErr := ui.New(ui.Options{Stdout: io.Discard, Stderr: io.Discard, Color: "never"})
-	if uiErr != nil {
-		t.Fatalf("ui.New: %v", uiErr)
-	}
-	ctx := ui.WithUI(context.Background(), u)
+	ctx := withSheetsTestService(newCmdRuntimeOutputContext(t, io.Discard, io.Discard), svc)
 
 	t.Run("insert rows before", func(t *testing.T) {
 		gotInsert = nil
@@ -121,6 +128,58 @@ func TestSheetsInsertCmd(t *testing.T) {
 		}
 		if !gotInsert.InheritFromBefore {
 			t.Fatal("expected inheritFromBefore=true")
+		}
+	})
+
+	t.Run("insert after inheriting from following dimension", func(t *testing.T) {
+		gotInsert = nil
+		cmd := &SheetsInsertCmd{}
+		if err := runKong(t, cmd, []string{
+			"s1", "Data", "rows", "2", "--count", "1", "--after", "--inherit-from-before=false",
+		}, ctx, flags); err != nil {
+			t.Fatalf("insert rows: %v", err)
+		}
+		if gotInsert == nil {
+			t.Fatal("expected insertDimension request")
+		}
+		// --after would default inheritFromBefore=true; the explicit flag overrides it
+		// so the API inherits from the following adjacent row/column instead.
+		if gotInsert.InheritFromBefore {
+			t.Fatal("expected inheritFromBefore=false when --inherit-from-before=false overrides --after")
+		}
+	})
+
+	t.Run("insert before with explicit inherit", func(t *testing.T) {
+		gotInsert = nil
+		cmd := &SheetsInsertCmd{}
+		if err := runKong(t, cmd, []string{
+			"s1", "Data", "rows", "2", "--count", "1", "--inherit-from-before",
+		}, ctx, flags); err != nil {
+			t.Fatalf("insert rows: %v", err)
+		}
+		if gotInsert == nil {
+			t.Fatal("expected insertDimension request")
+		}
+		// before-insert defaults inheritFromBefore=false; the explicit flag overrides it.
+		if !gotInsert.InheritFromBefore {
+			t.Fatal("expected inheritFromBefore=true when --inherit-from-before is set")
+		}
+	})
+
+	t.Run("reject inherit from before at first row", func(t *testing.T) {
+		gotInsert = nil
+		cmd := &SheetsInsertCmd{}
+		err := runKong(t, cmd, []string{
+			"s1", "Data", "rows", "1", "--inherit-from-before",
+		}, ctx, flags)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "cannot inherit from the previous row") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotInsert != nil {
+			t.Fatal("did not expect API request")
 		}
 	})
 

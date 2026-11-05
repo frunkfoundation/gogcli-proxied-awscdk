@@ -1,4 +1,6 @@
+import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -6,11 +8,18 @@ from typing import Optional
 import aws_cdk as cdk
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigateway as apigw
+from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
-from aws_cdk.aws_lambda_python_alpha import PythonFunction
+from aws_cdk import aws_route53 as route53
+from aws_cdk import aws_route53_targets as targets
+from aws_cdk import aws_s3 as s3
+from .python_asset import python_asset
 from constructs import Construct
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lambda" / "google_proxy"))
+from onboarding_services import DEFAULT_SERVICES, SCOPES_BY_SERVICE
 
 
 @dataclass(frozen=True)
@@ -19,6 +28,9 @@ class GoogleProxyApiProps:
     ssm_prefix: str = "/gogcli-proxy"
     lambda_timeout_seconds: int = 30
     lambda_memory_mb: int = 512
+    role_prefix: str = "jdev-gogcli-proxy-prd"
+    permissions_boundary_arn: str = ""
+    ssm_key_arn: str = ""
 
 
 class GoogleProxyApi(Construct):
@@ -34,16 +46,52 @@ class GoogleProxyApi(Construct):
         if not lambda_entry.exists():
             raise ValueError(f"lambda entry not found: {lambda_entry}")
 
-        proxy_fn = PythonFunction(
+        boundary = iam.ManagedPolicy.from_managed_policy_arn(
+            self, "RoleBoundary", props.permissions_boundary_arn
+        )
+        proxy_role = iam.Role(
+            self, "ProxyRole", role_name=f"{props.role_prefix}-proxy",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            permissions_boundary=boundary,
+        )
+        proxy_logs = logs.LogGroup(
+            self, "ProxyLogs", log_group_name=f"/aws/lambda/{props.role_prefix}-proxy",
+            retention=logs.RetentionDays.ONE_MONTH, removal_policy=RemovalPolicy.RETAIN,
+        )
+        proxy_logs.grant_write(proxy_role)
+
+        downloads = s3.Bucket(
+            self, "Downloads", encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL, enforce_ssl=True,
+            object_ownership=s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+            removal_policy=RemovalPolicy.RETAIN,
+            lifecycle_rules=[s3.LifecycleRule(prefix="downloads/", expiration=Duration.days(1),
+                abort_incomplete_multipart_upload_after=Duration.days(1))],
+        )
+        downloads.add_to_resource_policy(iam.PolicyStatement(
+            effect=iam.Effect.DENY, principals=[iam.AnyPrincipal()],
+            actions=["s3:GetObject"], resources=[downloads.arn_for_objects("downloads/*")],
+            conditions={"NumericGreaterThan": {"s3:signatureAge": 300000}},
+        ))
+        proxy_role.add_to_policy(iam.PolicyStatement(
+            actions=["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            resources=[downloads.arn_for_objects("downloads/*")],
+        ))
+
+        proxy_fn = lambda_.Function(
             self,
             "GoogleProxyHandler",
-            entry=str(lambda_entry),
-            index="handler.py",
-            handler="handler",
+            code=python_asset(lambda_entry),
+            handler="handler.handler",
+            architecture=lambda_.Architecture.X86_64,
             runtime=lambda_.Runtime.PYTHON_3_11,
+            function_name=f"{props.role_prefix}-proxy",
+            role=proxy_role,
+            log_group=proxy_logs,
             timeout=Duration.seconds(props.lambda_timeout_seconds),
             memory_size=props.lambda_memory_mb,
             environment={
+                "GOG_DOWNLOAD_BUCKET": downloads.bucket_name,
                 "GOG_SSM_PREFIX": props.ssm_prefix,
                 "GOG_POLICY_ENABLED": os.getenv("GOG_POLICY_ENABLED", "true"),
                 "GOG_POLICY_SSM_PREFIX": os.getenv(
@@ -56,35 +104,15 @@ class GoogleProxyApi(Construct):
                 # Defaults can be overridden per-account via SSM JSON.
                 "GOG_DEFAULT_SCOPES": os.getenv(
                     "GOG_DEFAULT_SCOPES",
-                    ",".join(
-                        [
-                            "https://www.googleapis.com/auth/gmail.readonly",
-                            "https://www.googleapis.com/auth/gmail.labels",
-                            "https://www.googleapis.com/auth/gmail.settings.basic",
-                            "https://www.googleapis.com/auth/gmail.modify",
-                            "https://www.googleapis.com/auth/calendar",
-                            "https://www.googleapis.com/auth/drive",
-                            "https://www.googleapis.com/auth/documents",
-                            "https://www.googleapis.com/auth/spreadsheets",
-                            "https://www.googleapis.com/auth/tasks",
-                            "https://www.googleapis.com/auth/chat.bot",
-                            "https://www.googleapis.com/auth/classroom.courses.readonly",
-                            "https://www.googleapis.com/auth/classroom.rosters.readonly",
-                            "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
-                            "https://www.googleapis.com/auth/classroom.coursework.students.readonly",
-                            "https://www.googleapis.com/auth/script.projects",
-                            "https://www.googleapis.com/auth/forms.body",
-                            "https://www.googleapis.com/auth/forms.responses.readonly",
-                            "https://www.googleapis.com/auth/keep.readonly",
-                            "https://www.googleapis.com/auth/cloud-identity.groups.readonly",
-                            "https://www.googleapis.com/auth/contacts.readonly",
-                            "https://www.googleapis.com/auth/directory.readonly",
-                            "https://www.googleapis.com/auth/userinfo.email",
-                        ]
-                    ),
+                    ",".join(SCOPES_BY_SERVICE[name] for name in DEFAULT_SERVICES),
                 ),
             },
         )
+
+        proxy_fn.add_to_role_policy(iam.PolicyStatement(
+            actions=["kms:Decrypt"], resources=[props.ssm_key_arn],
+            conditions={"StringEquals": {"kms:ViaService": f"ssm.{Stack.of(self).region}.amazonaws.com"}},
+        ))
 
         # SSM reads (allowlist + Google credentials). Narrow this down by prefix.
         prefix = props.ssm_prefix.rstrip("/")
@@ -120,6 +148,7 @@ class GoogleProxyApi(Construct):
             self,
             "GoogleProxyApi",
             rest_api_name="gogcli-google-proxy",
+            cloud_watch_role=False,
             deploy_options=apigw.StageOptions(
                 stage_name=props.stage_name,
                 metrics_enabled=True,
@@ -142,6 +171,21 @@ class GoogleProxyApi(Construct):
             binary_media_types=["*/*"],
             endpoint_types=[apigw.EndpointType.REGIONAL],
         )
+
+        gateway_logs_role = iam.Role(
+            self, "GatewayLogsRole", role_name=f"{props.role_prefix}-apigw-logs",
+            assumed_by=iam.ServicePrincipal("apigateway.amazonaws.com"),
+            permissions_boundary=boundary,
+        )
+        # API Gateway validates its documented push-to-logs permissions at account setup.
+        gateway_logs_role.add_to_policy(iam.PolicyStatement(
+            actions=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:DescribeLogGroups",
+                     "logs:DescribeLogStreams", "logs:PutLogEvents", "logs:GetLogEvents", "logs:FilterLogEvents"],
+            resources=["*"],
+        ))
+        gateway_account = apigw.CfnAccount(self, "GatewayAccount", cloud_watch_role_arn=gateway_logs_role.role_arn)
+        gateway_account.node.add_dependency(gateway_logs_role, gateway_logs_role.node.find_child("DefaultPolicy"))
+        api.deployment_stage.node.add_dependency(gateway_account)
 
         integration = apigw.LambdaIntegration(proxy_fn, proxy=True)
 
@@ -185,6 +229,7 @@ class GoogleProxyApiStack(Stack):
         *,
         stage_name: str,
         ssm_prefix: str,
+        binding: dict,
         env: Optional[cdk.Environment] = None,
         **kwargs,
     ) -> None:
@@ -193,8 +238,46 @@ class GoogleProxyApiStack(Stack):
         api = GoogleProxyApi(
             self,
             "Proxy",
-            props=GoogleProxyApiProps(stage_name=stage_name, ssm_prefix=ssm_prefix),
+            props=GoogleProxyApiProps(stage_name=stage_name, ssm_prefix=ssm_prefix,
+                                      role_prefix=binding["role_prefix"],
+                                      permissions_boundary_arn=binding["permissions_boundary_arn"],
+                                      ssm_key_arn=binding["ssm_key_arn"]),
         )
 
-        CfnOutput(self, "ProxyBaseUrl", value=api.api.url)
+        zone = route53.HostedZone.from_hosted_zone_attributes(
+            self, "PublicHostedZone", hosted_zone_id=binding["public_hosted_zone_id"],
+            zone_name=binding["public_hosted_zone_name"],
+        )
+        certificate = acm.Certificate(
+            self, "PublicCertificate", domain_name=binding["public_domain_name"],
+            validation=acm.CertificateValidation.from_dns(zone),
+        )
+        certificate.apply_removal_policy(RemovalPolicy.RETAIN)
+        domain = apigw.DomainName(
+            self, "PublicDomain", domain_name=binding["public_domain_name"],
+            certificate=certificate, endpoint_type=apigw.EndpointType.REGIONAL,
+            security_policy=apigw.SecurityPolicy.TLS_1_2,
+        )
+        domain.apply_removal_policy(RemovalPolicy.RETAIN)
+        apigw.BasePathMapping(
+            self, "PublicMapping", domain_name=domain, rest_api=api.api,
+            stage=api.api.deployment_stage, base_path=stage_name,
+        )
+        alias = route53.ARecord(
+            self, "PublicAlias", zone=zone, record_name=binding["public_domain_name"],
+            target=route53.RecordTarget.from_alias(targets.ApiGatewayDomain(domain)),
+        )
+        alias.apply_removal_policy(RemovalPolicy.RETAIN)
+        api.public_base_url = f"https://{binding['public_domain_name']}/{stage_name}/"
+
+        from .onboarding_resources import GoogleOnboarding
+        GoogleOnboarding(self, "Onboarding", proxy=api, binding=binding)
+
+        CfnOutput(self, "ProxyBaseUrl", value=api.public_base_url)
         CfnOutput(self, "ApiKeyId", value=api.api_key.key_id)
+        CfnOutput(self, "ProxyInvokeArns", value=json.dumps([
+            api.api.arn_for_execute_api(method, path, stage_name)
+            for method, path in (("*", "/gmail/*"), ("*", "/drive/v3/*"),
+                ("*", "/upload/drive/v3/*"), ("*", "/resumable/upload/drive/v3/*"),
+                ("GET", "/proxy/v1/accounts"), ("*", "/calendar/v3/*"))
+        ]))

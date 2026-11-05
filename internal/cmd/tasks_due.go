@@ -3,7 +3,7 @@ package cmd
 import (
 	"strings"
 
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 func warnTasksDueTime(u *ui.UI, due string) {
@@ -26,7 +26,7 @@ func normalizeTaskDue(value string) (string, error) {
 	}
 	parsed, hasTime, err := parseTaskDate(value)
 	if err != nil {
-		return "", err
+		return "", newUsageError(err)
 	}
 	return formatTaskDue(parsed, hasTime), nil
 }

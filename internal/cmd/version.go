@@ -2,46 +2,88 @@ package cmd
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
-	"os"
+	"runtime/debug"
 	"strings"
 
-	"github.com/steipete/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/outfmt"
 )
+
+//go:embed VERSION
+var embeddedVersion string
+
+const sentinelDev = "dev"
 
 var (
-	version = "0.12.0-dev"
-	commit  = ""
-	date    = ""
+	version       = sentinelDev
+	commit        = ""
+	date          = ""
+	readBuildInfo = debug.ReadBuildInfo
 )
 
-func VersionString() string {
+func resolvedVersion() string {
 	v := strings.TrimSpace(version)
-	if v == "" {
-		v = "dev"
-	}
-	if strings.TrimSpace(commit) == "" && strings.TrimSpace(date) == "" {
+	if v != "" && v != sentinelDev {
 		return v
 	}
-	if strings.TrimSpace(commit) == "" {
+	info, ok := readBuildInfo()
+	if ok {
+		moduleVersion := strings.TrimSpace(info.Main.Version)
+		if moduleVersion != "" && moduleVersion != "(devel)" {
+			return moduleVersion
+		}
+	}
+	if baked := strings.TrimSpace(embeddedVersion); baked != "" {
+		return baked
+	}
+	return sentinelDev
+}
+
+func VersionString() string {
+	v := "gogcli-proxy " + resolvedVersion() + " [upstream " + upstreamBaseVersion() + "]"
+	sourceCommit := resolvedSourceCommit()
+	if strings.TrimSpace(sourceCommit) == "" && strings.TrimSpace(date) == "" {
+		return v
+	}
+	if strings.TrimSpace(sourceCommit) == "" {
 		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(date))
 	}
 	if strings.TrimSpace(date) == "" {
-		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(commit))
+		return fmt.Sprintf("%s (%s)", v, strings.TrimSpace(sourceCommit))
 	}
-	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(commit), strings.TrimSpace(date))
+	return fmt.Sprintf("%s (%s %s)", v, strings.TrimSpace(sourceCommit), strings.TrimSpace(date))
+}
+
+func upstreamBaseVersion() string { return strings.TrimSpace(embeddedVersion) }
+
+func resolvedSourceCommit() string {
+	if value := strings.TrimSpace(commit); value != "" {
+		return value
+	}
+	if info, ok := readBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return ""
 }
 
 type VersionCmd struct{}
 
 func (c *VersionCmd) Run(ctx context.Context) error {
+	stdout := stdoutWriter(ctx)
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
-			"version": strings.TrimSpace(version),
-			"commit":  strings.TrimSpace(commit),
-			"date":    strings.TrimSpace(date),
+		return outfmt.WriteJSON(ctx, stdout, map[string]any{
+			"product":               "gogcli-proxy",
+			"upstream_base_version": upstreamBaseVersion(),
+			"version":               resolvedVersion(),
+			"commit":                resolvedSourceCommit(),
+			"date":                  strings.TrimSpace(date),
 		})
 	}
-	fmt.Fprintln(os.Stdout, VersionString())
+	fmt.Fprintln(stdout, VersionString())
 	return nil
 }

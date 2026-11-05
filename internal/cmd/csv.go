@@ -17,3 +17,13 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
+
+// Keep repeated flags raw with sep:"none"; splitCSV owns comma splitting
+// so a backslash before a comma remains literal.
+func splitCSVAllRaw(raws []string) []string {
+	out := make([]string, 0, len(raws))
+	for _, raw := range raws {
+		out = append(out, splitCSV(raw)...)
+	}
+	return out
+}

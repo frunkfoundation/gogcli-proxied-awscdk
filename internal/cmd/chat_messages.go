@@ -3,18 +3,143 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"google.golang.org/api/chat/v1"
 
-	"github.com/steipete/gogcli/internal/outfmt"
-	"github.com/steipete/gogcli/internal/ui"
+	"github.com/openclaw/gogcli/internal/googleapi"
+	"github.com/openclaw/gogcli/internal/outfmt"
+	"github.com/openclaw/gogcli/internal/ui"
 )
 
 type ChatMessagesCmd struct {
-	List ChatMessagesListCmd `cmd:"" name:"list" aliases:"ls" help:"List messages"`
-	Send ChatMessagesSendCmd `cmd:"" name:"send" aliases:"create,post" help:"Send a message"`
+	List      ChatMessagesListCmd      `cmd:"" name:"list" aliases:"ls" help:"List messages"`
+	Search    ChatMessagesSearchCmd    `cmd:"" name:"search" aliases:"find,query" help:"Search messages across Chat"`
+	Send      ChatMessagesSendCmd      `cmd:"" name:"send" aliases:"create,post" help:"Send a message"`
+	React     ChatMessagesReactCmd     `cmd:"" name:"react" help:"Add an emoji reaction to a message"`
+	Reactions ChatMessagesReactionsCmd `cmd:"" name:"reactions" aliases:"reaction" help:"Manage emoji reactions on a message"`
+}
+
+type ChatMessagesSearchCmd struct {
+	Query     []string `arg:"" name:"query" help:"Search query using Google Chat filter syntax"`
+	Max       int64    `name:"max" aliases:"limit" help:"Max results per page" default:"25"`
+	Page      string   `name:"page" aliases:"cursor" help:"Page token"`
+	All       bool     `name:"all" aliases:"all-pages,allpages" help:"Fetch all pages"`
+	FailEmpty bool     `name:"fail-empty" aliases:"non-empty,require-results" help:"Exit with code 3 if no results"`
+	Order     string   `name:"order" help:"Order by: create_time desc or relevance desc (Developer Preview)" enum:"create_time desc,relevance desc," default:""`
+	View      string   `name:"view" help:"Result view: basic or full" enum:"basic,full" default:"basic"`
+	Markup    string   `name:"markup" help:"Formatted text syntax: chat or markdown" enum:"chat,markdown," default:""`
+}
+
+func (c *ChatMessagesSearchCmd) Run(ctx context.Context, flags *RootFlags) error {
+	u := ui.FromContext(ctx)
+	query := strings.TrimSpace(strings.Join(c.Query, " "))
+	if query == "" {
+		return usage("missing query")
+	}
+	if c.Max <= 0 || c.Max > 100 {
+		return usage("max must be between 1 and 100")
+	}
+	account, err := requireAccount(flags)
+	if err != nil {
+		return err
+	}
+	if err = requireWorkspaceAccount(account); err != nil {
+		return err
+	}
+
+	svc, err := chatSearchService(ctx, account)
+	if err != nil {
+		return err
+	}
+
+	view := "SEARCH_MESSAGES_VIEW_BASIC"
+	if c.View == "full" {
+		view = "SEARCH_MESSAGES_VIEW_FULL"
+	}
+	markup := ""
+	switch c.Markup {
+	case "chat":
+		markup = "MARKUP_SYNTAX_CHAT"
+	case "markdown":
+		markup = "MARKUP_SYNTAX_MARKDOWN"
+	}
+
+	fetch := func(pageToken string) ([]*googleapi.ChatSearchResult, string, error) {
+		req := &chat.SearchMessagesRequest{
+			Filter:       query,
+			MarkupSyntax: markup,
+			OrderBy:      strings.TrimSpace(c.Order),
+			PageSize:     c.Max,
+			PageToken:    strings.TrimSpace(pageToken),
+			View:         view,
+		}
+		resp, callErr := svc.Search(ctx, req)
+		if callErr != nil {
+			return nil, "", callErr
+		}
+		return resp.Results, resp.NextPageToken, nil
+	}
+
+	results, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
+	}
+	items := compactChatSearchRows(results, c.View == "full")
+
+	if outfmt.IsJSON(ctx) {
+		return writePagedJSONResult(ctx, map[string]any{
+			"results":       items,
+			"nextPageToken": nextPageToken,
+		}, len(items), c.FailEmpty)
+	}
+
+	if len(items) == 0 {
+		u.Err().Println("No results")
+		return failEmptyExit(c.FailEmpty)
+	}
+	if err := outfmt.WriteTable(ctx, stdoutWriter(ctx), items, chatMessageSearchColumns(c.View == "full")); err != nil {
+		return err
+	}
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
+	return nil
+}
+
+type chatMessageSearchItem struct {
+	Resource         string `json:"resource"`
+	Space            string `json:"space,omitempty"`
+	Sender           string `json:"sender,omitempty"`
+	Text             string `json:"text,omitempty"`
+	FormattedText    string `json:"formattedText,omitempty"`
+	CreateTime       string `json:"createTime,omitempty"`
+	Thread           string `json:"thread,omitempty"`
+	Read             *bool  `json:"read,omitempty"`
+	SpaceMuteSetting string `json:"spaceMuteSetting,omitempty"`
+}
+
+func compactChatSearchRows(results []*googleapi.ChatSearchResult, includeRead bool) []*chatMessageSearchItem {
+	items := make([]*chatMessageSearchItem, 0, len(results))
+	for _, result := range results {
+		if result == nil || result.Message == nil {
+			continue
+		}
+		msg := result.Message
+		item := &chatMessageSearchItem{
+			Resource:         msg.Name,
+			Space:            chatMessageSpace(msg),
+			Sender:           chatMessageSender(msg),
+			Text:             chatMessageText(msg),
+			FormattedText:    msg.FormattedText,
+			CreateTime:       msg.CreateTime,
+			Thread:           chatMessageThread(msg),
+			SpaceMuteSetting: result.SpaceMuteSetting,
+		}
+		if includeRead {
+			item.Read = result.Read
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 type ChatMessagesListCmd struct {
@@ -30,6 +155,13 @@ type ChatMessagesListCmd struct {
 
 func (c *ChatMessagesListCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
+	space, err := normalizeSpace(c.Space)
+	if err != nil {
+		return usage("required: space")
+	}
+	if c.Max <= 0 {
+		return usage("max must be > 0")
+	}
 	account, err := requireAccount(flags)
 	if err != nil {
 		return err
@@ -38,12 +170,7 @@ func (c *ChatMessagesListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	space, err := normalizeSpace(c.Space)
-	if err != nil {
-		return usage("required: space")
-	}
-
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
@@ -58,7 +185,7 @@ func (c *ChatMessagesListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		filters = append(filters, fmt.Sprintf("thread.name = \"%s\"", threadName))
 	}
 	if c.Unread {
-		readState, readErr := svc.Users.Spaces.GetSpaceReadState(fmt.Sprintf("users/me/spaces/%s/spaceReadState", spaceID(space))).Do()
+		readState, readErr := svc.Users.Spaces.GetSpaceReadState(fmt.Sprintf("users/me/spaces/%s/spaceReadState", spaceID(space))).Context(ctx).Do()
 		if readErr != nil {
 			return readErr
 		}
@@ -81,51 +208,66 @@ func (c *ChatMessagesListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		if filter != "" {
 			call = call.Filter(filter)
 		}
-		resp, err := call.Do()
-		if err != nil {
-			return nil, "", err
+		resp, callErr := call.Do()
+		if callErr != nil {
+			return nil, "", callErr
 		}
 		return resp.Messages, resp.NextPageToken, nil
 	}
 
-	var messages []*chat.Message
-	nextPageToken := ""
-	if c.All {
-		all, err := collectAllPages(c.Page, fetch)
-		if err != nil {
-			return err
-		}
-		messages = all
-	} else {
-		var err error
-		messages, nextPageToken, err = fetch(c.Page)
-		if err != nil {
-			return err
-		}
+	messages, nextPageToken, err := loadPagedItems(c.Page, c.All, fetch)
+	if err != nil {
+		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
 		type item struct {
-			Resource   string `json:"resource"`
-			Sender     string `json:"sender,omitempty"`
-			Text       string `json:"text,omitempty"`
-			CreateTime string `json:"createTime,omitempty"`
-			Thread     string `json:"thread,omitempty"`
+			Resource               string                       `json:"resource"`
+			Sender                 string                       `json:"sender,omitempty"`
+			Text                   string                       `json:"text,omitempty"`
+			CreateTime             string                       `json:"createTime,omitempty"`
+			Thread                 string                       `json:"thread,omitempty"`
+			Annotations            []*chat.Annotation           `json:"annotations,omitempty"`
+			EmojiReactionSummaries []*chat.EmojiReactionSummary `json:"emojiReactionSummaries,omitempty"`
 		}
 		items := make([]item, 0, len(messages))
 		for _, msg := range messages {
 			if msg == nil {
 				continue
 			}
+			var mentions []*chat.Annotation
+			for _, annotation := range msg.Annotations {
+				if annotation != nil && annotation.Type == "USER_MENTION" && annotation.UserMention != nil {
+					mentions = append(mentions, &chat.Annotation{
+						Type:        annotation.Type,
+						StartIndex:  annotation.StartIndex,
+						Length:      annotation.Length,
+						UserMention: annotation.UserMention,
+					})
+				}
+			}
+			var reactions []*chat.EmojiReactionSummary
+			for _, summary := range msg.EmojiReactionSummaries {
+				if summary == nil || summary.Emoji == nil {
+					continue
+				}
+				emoji := &chat.Emoji{Unicode: summary.Emoji.Unicode}
+				if custom := summary.Emoji.CustomEmoji; custom != nil {
+					emoji.CustomEmoji = &chat.CustomEmoji{Name: custom.Name, EmojiName: custom.EmojiName, Uid: custom.Uid}
+				}
+				reactions = append(reactions, &chat.EmojiReactionSummary{Emoji: emoji, ReactionCount: summary.ReactionCount})
+			}
 			items = append(items, item{
-				Resource:   msg.Name,
-				Sender:     chatMessageSender(msg),
-				Text:       chatMessageText(msg),
-				CreateTime: msg.CreateTime,
-				Thread:     chatMessageThread(msg),
+				Resource:               msg.Name,
+				Sender:                 chatMessageSender(msg),
+				Text:                   chatMessageText(msg),
+				CreateTime:             msg.CreateTime,
+				Thread:                 chatMessageThread(msg),
+				Annotations:            mentions,
+				EmojiReactionSummaries: reactions,
 			})
 		}
-		if err := outfmt.WriteJSON(ctx, os.Stdout, map[string]any{
+		if err := outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{
 			"messages":      items,
 			"nextPageToken": nextPageToken,
 		}); err != nil {
@@ -142,61 +284,38 @@ func (c *ChatMessagesListCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return failEmptyExit(c.FailEmpty)
 	}
 
-	w, flush := tableWriter(ctx)
-	defer flush()
-	fmt.Fprintln(w, "RESOURCE\tSENDER\tTIME\tTEXT")
-	for _, msg := range messages {
-		if msg == nil {
-			continue
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			msg.Name,
-			sanitizeTab(chatMessageSender(msg)),
-			sanitizeTab(msg.CreateTime),
-			sanitizeChatText(chatMessageText(msg)),
-		)
+	if err := outfmt.WriteTable(
+		ctx,
+		stdoutWriter(ctx),
+		compactChatRows(messages),
+		chatMessageColumns(),
+	); err != nil {
+		return err
 	}
-	printNextPageHint(u, nextPageToken)
+	printNextPageHintWithAll(u, nextPageToken, "--all/--all-pages")
 	return nil
 }
 
 type ChatMessagesSendCmd struct {
-	Space  string `arg:"" name:"space" help:"Space name (spaces/...)"`
-	Text   string `name:"text" help:"Message text (required)"`
-	Thread string `name:"thread" help:"Reply to thread (spaces/.../threads/...)"`
+	Space  string   `arg:"" name:"space" help:"Space name (spaces/...)"`
+	Text   string   `name:"text" help:"Message text (required unless --attach is provided)"`
+	Thread string   `name:"thread" help:"Reply to thread (spaces/.../threads/...)"`
+	Attach []string `name:"attach" help:"Attachment file path, e.g. an image (repeatable)"`
 }
 
 func (c *ChatMessagesSendCmd) Run(ctx context.Context, flags *RootFlags) error {
 	u := ui.FromContext(ctx)
-	space, err := normalizeSpace(c.Space)
+	plan, err := newChatMessageSendPlan(chatMessageSendInput{
+		Space:       c.Space,
+		Text:        c.Text,
+		Thread:      c.Thread,
+		Attachments: c.Attach,
+	})
 	if err != nil {
-		return usage("required: space")
+		return err
 	}
 
-	text := strings.TrimSpace(c.Text)
-	if text == "" {
-		return usage("required: --text")
-	}
-
-	message := &chat.Message{Text: text}
-	thread := strings.TrimSpace(c.Thread)
-	threadName := ""
-	if thread != "" {
-		tn, threadErr := normalizeThread(space, thread)
-		if threadErr != nil {
-			return usage(fmt.Sprintf("invalid thread: %v", threadErr))
-		}
-		threadName = tn
-		message.Thread = &chat.Thread{Name: tn}
-	}
-
-	if dryRunErr := dryRunExit(ctx, flags, "chat.messages.send", map[string]any{
-		"space":                        space,
-		"text":                         text,
-		"thread":                       threadName,
-		"thread_raw":                   thread,
-		"reply_fallback_to_new_thread": thread != "",
-	}); dryRunErr != nil {
+	if dryRunErr := dryRunExit(ctx, flags, "chat.messages.send", plan.dryRunPayload()); dryRunErr != nil {
 		return dryRunErr
 	}
 
@@ -208,34 +327,43 @@ func (c *ChatMessagesSendCmd) Run(ctx context.Context, flags *RootFlags) error {
 		return err
 	}
 
-	svc, err := newChatService(ctx, account)
+	svc, err := chatService(ctx, account)
 	if err != nil {
 		return err
 	}
 
-	call := svc.Spaces.Messages.Create(space, message)
-	if thread != "" {
-		call = call.MessageReplyOption("REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD")
+	var attachments []*chat.Attachment
+	if len(plan.Attachments) > 0 {
+		attachments, err = uploadChatAttachments(ctx, svc, plan.Space, plan.Attachments)
+		if err != nil {
+			return err
+		}
+	}
+	message := plan.message(attachments)
+
+	call := svc.Spaces.Messages.Create(plan.Space, message)
+	if replyOption := plan.replyOption(); replyOption != "" {
+		call = call.MessageReplyOption(replyOption)
 	}
 
-	resp, err := call.Do()
+	resp, err := call.Context(ctx).Do()
 	if err != nil {
 		return err
 	}
 
 	if outfmt.IsJSON(ctx) {
-		return outfmt.WriteJSON(ctx, os.Stdout, map[string]any{"message": resp})
+		return outfmt.WriteJSON(ctx, stdoutWriter(ctx), map[string]any{"message": resp})
 	}
 
 	if resp == nil {
-		u.Out().Printf("space\t%s", space)
+		u.Out().Linef("space\t%s", plan.Space)
 		return nil
 	}
 	if resp.Name != "" {
-		u.Out().Printf("resource\t%s", resp.Name)
+		u.Out().Linef("resource\t%s", resp.Name)
 	}
 	if resp.Thread != nil && resp.Thread.Name != "" {
-		u.Out().Printf("thread\t%s", resp.Thread.Name)
+		u.Out().Linef("thread\t%s", resp.Thread.Name)
 	}
 	return nil
 }
